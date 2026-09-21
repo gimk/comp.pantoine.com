@@ -1,0 +1,5 @@
+# Normalise to LF in the repository. CNAME in particular must not pick up a
+# CRLF on the way to the Pages deploy.
+* text=auto eol=lf
+*.png binary
+*.svg text eol=lf

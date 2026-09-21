@@ -1,0 +1,566 @@
+/* --------------------------------------------------------------------------
+   COMP STUDIO
+
+   One glass recipe, defined once here and reused by every panel, node and
+   menu. If a surface looks different from its neighbours, it is because it
+   is not using these tokens -- change them here rather than locally, so the
+   whole tool keeps reading as one sheet of material.
+
+   The palette is deliberately monochrome: flat light grey ground, white
+   glass, near-black type. No gradients and no hues anywhere, so the only
+   things that carry the interface are the translucency, the hairlines and
+   the shadows.
+   -------------------------------------------------------------------------- */
+
+:root {
+  color-scheme: light;
+
+  --bg-base: #e8e8ea;
+  --text-primary: #17171a;
+  --text-muted: #5d5d66;
+  --text-dim: #8d8d96;
+  /* "Accent" is just ink. Emphasis comes from weight and contrast. */
+  --accent: #17171a;
+  --accent-soft: rgba(23, 23, 26, 0.28);
+
+  /* The glass itself: a milky white fill over a bright top edge. Kept well
+     below opaque on purpose -- on a flat ground the blur only shows where
+     something passes behind a surface, so the fill has to stay thin enough
+     for the dot grid, the wires and the nodes to come through. */
+  --glass-fill: rgba(255, 255, 255, 0.45);
+  --glass-fill-strong: rgba(255, 255, 255, 0.58);
+  --glass-border: rgba(255, 255, 255, 0.8);
+  --glass-blur: blur(24px) saturate(170%) brightness(1.05);
+  /* Bright catchlight along the top edge and a softer one along the bottom,
+     which is what reads as a thick refracting rim; then a hairline ring so
+     the sheet still has an outline against pale ground, then the lift. */
+  --glass-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.55),
+    0 0 0 1px rgba(23, 23, 26, 0.07),
+    0 1px 2px rgba(23, 23, 26, 0.04),
+    0 12px 30px rgba(23, 23, 26, 0.1);
+
+  --hairline: rgba(23, 23, 26, 0.09);
+
+  --radius-lg: 20px;
+  --radius-md: 14px;
+  --radius-sm: 9px;
+
+  --font-ui: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  --render-width: 380px;
+  /* Tallest the render frame may get before it has to give up the ratio. */
+  --stage-max-h: 68vh;
+  --gutter: 18px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+.app {
+  position: relative;
+  height: 100%;
+  width: 100%;
+}
+
+/* --------------------------------------------------------------------------
+   The glass surface
+   -------------------------------------------------------------------------- */
+
+.glass {
+  background: var(--glass-fill);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+  border-radius: var(--radius-lg);
+}
+
+/* --------------------------------------------------------------------------
+   Layout
+   -------------------------------------------------------------------------- */
+
+/* Full bleed on purpose. Insetting this to make room for the render view
+   stopped the dot grid short of the edge, and that hard vertical seam read
+   as a stray grey panel. The render view floats over the graph instead, and
+   fitView is given matching padding so nodes still land clear of it. */
+.canvas-area {
+  position: absolute;
+  inset: 0;
+}
+
+.toolbar {
+  position: absolute;
+  top: var(--gutter);
+  left: var(--gutter);
+  z-index: 10;
+}
+
+.toolbar-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border-radius: 999px;
+}
+
+.brand {
+  padding: 0 8px 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  color: var(--text-primary);
+}
+
+.toolbar-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--hairline);
+}
+
+.toolbar-button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
+}
+
+.toolbar-button:hover {
+  background: rgba(255, 255, 255, 0.7);
+  color: var(--text-primary);
+}
+
+.toolbar-button.is-active {
+  background: rgba(255, 255, 255, 0.85);
+  border-color: var(--hairline);
+  color: var(--text-primary);
+}
+
+.toolbar-menu {
+  margin-top: 8px;
+  padding: 6px;
+  min-width: 200px;
+  border-radius: var(--radius-md);
+}
+
+.toolbar-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 11px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.toolbar-menu-item:hover {
+  background: rgba(255, 255, 255, 0.8);
+}
+
+.tag {
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(23, 23, 26, 0.07);
+  color: var(--text-muted);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+/* --------------------------------------------------------------------------
+   Render view
+   -------------------------------------------------------------------------- */
+
+/*
+ * One card holding the label, the picture and the status line, so none of
+ * them float loose on the ground.
+ *
+ * Both dimensions follow the picture. Height is content-driven, and the width
+ * is capped by what the ratio allows at full frame height, so a portrait
+ * narrows the whole card instead of growing side bars inside it.
+ */
+.render-view {
+  position: absolute;
+  top: var(--gutter);
+  right: var(--gutter);
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  width: clamp(240px, calc(var(--stage-max-h) * var(--stage-ratio, 1.7778)), var(--render-width));
+  max-height: calc(100% - var(--gutter) * 2);
+  overflow: hidden;
+}
+
+.render-head,
+.render-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 13px 16px;
+}
+
+.render-head {
+  justify-content: space-between;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.render-title {
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.render-info,
+.render-chain {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.render-chain {
+  margin-left: auto;
+}
+
+/*
+ * The frame itself, sized by the picture rather than by whatever room is
+ * left over: `--stage-ratio` comes in inline from the image's dimensions.
+ * The card around it owns the rounding and the edge.
+ */
+.render-stage {
+  position: relative;
+  flex: none;
+  width: 100%;
+  aspect-ratio: var(--stage-ratio, 1.7778);
+  max-height: var(--stage-max-h);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+}
+
+.render-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.render-empty {
+  position: relative;
+  max-width: 230px;
+  margin: 0;
+  color: var(--text-dim);
+  text-align: center;
+  line-height: 1.6;
+}
+
+.render-empty strong {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.render-foot {
+  border-top: 1px solid var(--hairline);
+  color: var(--text-muted);
+}
+
+.render-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgba(23, 23, 26, 0.22);
+}
+
+.render-dot.is-live {
+  background: var(--accent);
+}
+
+/* --------------------------------------------------------------------------
+   Nodes
+
+   Same glass as the panels, one step more opaque so they read as sitting on
+   top of the graph rather than in it.
+   -------------------------------------------------------------------------- */
+
+.node {
+  width: 196px;
+  background: var(--glass-fill-strong);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--glass-shadow);
+  color: var(--text-primary);
+  /* Deliberately not `overflow: hidden`: the ports sit just outside the card
+     edge, and clipping the box would clip them away with it. Anything that
+     needs rounding inside gets its own radius. */
+}
+
+.node-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--hairline);
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.node-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+}
+
+.node-warning {
+  color: var(--text-muted);
+}
+
+.node-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 12px 11px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.node-meta-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Selection and drop feedback both read as a firmer ring, not a color. */
+.react-flow__node.selected .node {
+  box-shadow: var(--glass-shadow), 0 0 0 2px var(--accent-soft);
+}
+
+.node-drop-active {
+  box-shadow: var(--glass-shadow), 0 0 0 2px var(--accent-soft);
+}
+
+/* Image node */
+
+.image-drop {
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 92px;
+  padding: 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  cursor: pointer;
+}
+
+.image-empty {
+  display: block;
+  padding: 16px 8px;
+  border: 1px dashed rgba(23, 23, 26, 0.22);
+  border-radius: var(--radius-sm);
+  line-height: 1.5;
+}
+
+.image-thumb {
+  display: block;
+  max-width: 100%;
+  max-height: 120px;
+  margin: 0 auto;
+  border-radius: var(--radius-sm);
+}
+
+/* Output node */
+
+.output-status {
+  color: var(--text-dim);
+}
+
+.output-status.is-live {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+/* Ports */
+
+.react-flow__handle.port {
+  width: 11px;
+  height: 11px;
+  border: 1px solid rgba(23, 23, 26, 0.35);
+  background: #ffffff;
+  transition: background 140ms ease, border-color 140ms ease;
+}
+
+.react-flow__handle.port:hover,
+.react-flow__handle.port.connectingfrom {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.react-flow__handle.port-in {
+  left: -6px;
+}
+
+.react-flow__handle.port-out {
+  right: -6px;
+}
+
+/* --------------------------------------------------------------------------
+   Controls
+   -------------------------------------------------------------------------- */
+
+.control {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.control-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.control-label {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.control-value {
+  color: var(--text-primary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.control-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(23, 23, 26, 0.14);
+  outline: none;
+  cursor: pointer;
+}
+
+.control-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 13px;
+  height: 13px;
+  border: 1px solid rgba(23, 23, 26, 0.2);
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(23, 23, 26, 0.25);
+  cursor: grab;
+}
+
+.control-slider::-moz-range-thumb {
+  width: 13px;
+  height: 13px;
+  border: 1px solid rgba(23, 23, 26, 0.2);
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(23, 23, 26, 0.25);
+  cursor: grab;
+}
+
+/* --------------------------------------------------------------------------
+   React Flow overrides
+
+   The library paints its own background and edge colors; these strip that
+   back so the grey ground shows through and the wires read as ink.
+   -------------------------------------------------------------------------- */
+
+.react-flow {
+  background: transparent;
+}
+
+.react-flow__edge-path {
+  stroke: rgba(23, 23, 26, 0.32);
+  stroke-width: 1.6;
+}
+
+.react-flow__edge.selected .react-flow__edge-path,
+.react-flow__edge:hover .react-flow__edge-path {
+  stroke: var(--accent);
+}
+
+/* The link a dragged effect is about to be spliced into. */
+.react-flow__edge.edge-insert-target .react-flow__edge-path {
+  stroke: var(--accent);
+  stroke-width: 2.4;
+  stroke-dasharray: 6 5;
+}
+
+.react-flow__connection-path {
+  stroke: var(--accent);
+  stroke-width: 1.6;
+}
+
+.react-flow__node {
+  font-family: var(--font-ui);
+  font-size: 13px;
+}
+
+.react-flow__attribution {
+  background: transparent;
+  color: var(--text-dim);
+}
+
+/* --------------------------------------------------------------------------
+   Narrow screens
+
+   The render view stops being a fixed column and sits above the graph, so
+   the tool still works on a laptop in split screen.
+   -------------------------------------------------------------------------- */
+
+@media (max-width: 900px) {
+  :root {
+    --stage-max-h: 30vh;
+  }
+
+  .render-view {
+    top: auto;
+    bottom: var(--gutter);
+    left: var(--gutter);
+    width: auto;
+    max-height: calc(46vh - var(--gutter) * 2);
+  }
+}
