@@ -107,11 +107,25 @@ body {
   inset: 0;
 }
 
+/*
+ * A column holding the pill and, under it, the menu.
+ *
+ * Bounding the column rather than the menu is what lets the menu size
+ * itself: the pill keeps its height, the menu takes whatever is left, and
+ * no rule anywhere has to know how tall the pill happens to be.
+ */
 .toolbar {
   position: absolute;
   top: var(--gutter);
   left: var(--gutter);
   z-index: 10;
+  display: flex;
+  flex-direction: column;
+  /* Or both children stretch to the width of the wider one, and the pill
+     is no longer a pill. */
+  align-items: flex-start;
+  max-height: calc(100% - var(--gutter) * 2);
+  min-height: 0;
 }
 
 .toolbar-pill {
@@ -120,6 +134,7 @@ body {
   gap: 6px;
   padding: 7px 10px;
   border-radius: 999px;
+  flex: none;
 }
 
 .brand {
@@ -167,6 +182,38 @@ body {
   padding: 6px;
   min-width: 200px;
   border-radius: var(--radius-md);
+  /* `min-height: 0` is the half that actually matters: without it a flex
+     child refuses to shrink below its content and overflows the column
+     instead of scrolling inside it. */
+  min-height: 0;
+  overflow-y: auto;
+  /* Reaching the end of the list must not hand the rest of the scroll to
+     the graph behind, which would pan or zoom it. */
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(23, 23, 26, 0.22) transparent;
+}
+
+.toolbar-menu::-webkit-scrollbar {
+  width: 10px;
+}
+
+.toolbar-menu::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Drawn inside a transparent border so the thumb reads as a slim pill with
+   air around it rather than a bar wedged against the edge. */
+.toolbar-menu::-webkit-scrollbar-thumb {
+  background: rgba(23, 23, 26, 0.18);
+  background-clip: content-box;
+  border: 3px solid transparent;
+  border-radius: 999px;
+}
+
+.toolbar-menu::-webkit-scrollbar-thumb:hover {
+  background: rgba(23, 23, 26, 0.3);
+  background-clip: content-box;
 }
 
 .toolbar-menu-item {
@@ -217,9 +264,64 @@ body {
   z-index: 10;
   display: flex;
   flex-direction: column;
-  width: clamp(240px, calc(var(--stage-max-h) * var(--stage-ratio, 1.7778)), var(--render-width));
+  /*
+   * Width is the only dimension anyone sets: height follows it through the
+   * stage's aspect-ratio, which is what keeps the ratio locked while the
+   * frame is dragged.
+   *
+   * The ceiling is the width at which the stage would reach its maximum
+   * height -- so the drag stops exactly where growing further would have to
+   * break the ratio, rather than letting max-height quietly flatten it.
+   */
+  width: clamp(
+    240px,
+    var(--render-user-width, var(--render-width)),
+    min(
+      calc(var(--stage-max-h) * var(--stage-ratio, 1.7778)),
+      calc(100vw - var(--gutter) * 2)
+    )
+  );
   max-height: calc(100% - var(--gutter) * 2);
   overflow: hidden;
+}
+
+/*
+ * The resize grip. The left edge is the only one free to grab: the card is
+ * pinned to the top and the right, and the footer owns the bottom corners.
+ */
+.render-grip {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 2;
+  width: 10px;
+  cursor: ew-resize;
+  /* Without this a touch drag scrolls the page instead of resizing. */
+  touch-action: none;
+}
+
+.render-grip::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 3px;
+  width: 2px;
+  height: 26px;
+  transform: translateY(-50%);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.render-grip:hover::after,
+.render-grip:focus-visible::after {
+  opacity: 1;
+}
+
+.render-grip:focus-visible {
+  outline: none;
 }
 
 .render-head,
@@ -501,6 +603,103 @@ body {
   cursor: grab;
 }
 
+/* Controls whose value is small enough to sit beside its label rather than
+   under it: a switch, a mode dropdown, a colour chip. */
+.control-inline {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.control-toggle {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 16px;
+  padding: 2px;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  background: rgba(23, 23, 26, 0.08);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.control-toggle.is-on {
+  background: var(--accent);
+  border-color: transparent;
+}
+
+.control-toggle-knob {
+  display: block;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(23, 23, 26, 0.3);
+  transition: transform 0.15s ease;
+}
+
+.control-toggle.is-on .control-toggle-knob {
+  transform: translateX(12px);
+}
+
+.control-select {
+  flex: 0 1 auto;
+  min-width: 0;
+  padding: 3px 6px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.7);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+/* The native colour input cannot be styled, so it is sized to fill a
+   rounded chip that can be, and clipped by it. */
+.control-swatch {
+  position: relative;
+  overflow: hidden;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 16px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.control-swatch input[type='color'] {
+  position: absolute;
+  inset: -4px;
+  width: calc(100% + 8px);
+  height: calc(100% + 8px);
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+
+.toolbar-menu-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.toolbar-menu-group + .toolbar-menu-group {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--hairline);
+}
+
+.toolbar-menu-heading {
+  padding: 5px 11px 3px;
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
 /* --------------------------------------------------------------------------
    React Flow overrides
 
@@ -527,6 +726,46 @@ body {
   stroke: var(--accent);
   stroke-width: 2.4;
   stroke-dasharray: 6 5;
+}
+
+/*
+ * The band that actually catches the pointer. The drawn wire is 1.6px, so
+ * without this a link would have to be hit exactly; `pointer-events: stroke`
+ * keeps the catchment to the ribbon and off the area the curve encloses.
+ */
+.link-edge-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 22;
+  pointer-events: stroke;
+  cursor: pointer;
+}
+
+/*
+ * The label layer is inert as a whole so wires underneath stay grabbable;
+ * this one control opts back in.
+ */
+.link-edge-remove {
+  position: absolute;
+  pointer-events: all;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--hairline);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--text-muted);
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(23, 23, 26, 0.18);
+}
+
+.link-edge-remove:hover {
+  background: var(--accent);
+  border-color: transparent;
+  color: #ffffff;
 }
 
 .react-flow__connection-path {
@@ -562,5 +801,11 @@ body {
     left: var(--gutter);
     width: auto;
     max-height: calc(46vh - var(--gutter) * 2);
+  }
+
+  /* The render frame owns the bottom of the screen at this width, so the
+     module list stops above it rather than scrolling in behind it. */
+  .toolbar {
+    max-height: calc(52vh - var(--gutter) * 2);
   }
 }

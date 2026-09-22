@@ -1,5 +1,6 @@
 import type { Edge, Node } from '@xyflow/react';
 import { getEffect } from '../engine/registry';
+import { isAnimated, type ParamValue } from '../engine/effects';
 import { getImage } from '../engine/imageStore';
 import type { Pass } from '../engine/pipeline';
 
@@ -13,7 +14,7 @@ export type ImageNodeData = {
 
 export type EffectNodeData = {
   effectId: string;
-  params: Record<string, number>;
+  params: Record<string, ParamValue>;
 };
 
 export type OutputNodeData = {
@@ -27,6 +28,23 @@ export type AppNode =
   | Node<OutputNodeData, 'renderOutput'>;
 
 export const OUTPUT_NODE_ID = 'output';
+
+/**
+ * A stable per-node random, derived from the node id (FNV-1a).
+ *
+ * Noise-based modules offset their field by this, so two Grain nodes in one
+ * chain lay down different dirt rather than the same pattern twice. Derived
+ * rather than stored because it then survives a reload for free, once the
+ * graph is something that can be reloaded.
+ */
+const seedFor = (id: string): number => {
+  let hash = 2166136261;
+  for (let i = 0; i < id.length; i += 1) {
+    hash ^= id.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0) / 4294967296;
+};
 
 export type ResolvedChain = {
   sourceNodeId: string;
@@ -74,7 +92,7 @@ export const resolveChain = (nodes: AppNode[], edges: Edge[]): ResolvedChain | n
     if (node.type === 'effect') {
       const def = getEffect(node.data.effectId);
       if (!def) return null;
-      reversed.push({ def, params: node.data.params });
+      reversed.push({ nodeId: node.id, seed: seedFor(node.id), def, params: node.data.params });
       cursor = incoming.get(node.id);
       continue;
     }
@@ -87,4 +105,4 @@ export const resolveChain = (nodes: AppNode[], edges: Edge[]): ResolvedChain | n
 
 /** Whether anything in the chain needs a continuous frame loop. */
 export const chainIsAnimated = (chain: ResolvedChain | null): boolean =>
-  chain !== null && chain.passes.some((pass) => pass.def.animated);
+  chain !== null && chain.passes.some((pass) => isAnimated(pass.def, pass.params));

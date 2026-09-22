@@ -4,45 +4,115 @@
  * Adding an effect is meant to cost one file and one line in `registry`:
  * the "Add module" menu, the node's parameter controls, the shader program
  * cache and the frame policy all derive from the `EffectDef` alone.
+ *
+ * Modules are deliberately atomic -- one visible behaviour each. A CRT look
+ * is a chain of eight of these rather than one node with thirty knobs, which
+ * is what lets scanlines be reordered around the lens warp, and what stops
+ * blur and grain being reimplemented once per look.
  */
+import { STDLIB } from './stdlib';
 
-/** A single tweakable knob on an effect, rendered as a labeled slider. */
-export type ParamSpec = {
-  kind: 'float';
-  key: string;
-  label: string;
-  min: number;
-  max: number;
-  step: number;
-  default: number;
+export type Vec2 = [number, number];
+/** Straight RGB, each channel 0..1 -- what the shader wants, no conversion. */
+export type Rgb = [number, number, number];
+export type ParamValue = number | boolean | Vec2 | Rgb;
+
+type BaseSpec = { key: string; label: string };
+
+/** A single tweakable knob, rendered as the control its kind implies. */
+export type ParamSpec =
+  | (BaseSpec & { kind: 'float'; min: number; max: number; step: number; default: number })
+  | (BaseSpec & { kind: 'int'; min: number; max: number; default: number })
+  | (BaseSpec & { kind: 'bool'; default: boolean })
+  | (BaseSpec & { kind: 'enum'; options: string[]; default: number })
+  | (BaseSpec & { kind: 'color'; default: Rgb })
+  | (BaseSpec & { kind: 'vec2'; min: number; max: number; step: number; default: Vec2 });
+
+/** How each param kind is declared in GLSL. Enums travel as their index. */
+const GLSL_TYPE: Record<ParamSpec['kind'], string> = {
+  float: 'float',
+  int: 'int',
+  bool: 'bool',
+  enum: 'int',
+  color: 'vec3',
+  vec2: 'vec2',
+};
+
+/**
+ * Menu grouping. With two dozen atomic modules a flat list is unreadable,
+ * so the category is part of the definition rather than something the
+ * toolbar guesses from the name.
+ */
+export type Category = 'color' | 'blur' | 'geometry' | 'scan' | 'noise' | 'temporal' | 'frame';
+
+export const CATEGORY_ORDER: Category[] = [
+  'color',
+  'blur',
+  'geometry',
+  'scan',
+  'noise',
+  'temporal',
+  'frame',
+];
+
+export const CATEGORY_LABELS: Record<Category, string> = {
+  color: 'Color',
+  blur: 'Blur & Glow',
+  geometry: 'Geometry',
+  scan: 'Scan',
+  noise: 'Noise',
+  temporal: 'Temporal',
+  frame: 'Frame',
 };
 
 export type EffectDef = {
   id: string;
   label: string;
+  category: Category;
   /**
-   * Whether the effect's output changes on its own over time. One animated
-   * effect anywhere in the chain is what flips the renderer from drawing
-   * on demand to running a continuous frame loop, so a graph of purely flat
-   * effects costs nothing while it sits there.
+   * Whether the output changes on its own over time. One animated effect
+   * anywhere in the chain flips the renderer from drawing on demand to a
+   * continuous frame loop, so a graph of flat effects costs nothing while
+   * it sits there.
+   *
+   * A function rather than a flag wherever the answer depends on the knobs:
+   * scanlines with the roll at zero are a still image, and should not pin a
+   * frame loop for the whole session.
    */
-  animated: boolean;
+  animated: boolean | ((params: Record<string, ParamValue>) => boolean);
+  /**
+   * Adds a Mix knob and crossfades the result against the input. Worth
+   * having on nearly everything: eight atomic modules stacked at full
+   * strength is a mess, and dialing each one back is how the stack stays
+   * usable.
+   */
+  mixable?: boolean;
+  /**
+   * Binds this node's previous output as `u_prev`.
+   *
+   * State that survives the frame, kept per node rather than per effect --
+   * two Trails nodes in one chain each keep their own history, and a node
+   * that leaves the chain drops its own.
+   */
+  feedback?: boolean;
   params: ParamSpec[];
   /**
-   * Fragment shader body only. `prelude` supplies the version header, the
-   * varying and the uniforms every effect shares; the body just has to
-   * assign `fragColor`.
+   * Fragment shader body only -- `prelude` supplies the header, the varying
+   * and the shared uniforms, so the body just assigns `fragColor`.
+   *
+   * An array runs several passes back to back over the same ping-pong pair,
+   * which is what a separable blur needs. `u_pass` says which one is running.
    */
-  fragment: string;
+  fragment: string | string[];
 };
 
 /**
  * Boilerplate prepended to every effect body.
  *
- * `u_src` is the previous stage's output (the image itself for the first
- * effect), `u_resolution` is the working resolution in pixels, and `u_time`
- * is seconds since the renderer started -- the only input an animated effect
- * needs to drive itself.
+ * `u_src` is the previous stage's output, `u_resolution` the working
+ * resolution in pixels. `u_time` is seconds, wrapped (see RenderView) so it
+ * stays precise. `u_seed` is stable per node, so two grain modules in one
+ * chain do not produce the identical dirt.
  */
 export const prelude = `#version 300 es
 precision highp float;
@@ -51,19 +121,64 @@ in vec2 v_uv;
 out vec4 fragColor;
 
 uniform sampler2D u_src;
+/** The input this effect was handed, unchanged by its own sub-passes. */
+uniform sampler2D u_orig;
+/** This node's own output last frame. Only bound for feedback effects. */
+uniform sampler2D u_prev;
 uniform vec2 u_resolution;
 uniform float u_time;
+uniform float u_delta;
+uniform int u_frame;
+uniform float u_seed;
+uniform int u_pass;
 `;
 
-/** Wrap an effect body, plus its params as uniforms, into a full shader. */
-export const buildFragmentSource = (def: EffectDef): string => {
-  const uniforms = def.params.map((p) => `uniform float u_${p.key};`).join('\n');
-  return `${prelude}${uniforms}\n\nvoid main() {\n${def.fragment}\n}\n`;
+const MIX_PARAM: ParamSpec = {
+  kind: 'float',
+  key: 'mix',
+  label: 'Mix',
+  min: 0,
+  max: 1,
+  step: 0.01,
+  default: 1,
+};
+
+/** The spec list including the injected Mix knob, if the effect wants one. */
+export const paramsOf = (def: EffectDef): ParamSpec[] =>
+  def.mixable ? [...def.params, MIX_PARAM] : def.params;
+
+/** Effect bodies as a list, whether the definition gave one or several. */
+export const passesOf = (def: EffectDef): string[] =>
+  Array.isArray(def.fragment) ? def.fragment : [def.fragment];
+
+export const isAnimated = (def: EffectDef, params: Record<string, ParamValue>): boolean =>
+  typeof def.animated === 'function' ? def.animated(params) : def.animated;
+
+/**
+ * Wrap one effect body, plus its params as uniforms, into a full shader.
+ *
+ * The Mix crossfade is applied on the last pass only -- blending a
+ * multi-pass effect against the source at every intermediate step would
+ * fade out the work in progress, not the result.
+ */
+export const buildFragmentSource = (def: EffectDef, passIndex: number): string => {
+  const uniforms = paramsOf(def)
+    .map((p) => `uniform ${GLSL_TYPE[p.kind]} u_${p.key};`)
+    .join('\n');
+
+  const bodies = passesOf(def);
+  const isLast = passIndex === bodies.length - 1;
+  const body =
+    def.mixable && isLast
+      ? `  vec4 mixInput = texture(u_orig, v_uv);\n${bodies[passIndex]}\n  fragColor = mix(mixInput, fragColor, u_mix);`
+      : bodies[passIndex];
+
+  return `${prelude}${STDLIB}\n${uniforms}\n\nvoid main() {\n${body}\n}\n`;
 };
 
 /** Starting values for a freshly added node, straight off the spec. */
-export const defaultParams = (def: EffectDef): Record<string, number> => {
-  const params: Record<string, number> = {};
-  for (const p of def.params) params[p.key] = p.default;
+export const defaultParams = (def: EffectDef): Record<string, ParamValue> => {
+  const params: Record<string, ParamValue> = {};
+  for (const p of paramsOf(def)) params[p.key] = p.default;
   return params;
 };

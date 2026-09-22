@@ -3,13 +3,14 @@ import {
   addEdge,
   applyEdgeChanges,
   applyNodeChanges,
+  reconnectEdge,
   type Connection,
   type Edge,
   type EdgeChange,
   type NodeChange,
 } from '@xyflow/react';
 import { getEffect } from '../engine/registry';
-import { defaultParams } from '../engine/effects';
+import { defaultParams, type ParamValue } from '../engine/effects';
 import { decodeImage, dropImage, putImage } from '../engine/imageStore';
 import { OUTPUT_NODE_ID, type AppNode } from './graph';
 
@@ -47,9 +48,11 @@ type GraphStore = {
   onNodesChange: (changes: NodeChange<AppNode>[]) => void;
   onEdgesChange: (changes: EdgeChange[]) => void;
   onConnect: (connection: Connection) => void;
+  removeEdge: (edgeId: string) => void;
+  reconnectLink: (oldEdge: Edge, connection: Connection) => void;
   addEffectNode: (effectId: string) => void;
   addImageNode: () => void;
-  setParam: (nodeId: string, key: string, value: number) => void;
+  setParam: (nodeId: string, key: string, value: ParamValue) => void;
   loadImage: (nodeId: string, file: File) => Promise<void>;
 };
 
@@ -86,8 +89,8 @@ export const useGraph = create<GraphStore>((set, get) => ({
     set({
       edges: [
         ...kept,
-        { id: nextId('edge'), source: edge.source, target: nodeId, type: 'default' },
-        { id: nextId('edge'), source: nodeId, target: edge.target, type: 'default' },
+        { id: nextId('edge'), source: edge.source, target: nodeId, type: 'link' },
+        { id: nextId('edge'), source: nodeId, target: edge.target, type: 'link' },
       ],
       insertTargetEdgeId: null,
     });
@@ -110,7 +113,26 @@ export const useGraph = create<GraphStore>((set, get) => ({
     // An input takes one wire: connecting to an occupied port replaces what
     // was there, which is what dropping a new link on it is asking for.
     const cleared = get().edges.filter((edge) => edge.target !== connection.target);
-    set({ edges: addEdge({ ...connection, type: 'default' }, cleared) });
+    set({ edges: addEdge({ ...connection, type: 'link' }, cleared) });
+  },
+
+  removeEdge: (edgeId) => {
+    set({ edges: get().edges.filter((edge) => edge.id !== edgeId) });
+  },
+
+  /**
+   * Drag one end of an existing wire onto a different port.
+   *
+   * An input still takes one wire, so whatever was already on the new
+   * target is dropped -- the same rule `onConnect` follows, because this is
+   * the same action arrived at from the other direction. The edge being
+   * moved is exempt from that sweep, or it would clear itself on the way in.
+   */
+  reconnectLink: (oldEdge, connection) => {
+    const kept = get().edges.filter(
+      (edge) => edge.id === oldEdge.id || edge.target !== connection.target,
+    );
+    set({ edges: reconnectEdge(oldEdge, connection, kept) });
   },
 
   addEffectNode: (effectId) => {

@@ -3,8 +3,82 @@ import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
 import { Sparkles } from 'lucide-react';
 import type { EffectNodeData } from '../state/graph';
 import { getEffect } from '../engine/registry';
+import { paramsOf, type ParamSpec, type ParamValue, type Rgb, type Vec2 } from '../engine/effects';
 import { useGraph } from '../state/store';
-import { Slider } from './controlPrimitives';
+import { ColorField, Select, Slider, Toggle, Vec2Field } from './controlPrimitives';
+
+/**
+ * One control, picked from the param's kind.
+ *
+ * Split out so the node body stays a map over specs: the only thing that
+ * ever needs touching when a new param kind is added is this switch.
+ */
+const Control: React.FC<{
+  spec: ParamSpec;
+  value: ParamValue | undefined;
+  onChange: (value: ParamValue) => void;
+}> = ({ spec, value, onChange }) => {
+  switch (spec.kind) {
+    case 'float':
+      return (
+        <Slider
+          label={spec.label}
+          value={(value as number) ?? spec.default}
+          min={spec.min}
+          max={spec.max}
+          step={spec.step}
+          onChange={onChange}
+        />
+      );
+    case 'int':
+      return (
+        <Slider
+          label={spec.label}
+          value={(value as number) ?? spec.default}
+          min={spec.min}
+          max={spec.max}
+          step={1}
+          onChange={onChange}
+        />
+      );
+    case 'bool':
+      return (
+        <Toggle
+          label={spec.label}
+          value={(value as boolean) ?? spec.default}
+          onChange={onChange}
+        />
+      );
+    case 'enum':
+      return (
+        <Select
+          label={spec.label}
+          value={(value as number) ?? spec.default}
+          options={spec.options}
+          onChange={onChange}
+        />
+      );
+    case 'color':
+      return (
+        <ColorField
+          label={spec.label}
+          value={(value as Rgb) ?? spec.default}
+          onChange={onChange}
+        />
+      );
+    case 'vec2':
+      return (
+        <Vec2Field
+          label={spec.label}
+          value={(value as Vec2) ?? spec.default}
+          min={spec.min}
+          max={spec.max}
+          step={spec.step}
+          onChange={onChange}
+        />
+      );
+  }
+};
 
 /**
  * One component for every effect there will ever be.
@@ -38,14 +112,11 @@ export const EffectNode: React.FC<NodeProps<Node<EffectNodeData, 'effect'>>> = (
       </div>
 
       <div className="node-body">
-        {def.params.map((spec) => (
-          <Slider
+        {paramsOf(def).map((spec) => (
+          <Control
             key={spec.key}
-            label={spec.label}
-            value={data.params[spec.key] ?? spec.default}
-            min={spec.min}
-            max={spec.max}
-            step={spec.step}
+            spec={spec}
+            value={data.params[spec.key]}
             onChange={(value) => setParam(id, spec.key, value)}
           />
         ))}

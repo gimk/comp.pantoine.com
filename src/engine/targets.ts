@@ -13,7 +13,7 @@ export type RenderTarget = {
   height: number;
 };
 
-const createTarget = (gl: WebGL2RenderingContext, width: number, height: number): RenderTarget => {
+export const createTarget = (gl: WebGL2RenderingContext, width: number, height: number): RenderTarget => {
   const texture = gl.createTexture();
   if (!texture) throw new Error('Could not create target texture');
   gl.bindTexture(gl.TEXTURE_2D, texture);
@@ -35,12 +35,17 @@ const createTarget = (gl: WebGL2RenderingContext, width: number, height: number)
 };
 
 /**
- * A pair of targets sized to the working resolution, reallocated only when
- * that resolution actually changes.
+ * Targets sized to the working resolution, reallocated only when that
+ * resolution actually changes.
+ *
+ * Two of them alternate as the chain advances. The third is the hold: a
+ * multi-pass effect stashes its own input there, because by its second
+ * sub-pass the ping-pong has already overwritten it and passes like a bloom
+ * combine still need the picture they started from.
  */
 export class PingPong {
   private gl: WebGL2RenderingContext;
-  private targets: [RenderTarget, RenderTarget] | null = null;
+  private targets: RenderTarget[] | null = null;
   private width = 0;
   private height = 0;
 
@@ -51,15 +56,25 @@ export class PingPong {
   resize(width: number, height: number): void {
     if (this.targets && this.width === width && this.height === height) return;
     this.dispose();
-    this.targets = [createTarget(this.gl, width, height), createTarget(this.gl, width, height)];
+    this.targets = [
+      createTarget(this.gl, width, height),
+      createTarget(this.gl, width, height),
+      createTarget(this.gl, width, height),
+    ];
     this.width = width;
     this.height = height;
   }
 
-  /** Target `index` of the pair, alternating as the chain advances. */
+  /** Target `index` of the alternating pair, as the chain advances. */
   at(index: number): RenderTarget {
     if (!this.targets) throw new Error('PingPong used before resize()');
     return this.targets[index % 2];
+  }
+
+  /** The buffer set aside for a multi-pass effect's own input. */
+  hold(): RenderTarget {
+    if (!this.targets) throw new Error('PingPong used before resize()');
+    return this.targets[2];
   }
 
   dispose(): void {

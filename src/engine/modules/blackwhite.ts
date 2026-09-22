@@ -1,4 +1,4 @@
-import type { EffectDef } from './effects';
+import type { EffectDef } from '../effects';
 
 /**
  * Desaturation on the Rec. 709 luma weights, which track perceived
@@ -12,6 +12,7 @@ import type { EffectDef } from './effects';
 export const blackwhite: EffectDef = {
   id: 'blackwhite',
   label: 'Black & White',
+  category: 'color',
   animated: false,
   params: [
     { kind: 'float', key: 'amount', label: 'Amount', min: 0, max: 1, step: 0.01, default: 1 },

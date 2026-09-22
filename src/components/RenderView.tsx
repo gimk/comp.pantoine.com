@@ -12,6 +12,29 @@ const MAX_DPR = 2;
 const DEFAULT_RATIO = 16 / 9;
 
 /**
+ * Longest edge the effect chain runs at.
+ *
+ * Atomic modules mean long chains -- a CRT look is eight full-screen passes
+ * -- so this is what keeps a large photo interactive. It caps the working
+ * buffers only; the source image is untouched.
+ */
+const MAX_WORKING_SIZE = 2048;
+
+/**
+ * Seconds before `u_time` wraps.
+ *
+ * `highp float` carries about seven significant digits, so an app left open
+ * for hours would quantise `sin(u_time * rate)` into visible steps. Wrapping
+ * trades that for one discontinuity every ~17 minutes, which is the better
+ * of the two artefacts by a wide margin.
+ */
+const TIME_WRAP = 1000;
+
+/** Longest delta handed to a shader, so a backgrounded tab does not
+ *  resume with a single multi-second step. */
+const MAX_DELTA = 0.1;
+
+/**
  * The fixed panel on the right: whatever is wired into the Output node.
  *
  * Owns the GL context and the frame loop. The loop only runs continuously
@@ -24,9 +47,59 @@ export const RenderView: React.FC = () => {
   const edges = useGraph((state) => state.edges);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const asideRef = useRef<HTMLElement>(null);
   const pipelineRef = useRef<Pipeline | null>(null);
   const startRef = useRef(performance.now());
+  const lastFrameRef = useRef(performance.now());
+  const frameRef = useRef(0);
   const [unsupported, setUnsupported] = useState(false);
+
+  // null means "however wide the ratio and the default want it". Only the
+  // width is ever stored: the stage derives its height from the ratio, so
+  // there is no second dimension to hold, and nothing to keep in step.
+  const [userWidth, setUserWidth] = useState<number | null>(null);
+  const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
+
+  const beginResize = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const aside = asideRef.current;
+    if (!aside) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    // Measured rather than taken from state, so a drag that starts from the
+    // default width picks up exactly where the frame is now.
+    dragRef.current = { startX: e.clientX, startWidth: aside.getBoundingClientRect().width };
+  }, []);
+
+  const trackResize = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    // The card is anchored right, so dragging the grip left widens it. The
+    // bounds live in the CSS clamp, which already knows where the ratio
+    // stops fitting.
+    setUserWidth(drag.startWidth + (drag.startX - e.clientX));
+  }, []);
+
+  const endResize = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    dragRef.current = null;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+  }, []);
+
+  // A drag-only control is unusable without a pointer, so the grip also
+  // takes arrow keys once focused.
+  const nudgeResize = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    const aside = asideRef.current;
+    if (!aside) return;
+    const step = e.shiftKey ? 48 : 16;
+    if (e.key === 'ArrowLeft') {
+      setUserWidth(aside.getBoundingClientRect().width + step);
+    } else if (e.key === 'ArrowRight') {
+      setUserWidth(aside.getBoundingClientRect().width - step);
+    } else {
+      return;
+    }
+    e.preventDefault();
+  }, []);
 
   const chain = resolveChain(nodes, edges);
   const animated = chainIsAnimated(chain);
@@ -53,13 +126,21 @@ export const RenderView: React.FC = () => {
       return;
     }
 
+    const now = performance.now();
+    const delta = Math.min((now - lastFrameRef.current) / 1000, MAX_DELTA);
+    lastFrameRef.current = now;
+    frameRef.current += 1;
+
     pipeline.render({
       nodeId: current.sourceNodeId,
       image,
       passes: current.passes,
-      time: (performance.now() - startRef.current) / 1000,
+      time: ((now - startRef.current) / 1000) % TIME_WRAP,
+      delta,
+      frame: frameRef.current,
       canvasWidth: canvas.width,
       canvasHeight: canvas.height,
+      maxWorkingSize: MAX_WORKING_SIZE,
     });
   }, []);
 
@@ -126,8 +207,32 @@ export const RenderView: React.FC = () => {
     '--stage-ratio': image ? image.width / image.height : DEFAULT_RATIO,
   } as React.CSSProperties;
 
+  /*
+   * The dragged width goes on the card only. The ratio has to reach the
+   * stage as well, so it stays on both rather than relying on inheritance.
+   */
+  const panelStyle = {
+    ...stageStyle,
+    ...(userWidth === null ? {} : { '--render-user-width': Math.round(userWidth) + 'px' }),
+  } as React.CSSProperties;
+
   return (
-    <aside className="glass render-view" style={stageStyle}>
+    <aside className="glass render-view" ref={asideRef} style={panelStyle}>
+      <div
+        className="render-grip"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize render frame"
+        tabIndex={0}
+        onPointerDown={beginResize}
+        onPointerMove={trackResize}
+        onPointerUp={endResize}
+        onPointerCancel={endResize}
+        onKeyDown={nudgeResize}
+        onDoubleClick={() => setUserWidth(null)}
+        title="Drag to resize · double-click to reset"
+      />
+
       <header className="render-head">
         <span className="render-title">Render</span>
         <span className="render-info">

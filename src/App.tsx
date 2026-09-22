@@ -1,12 +1,15 @@
-import React, { useCallback, useMemo } from 'react';
+import React, { useCallback, useMemo, useRef } from 'react';
 import {
   Background,
   BackgroundVariant,
   ReactFlow,
   ReactFlowProvider,
+  type Connection,
+  type Edge,
   type OnNodeDrag,
 } from '@xyflow/react';
 import { findEdgeUnderPoint } from './components/edgeHitTest';
+import { LinkEdge } from './components/LinkEdge';
 import type { AppNode } from './state/graph';
 import { ImageNode } from './components/ImageNode';
 import { EffectNode } from './components/EffectNode';
@@ -30,9 +33,16 @@ const nodeTypes = {
   renderOutput: OutputNode,
 };
 
-/** React Flow's `default` edge is the bezier one -- curved, not stepped. */
+/**
+ * Every wire is a `LinkEdge` -- the built-in bezier plus a hit band and a
+ * remove button. Stable identity for the same reason as `nodeTypes`.
+ */
+const edgeTypes = {
+  link: LinkEdge,
+};
+
 const defaultEdgeOptions = {
-  type: 'default',
+  type: 'link',
   animated: false,
 };
 
@@ -80,6 +90,30 @@ const Editor: React.FC = () => {
     else setInsertTarget(null);
   }, []);
 
+  /*
+   * Moving a wire. React Flow reports the drop and the outcome separately,
+   * so this records whether the end actually landed on a port.
+   */
+  const reconnected = useRef(false);
+
+  const handleReconnectStart = useCallback(() => {
+    reconnected.current = false;
+  }, []);
+
+  const handleReconnect = useCallback((oldEdge: Edge, connection: Connection) => {
+    reconnected.current = true;
+    useGraph.getState().reconnectLink(oldEdge, connection);
+  }, []);
+
+  /*
+   * Dropping an end on bare canvas removes the wire. It is the gesture node
+   * editors have trained people to expect, and it makes unplugging exactly
+   * as direct as plugging in -- drag it off and it is gone.
+   */
+  const handleReconnectEnd = useCallback((_event: MouseEvent | TouchEvent, edge: Edge) => {
+    if (!reconnected.current) useGraph.getState().removeEdge(edge.id);
+  }, []);
+
   const edgesForFlow = useMemo(() => {
     if (!insertTargetEdgeId) return edges;
     return edges.map((edge) =>
@@ -92,12 +126,21 @@ const Editor: React.FC = () => {
       nodes={nodes}
       edges={edgesForFlow}
       nodeTypes={nodeTypes}
+      edgeTypes={edgeTypes}
       defaultEdgeOptions={defaultEdgeOptions}
       onNodesChange={onNodesChange}
       onEdgesChange={onEdgesChange}
       onConnect={onConnect}
       onNodeDrag={handleNodeDrag}
       onNodeDragStop={handleNodeDragStop}
+      onReconnect={handleReconnect}
+      onReconnectStart={handleReconnectStart}
+      onReconnectEnd={handleReconnectEnd}
+      edgesReconnectable
+      // Generous, because the grab target is a wire end rather than a port.
+      reconnectRadius={26}
+      // Delete is what most people reach for; Backspace is the library's own.
+      deleteKeyCode={['Backspace', 'Delete']}
       minZoom={0.3}
       maxZoom={2}
       fitView
