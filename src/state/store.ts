@@ -13,9 +13,24 @@ import {
 import { getEffect } from '../engine/registry';
 import { defaultParams, type ParamValue } from '../engine/effects';
 import { decodeImage, dropImage, putImage } from '../engine/imageStore';
-import { OUTPUT_NODE_ID, type AppNode } from './graph';
+import { DEFAULT_PREVIEW_WIDTH, type AppNode } from './graph';
+import { highestIdSuffix, loadGraph, saveGraph } from './document';
 
-let idCounter = 0;
+/**
+ * Whatever was left in local storage, restored before anything else runs.
+ *
+ * Read once at module load rather than in an effect, so the editor never
+ * renders the empty starting graph for a frame and then replaces it --
+ * which would flash, and would also fit the view to the wrong thing.
+ */
+const restored = loadGraph();
+
+// Moved past every id already in the restored document, or the next node
+// added would collide with one of them.
+let idCounter = restored
+  ? highestIdSuffix([...restored.nodes.map((n) => n.id), ...restored.edges.map((e) => e.id)])
+  : 0;
+
 const nextId = (prefix: string): string => {
   idCounter += 1;
   return prefix + '-' + idCounter;
@@ -29,13 +44,12 @@ const initialNodes = (): AppNode[] => [
     data: { src: null, name: '', width: 0, height: 0 },
   },
   {
-    id: OUTPUT_NODE_ID,
+    id: nextId('output'),
     type: 'renderOutput',
     position: { x: 560, y: 180 },
-    // The render view is meaningless without a sink to wire into, so this
-    // one node is fixed furniture rather than something to delete by accident.
-    deletable: false,
-    data: { label: 'Output' },
+    // Deletable, now that the Output menu can put another one back. A graph
+    // with no viewer is a legitimate state, not a broken one.
+    data: { width: DEFAULT_PREVIEW_WIDTH },
   },
 ];
 
@@ -52,14 +66,16 @@ type GraphStore = {
   removeEdge: (edgeId: string) => void;
   reconnectLink: (oldEdge: Edge, connection: Connection) => void;
   addEffectNode: (effectId: string, position?: XYPosition) => void;
-  addImageNode: () => void;
+  addImageNode: (position?: XYPosition) => void;
+  addOutputNode: (position?: XYPosition) => void;
   setParam: (nodeId: string, key: string, value: ParamValue) => void;
+  setPreviewWidth: (nodeId: string, width: number) => void;
   loadImage: (nodeId: string, file: File) => Promise<void>;
 };
 
 export const useGraph = create<GraphStore>((set, get) => ({
-  nodes: initialNodes(),
-  edges: [],
+  nodes: restored?.nodes ?? initialNodes(),
+  edges: restored?.edges ?? [],
   insertTargetEdgeId: null,
 
   setInsertTarget: (edgeId) => {
@@ -142,8 +158,6 @@ export const useGraph = create<GraphStore>((set, get) => ({
     const node: AppNode = {
       id: nextId(effectId),
       type: 'effect',
-      // Offset each new node so a run of them fans out instead of stacking
-      // into one unreadable pile.
       // Dropped modules land where they were dropped. Added from the menu
       // by click instead, they fan out from a fixed spot so a run of them
       // does not stack into one unreadable pile.
@@ -153,12 +167,22 @@ export const useGraph = create<GraphStore>((set, get) => ({
     set({ nodes: [...get().nodes, node] });
   },
 
-  addImageNode: () => {
+  addImageNode: (position) => {
     const node: AppNode = {
       id: nextId('image'),
       type: 'image',
-      position: { x: 40, y: 100 + (get().nodes.length % 6) * 40 },
+      position: position ?? { x: 40, y: 100 + (get().nodes.length % 6) * 40 },
       data: { src: null, name: '', width: 0, height: 0 },
+    };
+    set({ nodes: [...get().nodes, node] });
+  },
+
+  addOutputNode: (position) => {
+    const node: AppNode = {
+      id: nextId('output'),
+      type: 'renderOutput',
+      position: position ?? { x: 760, y: 100 + (get().nodes.length % 6) * 40 },
+      data: { width: DEFAULT_PREVIEW_WIDTH },
     };
     set({ nodes: [...get().nodes, node] });
   },
@@ -168,6 +192,15 @@ export const useGraph = create<GraphStore>((set, get) => ({
       nodes: get().nodes.map((node) => {
         if (node.id !== nodeId || node.type !== 'effect') return node;
         return { ...node, data: { ...node.data, params: { ...node.data.params, [key]: value } } };
+      }),
+    });
+  },
+
+  setPreviewWidth: (nodeId, width) => {
+    set({
+      nodes: get().nodes.map((node) => {
+        if (node.id !== nodeId || node.type !== 'renderOutput') return node;
+        return { ...node, data: { ...node.data, width } };
       }),
     });
   },
@@ -187,3 +220,42 @@ export const useGraph = create<GraphStore>((set, get) => ({
     });
   },
 }));
+
+/**
+ * Autosave.
+ *
+ * Debounced because the graph changes on every frame of a node drag and
+ * every tick of a slider; writing on each would serialize the whole
+ * document hundreds of times a second. Only `nodes` and `edges` are
+ * watched -- transient state like the highlighted insert target is not part
+ * of the document and should not cost a write.
+ */
+const SAVE_DEBOUNCE_MS = 400;
+
+let saveTimer: ReturnType<typeof setTimeout> | undefined;
+let lastNodes = useGraph.getState().nodes;
+let lastEdges = useGraph.getState().edges;
+
+const flushSave = (): void => {
+  if (saveTimer === undefined) return;
+  clearTimeout(saveTimer);
+  saveTimer = undefined;
+  saveGraph(lastNodes, lastEdges);
+};
+
+useGraph.subscribe((state) => {
+  if (state.nodes === lastNodes && state.edges === lastEdges) return;
+  lastNodes = state.nodes;
+  lastEdges = state.edges;
+  if (saveTimer !== undefined) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    saveTimer = undefined;
+    saveGraph(lastNodes, lastEdges);
+  }, SAVE_DEBOUNCE_MS);
+});
+
+// A change made in the last fraction of a second before the tab closes is
+// still a change the user made, and would otherwise die in the debounce.
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeunload', flushSave);
+}

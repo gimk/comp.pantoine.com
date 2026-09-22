@@ -11,12 +11,15 @@ import {
 } from '@xyflow/react';
 import { findEdgeUnderPoint } from './components/edgeHitTest';
 import { LinkEdge } from './components/LinkEdge';
-import { MODULE_DRAG_MIME, MODULE_DROP_OFFSET } from './components/moduleDrag';
+import {
+  PALETTE_DRAG_MIME,
+  decodePaletteItem,
+  paletteDropOffset,
+} from './components/paletteDrag';
 import type { AppNode } from './state/graph';
 import { ImageNode } from './components/ImageNode';
 import { EffectNode } from './components/EffectNode';
 import { OutputNode } from './components/OutputNode';
-import { RenderView } from './components/RenderView';
 import { Toolbar } from './components/Toolbar';
 import { useGraph } from './state/store';
 import '@xyflow/react/dist/style.css';
@@ -48,13 +51,9 @@ const defaultEdgeOptions = {
   animated: false,
 };
 
-/*
- * The graph runs full bleed under the render view, so fitView is told to
- * keep clear of it by hand. These mirror `--render-width` and `--gutter`;
- * change one and change the other.
- */
+/* Even padding now that nothing overlays the graph but the toolbar. */
 const fitViewOptions = {
-  padding: { top: '40px', right: '440px', bottom: '40px', left: '40px' },
+  padding: { top: '72px', right: '40px', bottom: '40px', left: '40px' },
 } as const;
 
 const Editor: React.FC = () => {
@@ -95,15 +94,15 @@ const Editor: React.FC = () => {
   const { screenToFlowPosition } = useReactFlow();
 
   /*
-   * A module dragged in from the menu.
+   * An item dragged in from the palette.
    *
    * `dragover` may only inspect the payload's types, not read it -- the
    * browser withholds the data until the drop -- so the check that this is
-   * one of our modules and not a file or a link from another tab has to be
-   * made against `types` here, and against the value itself on drop.
+   * one of ours and not a file or a link from another tab has to be made
+   * against `types` here, and against the value itself on drop.
    */
   const handleDragOver = useCallback((event: React.DragEvent) => {
-    if (!event.dataTransfer.types.includes(MODULE_DRAG_MIME)) return;
+    if (!event.dataTransfer.types.includes(PALETTE_DRAG_MIME)) return;
     // Omitting this leaves the default handler in place, which refuses
     // every drop; the canvas would simply never accept one.
     event.preventDefault();
@@ -112,15 +111,19 @@ const Editor: React.FC = () => {
 
   const handleDrop = useCallback(
     (event: React.DragEvent) => {
-      const effectId = event.dataTransfer.getData(MODULE_DRAG_MIME);
-      if (!effectId) return;
+      const item = decodePaletteItem(event.dataTransfer.getData(PALETTE_DRAG_MIME));
+      if (!item) return;
       event.preventDefault();
+
       // The pointer is in screen pixels; the graph has its own pan and zoom.
       const point = screenToFlowPosition({ x: event.clientX, y: event.clientY });
-      useGraph.getState().addEffectNode(effectId, {
-        x: point.x - MODULE_DROP_OFFSET.x,
-        y: point.y - MODULE_DROP_OFFSET.y,
-      });
+      const offset = paletteDropOffset(item);
+      const position = { x: point.x - offset.x, y: point.y - offset.y };
+
+      const store = useGraph.getState();
+      if (item.kind === 'effect') store.addEffectNode(item.effectId, position);
+      else if (item.kind === 'image') store.addImageNode(position);
+      else store.addOutputNode(position);
     },
     [screenToFlowPosition],
   );
@@ -195,7 +198,6 @@ export const App: React.FC = () => (
         <Editor />
       </main>
       <Toolbar />
-      <RenderView />
     </ReactFlowProvider>
   </div>
 );

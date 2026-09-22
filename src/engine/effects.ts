@@ -110,7 +110,7 @@ export type EffectDef = {
  * Boilerplate prepended to every effect body.
  *
  * `u_src` is the previous stage's output, `u_resolution` the working
- * resolution in pixels. `u_time` is seconds, wrapped (see RenderView) so it
+ * resolution in pixels. `u_time` is seconds, wrapped (see OutputNode) so it
  * stays precise. `u_seed` is stable per node, so two grain modules in one
  * chain do not produce the identical dirt.
  */

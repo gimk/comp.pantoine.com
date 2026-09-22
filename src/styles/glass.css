@@ -49,9 +49,6 @@
 
   --font-ui: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
 
-  --render-width: 380px;
-  /* Tallest the render frame may get before it has to give up the ratio. */
-  --stage-max-h: 68vh;
   --gutter: 18px;
 }
 
@@ -98,10 +95,8 @@ body {
    Layout
    -------------------------------------------------------------------------- */
 
-/* Full bleed on purpose. Insetting this to make room for the render view
-   stopped the dot grid short of the edge, and that hard vertical seam read
-   as a stray grey panel. The render view floats over the graph instead, and
-   fitView is given matching padding so nodes still land clear of it. */
+/* Full bleed. The only thing over the graph now is the toolbar, which
+   fitView is given matching top padding to clear. */
 .canvas-area {
   position: absolute;
   inset: 0;
@@ -252,71 +247,58 @@ body {
 }
 
 /* --------------------------------------------------------------------------
-   Render view
+   Output node
    -------------------------------------------------------------------------- */
 
 /*
- * One card holding the label, the picture and the status line, so none of
- * them float loose on the ground.
+ * The output node: the label, the picture and the status line in one card.
  *
- * Both dimensions follow the picture. Height is content-driven, and the width
- * is capped by what the ratio allows at full frame height, so a portrait
- * narrows the whole card instead of growing side bars inside it.
+ * Width comes in inline from the node's own data; the height follows the
+ * picture through the stage's aspect-ratio, so there is only ever one
+ * dimension to set and the ratio cannot be broken by setting it.
  */
-.render-view {
-  position: absolute;
-  top: var(--gutter);
-  right: var(--gutter);
-  z-index: 10;
+.node-output {
   display: flex;
   flex-direction: column;
-  /*
-   * Width is the only dimension anyone sets: height follows it through the
-   * stage's aspect-ratio, which is what keeps the ratio locked while the
-   * frame is dragged.
-   *
-   * The ceiling is the width at which the stage would reach its maximum
-   * height -- so the drag stops exactly where growing further would have to
-   * break the ratio, rather than letting max-height quietly flatten it.
-   */
-  width: clamp(
-    240px,
-    var(--render-user-width, var(--render-width)),
-    min(
-      calc(var(--stage-max-h) * var(--stage-ratio, 1.7778)),
-      calc(100vw - var(--gutter) * 2)
-    )
-  );
-  max-height: calc(100% - var(--gutter) * 2);
-  overflow: hidden;
+  /* The fixed 196px of a normal node does not apply to this one. */
+  width: auto;
 }
 
 /*
- * The resize grip. The left edge is the only one free to grab: the card is
- * pinned to the top and the right, and the footer owns the bottom corners.
+ * The resize grip, on the right edge -- the input port owns the left, and
+ * the footer owns the bottom corners.
+ */
+/*
+ * Moved to the bottom-right corner.
+ *
+ * It used to run the whole right edge, which is the larger target -- but
+ * that edge now carries the output port, and a grip laid over a port makes
+ * the port impossible to grab. The corner is the conventional place anyway.
  */
 .render-grip {
   position: absolute;
-  top: 0;
+  right: 0;
   bottom: 0;
-  left: 0;
   z-index: 2;
-  width: 10px;
+  width: 20px;
+  height: 20px;
+  /* Width is the only thing that moves; height follows the picture. */
   cursor: ew-resize;
   /* Without this a touch drag scrolls the page instead of resizing. */
   touch-action: none;
 }
 
+/* The usual shorthand for a corner that can be dragged. */
 .render-grip::after {
   content: '';
   position: absolute;
-  top: 50%;
-  left: 3px;
-  width: 2px;
-  height: 26px;
-  transform: translateY(-50%);
-  border-radius: 999px;
-  background: var(--accent-soft);
+  right: 5px;
+  bottom: 5px;
+  width: 9px;
+  height: 9px;
+  border-right: 2px solid var(--accent-soft);
+  border-bottom: 2px solid var(--accent-soft);
+  border-bottom-right-radius: 4px;
   opacity: 0;
   transition: opacity 0.15s ease;
 }
@@ -370,7 +352,6 @@ body {
   flex: none;
   width: 100%;
   aspect-ratio: var(--stage-ratio, 1.7778);
-  max-height: var(--stage-max-h);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -517,37 +498,98 @@ body {
 
 /* Output node */
 
-.output-status {
-  color: var(--text-dim);
-}
-
-.output-status.is-live {
-  color: var(--text-primary);
-  font-weight: 500;
-}
-
 /* Ports */
 
+/*
+ * A port reads as a lug on the card, not a bead floating beside it.
+ *
+ * Three things do that: it takes the card's own rim and catchlight, it is
+ * centred on the edge so the card's border runs behind it rather than
+ * stopping at it, and the contact point is a separate inner disc -- so the
+ * body can stay the same material as the node while the socket reads as ink.
+ */
 .react-flow__handle.port {
-  width: 11px;
-  height: 11px;
-  border: 1px solid rgba(23, 23, 26, 0.35);
-  background: #ffffff;
-  transition: background 140ms ease, border-color 140ms ease;
+  /*
+   * React Flow leaves a handle at `pointer-events: none` and only turns it
+   * on through a `connectionindicator` class of its own. Every port here is
+   * always connectable, and depending on that class has one failure mode --
+   * a port you can see and cannot grab -- so it is set outright.
+   *
+   * Dropping onto a handle works either way, because React Flow finds drop
+   * targets by geometry rather than by hit-testing. Starting a drag does
+   * not: that needs a real press on the element.
+   */
+  pointer-events: all;
+  /* Above the viewer's resize grip and its canvas, both of which reach the
+     same edge. */
+  z-index: 3;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1px solid var(--glass-border);
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    0 0 0 1px rgba(23, 23, 26, 0.08),
+    0 1px 3px rgba(23, 23, 26, 0.14);
+  transition: box-shadow 140ms ease;
+}
+
+/* The socket itself. */
+.react-flow__handle.port::after {
+  content: '';
+  position: absolute;
+  inset: 4px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  transition: background 140ms ease, inset 140ms ease;
+}
+
+/*
+ * Grab area, wider than the lug it surrounds.
+ *
+ * How big the port looks is a design decision and how big it is to hit is an
+ * ergonomic one; they do not have to be the same number. This is what makes
+ * a wire easy to start without drawing a port the size of a button.
+ */
+.react-flow__handle.port::before {
+  content: '';
+  position: absolute;
+  inset: -7px;
+  border-radius: 50%;
 }
 
 .react-flow__handle.port:hover,
-.react-flow__handle.port.connectingfrom {
-  background: var(--accent);
-  border-color: var(--accent);
+.react-flow__handle.port.connectingfrom,
+.react-flow__handle.port.connectingto {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    0 0 0 1px rgba(23, 23, 26, 0.16),
+    0 2px 6px rgba(23, 23, 26, 0.2);
 }
 
+.react-flow__handle.port:hover::after,
+.react-flow__handle.port.connectingfrom::after,
+.react-flow__handle.port.connectingto::after {
+  background: var(--accent);
+  inset: 3px;
+}
+
+/*
+ * Flush with the edge, not offset from it.
+ *
+ * React Flow's own `handle-left`/`handle-right` rules already centre a port
+ * on the edge with `transform: translate(±50%, -50%)`. Adding a negative
+ * offset on top of that pushes the whole port clear of the card, which is
+ * what made it read as a bead floating alongside. At zero it straddles the
+ * border, which is what makes it look built into the frame.
+ */
 .react-flow__handle.port-in {
-  left: -6px;
+  left: 0;
 }
 
 .react-flow__handle.port-out {
-  right: -6px;
+  right: 0;
 }
 
 /* --------------------------------------------------------------------------
@@ -798,22 +840,8 @@ body {
    the tool still works on a laptop in split screen.
    -------------------------------------------------------------------------- */
 
-@media (max-width: 900px) {
-  :root {
-    --stage-max-h: 30vh;
-  }
-
-  .render-view {
-    top: auto;
-    bottom: var(--gutter);
-    left: var(--gutter);
-    width: auto;
-    max-height: calc(46vh - var(--gutter) * 2);
-  }
-
-  /* The render frame owns the bottom of the screen at this width, so the
-     module list stops above it rather than scrolling in behind it. */
-  .toolbar {
-    max-height: calc(52vh - var(--gutter) * 2);
-  }
-}
+/*
+ * No narrow-width rules any more. The preview used to be a fixed panel that
+ * had to be relocated out of the way on a small screen; now that it is a
+ * node, it pans and zooms with everything else and needs no special case.
+ */

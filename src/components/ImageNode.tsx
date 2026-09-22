@@ -44,7 +44,12 @@ export const ImageNode: React.FC<NodeProps<Node<ImageNodeData, 'image'>>> = ({ i
         {data.src ? (
           <img className="image-thumb" src={data.src} alt={data.name} />
         ) : (
-          <span className="image-empty">Click or drop an image</span>
+          /* A restored node remembers its filename but not its pixels, so it
+             asks for that file back by name rather than looking like an
+             empty node the user forgot to fill in. */
+          <span className="image-empty">
+            {data.name ? 'Re-import ' + data.name : 'Click or drop an image'}
+          </span>
         )}
       </button>
 

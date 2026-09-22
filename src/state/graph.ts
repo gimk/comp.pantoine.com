@@ -18,8 +18,11 @@ export type EffectNodeData = {
 };
 
 export type OutputNodeData = {
-  /** Present so the type is a distinct object shape, not an empty one. */
-  label: string;
+  /**
+   * Preview width in graph units. The height is not stored: it follows the
+   * image's own ratio, so there is only ever one number to keep.
+   */
+  width: number;
 };
 
 export type AppNode =
@@ -27,7 +30,8 @@ export type AppNode =
   | Node<EffectNodeData, 'effect'>
   | Node<OutputNodeData, 'renderOutput'>;
 
-export const OUTPUT_NODE_ID = 'output';
+/** Starting width of the output preview, in graph units. */
+export const DEFAULT_PREVIEW_WIDTH = 360;
 
 /**
  * A stable per-node random, derived from the node id (FNV-1a).
@@ -59,14 +63,20 @@ export type ResolvedChain = {
  * The render view treats that as its empty state rather than an error, since
  * it is the normal condition while the user is still wiring things up.
  */
-export const resolveChain = (nodes: AppNode[], edges: Edge[]): ResolvedChain | null => {
+export const resolveChain = (
+  nodes: AppNode[],
+  edges: Edge[],
+  outputNodeId: string,
+): ResolvedChain | null => {
   const byId = new Map(nodes.map((node) => [node.id, node]));
 
   // Inputs accept a single edge, so one source per target is the whole story.
   const incoming = new Map<string, string>();
   for (const edge of edges) incoming.set(edge.target, edge.source);
 
-  const output = nodes.find((node) => node.type === 'renderOutput');
+  // Resolved for one named viewer rather than "the" viewer: there can be
+  // several, each watching a different branch of the graph.
+  const output = nodes.find((node) => node.id === outputNodeId && node.type === 'renderOutput');
   if (!output) return null;
 
   // Collected output-first, so the chain comes out reversed.
@@ -93,6 +103,14 @@ export const resolveChain = (nodes: AppNode[], edges: Edge[]): ResolvedChain | n
       const def = getEffect(node.data.effectId);
       if (!def) return null;
       reversed.push({ nodeId: node.id, seed: seedFor(node.id), def, params: node.data.params });
+      cursor = incoming.get(node.id);
+      continue;
+    }
+
+    if (node.type === 'renderOutput') {
+      // A viewer part-way along a chain is a tap, not a stage: it shows what
+      // has reached it and passes the picture on untouched. Several strung
+      // together is how you watch the same edit at different points.
       cursor = incoming.get(node.id);
       continue;
     }
