@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ImagePlus, Plus } from 'lucide-react';
 import { registry } from '../engine/registry';
 import { CATEGORY_LABELS, CATEGORY_ORDER, type Category, type EffectDef } from '../engine/effects';
+import { MODULE_DRAG_MIME } from './moduleDrag';
 import { useGraph } from '../state/store';
 
 /**
@@ -72,6 +73,19 @@ export const Toolbar: React.FC = () => {
                 <button
                   key={def.id}
                   className="toolbar-menu-item"
+                  /*
+                   * Drag to place the module where you want it; clicking
+                   * still drops one on the canvas, which is the fallback
+                   * for touch and for the keyboard, where there is no drag.
+                   */
+                  draggable
+                  onDragStart={(event) => {
+                    event.dataTransfer.setData(MODULE_DRAG_MIME, def.id);
+                    event.dataTransfer.effectAllowed = 'copy';
+                  }}
+                  // Left open during the drag: removing the element being
+                  // dragged mid-gesture cancels it in some browsers.
+                  onDragEnd={() => setIsOpen(false)}
                   onClick={() => {
                     addEffectNode(def.id);
                     setIsOpen(false);

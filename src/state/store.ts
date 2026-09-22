@@ -8,6 +8,7 @@ import {
   type Edge,
   type EdgeChange,
   type NodeChange,
+  type XYPosition,
 } from '@xyflow/react';
 import { getEffect } from '../engine/registry';
 import { defaultParams, type ParamValue } from '../engine/effects';
@@ -50,7 +51,7 @@ type GraphStore = {
   onConnect: (connection: Connection) => void;
   removeEdge: (edgeId: string) => void;
   reconnectLink: (oldEdge: Edge, connection: Connection) => void;
-  addEffectNode: (effectId: string) => void;
+  addEffectNode: (effectId: string, position?: XYPosition) => void;
   addImageNode: () => void;
   setParam: (nodeId: string, key: string, value: ParamValue) => void;
   loadImage: (nodeId: string, file: File) => Promise<void>;
@@ -135,7 +136,7 @@ export const useGraph = create<GraphStore>((set, get) => ({
     set({ edges: reconnectEdge(oldEdge, connection, kept) });
   },
 
-  addEffectNode: (effectId) => {
+  addEffectNode: (effectId, position) => {
     const def = getEffect(effectId);
     if (!def) return;
     const node: AppNode = {
@@ -143,7 +144,10 @@ export const useGraph = create<GraphStore>((set, get) => ({
       type: 'effect',
       // Offset each new node so a run of them fans out instead of stacking
       // into one unreadable pile.
-      position: { x: 280, y: 100 + (get().nodes.length % 6) * 40 },
+      // Dropped modules land where they were dropped. Added from the menu
+      // by click instead, they fan out from a fixed spot so a run of them
+      // does not stack into one unreadable pile.
+      position: position ?? { x: 280, y: 100 + (get().nodes.length % 6) * 40 },
       data: { effectId, params: defaultParams(def) },
     };
     set({ nodes: [...get().nodes, node] });

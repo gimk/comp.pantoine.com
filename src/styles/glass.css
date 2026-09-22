@@ -229,7 +229,13 @@ body {
   color: var(--text-primary);
   font: inherit;
   text-align: left;
-  cursor: pointer;
+  /* Grab rather than pointer: these are meant to be dragged onto the canvas,
+     and the cursor is the only thing that says so. Clicking still works. */
+  cursor: grab;
+}
+
+.toolbar-menu-item:active {
+  cursor: grabbing;
 }
 
 .toolbar-menu-item:hover {
@@ -343,8 +349,10 @@ body {
 }
 
 .render-info,
+.render-fps,
 .render-chain {
   color: var(--text-dim);
+  /* Tabular figures, or the readout jitters sideways as the count changes. */
   font-variant-numeric: tabular-nums;
 }
 

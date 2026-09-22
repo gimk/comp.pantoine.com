@@ -35,6 +35,15 @@ const TIME_WRAP = 1000;
 const MAX_DELTA = 0.1;
 
 /**
+ * How often the frame rate readout is recalculated.
+ *
+ * Averaged over this window rather than taken from the last frame: a
+ * per-frame figure flickers through a range of values too fast to read, and
+ * the point of the number is to be read.
+ */
+const FPS_WINDOW_MS = 500;
+
+/**
  * The fixed panel on the right: whatever is wired into the Output node.
  *
  * Owns the GL context and the frame loop. The loop only runs continuously
@@ -53,6 +62,15 @@ export const RenderView: React.FC = () => {
   const lastFrameRef = useRef(performance.now());
   const frameRef = useRef(0);
   const [unsupported, setUnsupported] = useState(false);
+
+  /*
+   * Frame rate, measured only while the chain is animated. On a still chain
+   * the renderer draws on demand, so frames-per-second would be a count of
+   * how often a slider moved rather than anything about performance.
+   */
+  const [fps, setFps] = useState<number | null>(null);
+  const fpsWindowRef = useRef({ frames: 0, since: 0 });
+  const animatedRef = useRef(false);
 
   // null means "however wide the ratio and the default want it". Only the
   // width is ever stored: the stage derives its height from the ratio, so
@@ -131,6 +149,17 @@ export const RenderView: React.FC = () => {
     lastFrameRef.current = now;
     frameRef.current += 1;
 
+    if (animatedRef.current) {
+      const window = fpsWindowRef.current;
+      window.frames += 1;
+      const elapsed = now - window.since;
+      if (elapsed >= FPS_WINDOW_MS) {
+        setFps((window.frames * 1000) / elapsed);
+        window.frames = 0;
+        window.since = now;
+      }
+    }
+
     pipeline.render({
       nodeId: current.sourceNodeId,
       image,
@@ -186,7 +215,15 @@ export const RenderView: React.FC = () => {
   }, [draw, signature]);
 
   useEffect(() => {
-    if (!animated) return;
+    animatedRef.current = animated;
+    if (!animated) {
+      // Clear it rather than leaving the last figure frozen on screen,
+      // which would read as a live measurement of a stopped renderer.
+      setFps(null);
+      return;
+    }
+
+    fpsWindowRef.current = { frames: 0, since: performance.now() };
     let frame = 0;
     const tick = () => {
       drawRef.current();
@@ -253,6 +290,7 @@ export const RenderView: React.FC = () => {
       <footer className="render-foot">
         <span className={'render-dot' + (chain ? ' is-live' : '')} />
         <span>{chain ? (animated ? 'Playing' : 'Live') : 'Idle'}</span>
+        {animated && fps !== null && <span className="render-fps">{Math.round(fps)} fps</span>}
         {chain && <span className="render-chain">{chain.passes.length} effect{chain.passes.length === 1 ? '' : 's'}</span>}
       </footer>
     </aside>

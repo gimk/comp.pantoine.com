@@ -9,9 +9,20 @@ import type { EffectDef } from '../effects';
  * ghosts rather than a single duplicate, which is what the real artefact
  * looks like.
  *
- * Written as a crossfade rather than an addition. Addition with feedback is
- * a geometric series, and at any useful strength it clips to white within a
- * second or two.
+ * Persistence is a time -- how long until a ghost has faded to a tenth --
+ * so the slider is linear in how far the stack reaches. Expressed as a
+ * per-frame multiplier instead, every useful value sits in the last few
+ * hundredths of the travel.
+ *
+ * Keeping the brighter of the two rather than crossfading leaves the live
+ * picture crisp with the ghosts trailing off it, which is what multipath
+ * looks like; a crossfade would instead fade the picture itself out behind
+ * its own history.
+ *
+ * There is deliberately no separate strength: the ghost is fed back through
+ * this same node, so anything scaling it compounds frame after frame and
+ * becomes another decay control. Two knobs that both set the decay rate is
+ * one knob and a lie.
  */
 export const echo: EffectDef = {
   id: 'echo',
@@ -21,13 +32,12 @@ export const echo: EffectDef = {
   feedback: true,
   params: [
     { kind: 'vec2', key: 'offset', label: 'Offset', min: -64, max: 64, step: 0.5, default: [8, 0] },
-    { kind: 'float', key: 'decay', label: 'Decay', min: 0, max: 0.99, step: 0.005, default: 0.8 },
-    { kind: 'float', key: 'strength', label: 'Strength', min: 0, max: 1, step: 0.01, default: 0.5 },
+    { kind: 'float', key: 'persistence', label: 'Persistence (s)', min: 0.05, max: 4, step: 0.05, default: 0.5 },
   ],
   fragment: `  vec4 src = texture(u_src, v_uv);
   vec2 shift = u_offset / max(u_resolution, vec2(1.0));
   vec3 ghost = texture(u_prev, v_uv - shift).rgb;
 
-  float k = pow(clamp(u_decay, 0.0, 0.9999), u_delta * 60.0);
-  fragColor = vec4(mix(src.rgb, ghost, u_strength * k), src.a);`,
+  float k = pow(0.1, u_delta / max(u_persistence, 0.001));
+  fragColor = vec4(max(src.rgb, ghost * k), src.a);`,
 };

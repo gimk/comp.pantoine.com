@@ -4,12 +4,14 @@ import {
   BackgroundVariant,
   ReactFlow,
   ReactFlowProvider,
+  useReactFlow,
   type Connection,
   type Edge,
   type OnNodeDrag,
 } from '@xyflow/react';
 import { findEdgeUnderPoint } from './components/edgeHitTest';
 import { LinkEdge } from './components/LinkEdge';
+import { MODULE_DRAG_MIME, MODULE_DROP_OFFSET } from './components/moduleDrag';
 import type { AppNode } from './state/graph';
 import { ImageNode } from './components/ImageNode';
 import { EffectNode } from './components/EffectNode';
@@ -90,6 +92,39 @@ const Editor: React.FC = () => {
     else setInsertTarget(null);
   }, []);
 
+  const { screenToFlowPosition } = useReactFlow();
+
+  /*
+   * A module dragged in from the menu.
+   *
+   * `dragover` may only inspect the payload's types, not read it -- the
+   * browser withholds the data until the drop -- so the check that this is
+   * one of our modules and not a file or a link from another tab has to be
+   * made against `types` here, and against the value itself on drop.
+   */
+  const handleDragOver = useCallback((event: React.DragEvent) => {
+    if (!event.dataTransfer.types.includes(MODULE_DRAG_MIME)) return;
+    // Omitting this leaves the default handler in place, which refuses
+    // every drop; the canvas would simply never accept one.
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+  }, []);
+
+  const handleDrop = useCallback(
+    (event: React.DragEvent) => {
+      const effectId = event.dataTransfer.getData(MODULE_DRAG_MIME);
+      if (!effectId) return;
+      event.preventDefault();
+      // The pointer is in screen pixels; the graph has its own pan and zoom.
+      const point = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+      useGraph.getState().addEffectNode(effectId, {
+        x: point.x - MODULE_DROP_OFFSET.x,
+        y: point.y - MODULE_DROP_OFFSET.y,
+      });
+    },
+    [screenToFlowPosition],
+  );
+
   /*
    * Moving a wire. React Flow reports the drop and the outcome separately,
    * so this records whether the end actually landed on a port.
@@ -133,6 +168,8 @@ const Editor: React.FC = () => {
       onConnect={onConnect}
       onNodeDrag={handleNodeDrag}
       onNodeDragStop={handleNodeDragStop}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
       onReconnect={handleReconnect}
       onReconnectStart={handleReconnectStart}
       onReconnectEnd={handleReconnectEnd}
