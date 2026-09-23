@@ -13,17 +13,21 @@ const decimalsForStep = (step: number): number => {
  * Every control here carries React Flow's `nodrag` class. Without it, a drag
  * of a slider thumb or a colour swatch also drags the node out from under
  * the pointer.
+ *
+ * Double-clicking any slider puts it back to its default, as in most
+ * compositing and audio tools. For a point, only the axis clicked resets.
  */
 
 /** Labeled slider with its current value shown alongside. */
 export const Slider: React.FC<{
   label: string;
   value: number;
+  defaultValue: number;
   min: number;
   max: number;
   step: number;
   onChange: (value: number) => void;
-}> = ({ label, value, min, max, step, onChange }) => (
+}> = ({ label, value, defaultValue, min, max, step, onChange }) => (
   <label className="control">
     <span className="control-row">
       <span className="control-label">{label}</span>
@@ -37,6 +41,7 @@ export const Slider: React.FC<{
       step={step}
       value={value}
       onChange={(e) => onChange(parseFloat(e.target.value))}
+      onDoubleClick={() => onChange(defaultValue)}
     />
   </label>
 );
@@ -127,37 +132,44 @@ export const ColorField: React.FC<{
 export const Vec2Field: React.FC<{
   label: string;
   value: Vec2;
+  defaultValue: Vec2;
   min: number;
   max: number;
   step: number;
   onChange: (value: Vec2) => void;
-}> = ({ label, value, min, max, step, onChange }) => {
+}> = ({ label, value, defaultValue, min, max, step, onChange }) => {
   const decimals = decimalsForStep(step);
   return (
     <div className="control">
-      <span className="control-row">
-        <span className="control-label">{label}</span>
-        <span className="control-value">
-          {value[0].toFixed(decimals)}, {value[1].toFixed(decimals)}
-        </span>
-      </span>
-      {([0, 1] as const).map((axis) => (
-        <input
-          key={axis}
-          className="control-slider nodrag"
-          type="range"
-          aria-label={label + (axis === 0 ? ' X' : ' Y')}
-          min={min}
-          max={max}
-          step={step}
-          value={value[axis]}
-          onChange={(e) => {
-            const next: Vec2 = [value[0], value[1]];
-            next[axis] = parseFloat(e.target.value);
-            onChange(next);
-          }}
-        />
-      ))}
+      <span className="control-label">{label}</span>
+      {([0, 1] as const).map((axis) => {
+        const name = axis === 0 ? 'X' : 'Y';
+        return (
+          <label key={axis} className="control-axis">
+            <span className="control-axis-name">{name}</span>
+            <input
+              className="control-slider nodrag"
+              type="range"
+              aria-label={label + ' ' + name}
+              min={min}
+              max={max}
+              step={step}
+              value={value[axis]}
+              onChange={(e) => {
+                const next: Vec2 = [value[0], value[1]];
+                next[axis] = parseFloat(e.target.value);
+                onChange(next);
+              }}
+              onDoubleClick={() => {
+                const next: Vec2 = [value[0], value[1]];
+                next[axis] = defaultValue[axis];
+                onChange(next);
+              }}
+            />
+            <span className="control-value">{value[axis].toFixed(decimals)}</span>
+          </label>
+        );
+      })}
     </div>
   );
 };

@@ -1,6 +1,6 @@
 import React, { useRef, useState } from 'react';
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
-import { ImagePlus } from 'lucide-react';
+import { ImagePlus, ImageUp } from 'lucide-react';
 import type { ImageNodeData } from '../state/graph';
 import { useGraph } from '../state/store';
 
@@ -44,11 +44,9 @@ export const ImageNode: React.FC<NodeProps<Node<ImageNodeData, 'image'>>> = ({ i
         {data.src ? (
           <img className="image-thumb" src={data.src} alt={data.name} />
         ) : (
-          /* A restored node remembers its filename but not its pixels, so it
-             asks for that file back by name rather than looking like an
-             empty node the user forgot to fill in. */
           <span className="image-empty">
-            {data.name ? 'Re-import ' + data.name : 'Click or drop an image'}
+            <ImageUp size={18} />
+            <span>Click or drop an image</span>
           </span>
         )}
       </button>

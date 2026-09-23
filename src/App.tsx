@@ -1,10 +1,11 @@
-import React, { useCallback, useMemo, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   Background,
   BackgroundVariant,
   ReactFlow,
   ReactFlowProvider,
   useReactFlow,
+  useStoreApi,
   type Connection,
   type Edge,
   type OnNodeDrag,
@@ -20,8 +21,10 @@ import type { AppNode } from './state/graph';
 import { ImageNode } from './components/ImageNode';
 import { EffectNode } from './components/EffectNode';
 import { OutputNode } from './components/OutputNode';
+import { SnapGuides } from './components/SnapGuides';
 import { Toolbar } from './components/Toolbar';
-import { useGraph } from './state/store';
+import { useCanvasShortcuts } from './components/useCanvasShortcuts';
+import { setVisibleAreaSource, useGraph } from './state/store';
 import '@xyflow/react/dist/style.css';
 import './styles/glass.css';
 
@@ -85,13 +88,37 @@ const Editor: React.FC = () => {
     setInsertTarget(findEdgeUnderPoint(centerX, centerY, own));
   }, []);
 
+  const handleNodeDragStart: OnNodeDrag<AppNode> = useCallback((event, _node, dragged) => {
+    const store = useGraph.getState();
+    store.beginDrag(dragged);
+    if (event.altKey) store.beginAltDuplicate(dragged.map((node) => node.id));
+  }, []);
+
   const handleNodeDragStop: OnNodeDrag<AppNode> = useCallback((_event, node) => {
+    const store = useGraph.getState();
+    store.endDrag();
+    // After an Alt-drag the node that landed is the copy, under a new id.
+    const landed = store.endAltDuplicate()(node.id);
     const { insertTargetEdgeId: target, insertNodeOnEdge, setInsertTarget } = useGraph.getState();
-    if (target) insertNodeOnEdge(node.id, target);
+    if (target) insertNodeOnEdge(landed, target);
     else setInsertTarget(null);
   }, []);
 
   const { screenToFlowPosition } = useReactFlow();
+  useCanvasShortcuts(0.2);
+
+  // Snapping only considers modules on screen; this is how it finds out
+  // where the screen is, read fresh each time rather than kept in sync.
+  const flowStore = useStoreApi();
+  useEffect(() => {
+    setVisibleAreaSource(() => {
+      const { width, height, transform } = flowStore.getState();
+      const [x, y, zoom] = transform;
+      if (!width || !height) return null;
+      return { left: -x / zoom, top: -y / zoom, right: (width - x) / zoom, bottom: (height - y) / zoom };
+    });
+    return () => setVisibleAreaSource(() => null);
+  }, [flowStore]);
 
   /*
    * An item dragged in from the palette.
@@ -169,6 +196,7 @@ const Editor: React.FC = () => {
       onNodesChange={onNodesChange}
       onEdgesChange={onEdgesChange}
       onConnect={onConnect}
+      onNodeDragStart={handleNodeDragStart}
       onNodeDrag={handleNodeDrag}
       onNodeDragStop={handleNodeDragStop}
       onDragOver={handleDragOver}
@@ -181,11 +209,15 @@ const Editor: React.FC = () => {
       reconnectRadius={26}
       // Delete is what most people reach for; Backspace is the library's own.
       deleteKeyCode={['Backspace', 'Delete']}
+      // Shift-click adds to the selection, as it does in most editors; the
+      // library's default is Ctrl (Cmd on a Mac) alone, which still works.
+      multiSelectionKeyCode={['Shift', 'Meta', 'Control']}
       minZoom={0.3}
       maxZoom={2}
       fitView
       fitViewOptions={fitViewOptions}
     >
+      <SnapGuides />
       <Background variant={BackgroundVariant.Dots} gap={26} size={1.4} color="rgba(23,23,26,0.16)" />
     </ReactFlow>
   );

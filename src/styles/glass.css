@@ -70,6 +70,17 @@ body {
   font-size: 13px;
   -webkit-font-smoothing: antialiased;
   overflow: hidden;
+  /* A tool, not a page: a stray drag across a node should never paint its
+     labels blue. Text fields opt back in below. */
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+input:not([type='range']):not([type='checkbox']):not([type='color']),
+textarea,
+[contenteditable='true'] {
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 .app {
@@ -467,6 +478,36 @@ body {
 
 /* Image node */
 
+/* Alignment line shown while a Shift-drag is snapped. Faint and behind the
+   modules: it confirms the alignment without drawing over the cards. The
+   negative z-index works because the viewport's transform makes it its own
+   stacking context, so "behind" means behind the nodes, not behind the
+   canvas. `--dash` is set from the zoom so dashes stay one screen size. */
+.snap-guide {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: -1;
+  opacity: 0.3;
+  pointer-events: none;
+}
+
+.snap-guide-horizontal {
+  background: repeating-linear-gradient(
+    to right,
+    var(--accent) 0 var(--dash),
+    transparent var(--dash) calc(var(--dash) * 2)
+  );
+}
+
+.snap-guide-vertical {
+  background: repeating-linear-gradient(
+    to bottom,
+    var(--accent) 0 var(--dash),
+    transparent var(--dash) calc(var(--dash) * 2)
+  );
+}
+
 .image-drop {
   align-items: center;
   justify-content: center;
@@ -481,7 +522,12 @@ body {
 }
 
 .image-empty {
-  display: block;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  box-sizing: border-box;
   padding: 16px 8px;
   border: 1px dashed rgba(23, 23, 26, 0.22);
   border-radius: var(--radius-sm);
@@ -629,6 +675,25 @@ body {
   background: rgba(23, 23, 26, 0.14);
   outline: none;
   cursor: pointer;
+}
+
+/* One axis of a point: its letter, its slider, its value, on one line. The
+   value column is fixed so both sliders stay the same length. */
+.control-axis {
+  display: grid;
+  grid-template-columns: 10px 1fr 36px;
+  align-items: center;
+  gap: 8px;
+}
+
+.control-axis-name {
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.control-axis .control-value {
+  text-align: right;
 }
 
 .control-slider::-webkit-slider-thumb {

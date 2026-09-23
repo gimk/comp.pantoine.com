@@ -50,6 +50,18 @@ const seedFor = (id: string): number => {
   return (hash >>> 0) / 4294967296;
 };
 
+/**
+ * Nodes standing in for another for the length of an Alt-drag.
+ *
+ * The copy left behind is minted with a fresh id, but until the drop swaps
+ * the two back it is the original as far as the picture is concerned -- so
+ * it renders with the original's seed and feedback history, and the grain
+ * does not jump for the duration of the drag.
+ */
+export const identityAliases = new Map<string, string>();
+
+const identityOf = (id: string): string => identityAliases.get(id) ?? id;
+
 export type ResolvedChain = {
   sourceNodeId: string;
   passes: Pass[];
@@ -102,7 +114,8 @@ export const resolveChain = (
     if (node.type === 'effect') {
       const def = getEffect(node.data.effectId);
       if (!def) return null;
-      reversed.push({ nodeId: node.id, seed: seedFor(node.id), def, params: node.data.params });
+      const identity = identityOf(node.id);
+      reversed.push({ nodeId: identity, seed: seedFor(identity), def, params: node.data.params });
       cursor = incoming.get(node.id);
       continue;
     }

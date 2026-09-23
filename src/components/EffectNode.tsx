@@ -24,6 +24,7 @@ const Control: React.FC<{
         <Slider
           label={spec.label}
           value={(value as number) ?? spec.default}
+          defaultValue={spec.default}
           min={spec.min}
           max={spec.max}
           step={spec.step}
@@ -35,6 +36,7 @@ const Control: React.FC<{
         <Slider
           label={spec.label}
           value={(value as number) ?? spec.default}
+          defaultValue={spec.default}
           min={spec.min}
           max={spec.max}
           step={1}
@@ -71,6 +73,7 @@ const Control: React.FC<{
         <Vec2Field
           label={spec.label}
           value={(value as Vec2) ?? spec.default}
+          defaultValue={spec.default}
           min={spec.min}
           max={spec.max}
           step={spec.step}
