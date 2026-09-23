@@ -39,11 +39,54 @@ export type OutputNodeData = {
   width: number;
 };
 
+export type ExportFormat = 'png' | 'jpg' | 'gif' | 'mp4' | 'webm';
+
+export type RenderNodeData = {
+  format: ExportFormat;
+  quality: number;
+  scale: number;
+  time: number;
+  duration: number;
+  fps: number;
+  loopPreview?: boolean;
+  renderedBlob?: Blob | null;
+  renderedUrl?: string | null;
+  renderedSize?: number | null;
+  renderedDimensions?: { width: number; height: number } | null;
+  rendering?: boolean;
+  progress?: { currentFrame: number; totalFrames: number; percent: number } | null;
+  error?: string | null;
+};
+
+export const DEFAULT_RENDER_DATA: RenderNodeData = {
+  format: 'mp4',
+  quality: 0.9,
+  scale: 1,
+  time: 0,
+  duration: 3,
+  fps: 30,
+  loopPreview: true,
+};
+
+export type FormatterNodeData = RenderNodeData;
+export const DEFAULT_FORMATTER_DATA: FormatterNodeData = DEFAULT_RENDER_DATA;
+
+export type ExportNodeData = {
+  filenamePrefix: string;
+};
+
+export const DEFAULT_EXPORT_DATA: ExportNodeData = {
+  filenamePrefix: '',
+};
+
 export type AppNode =
   | Node<ImageNodeData, 'image'>
   | Node<EffectNodeData, 'effect'>
   | Node<ModulatorNodeData, 'modulator'>
-  | Node<OutputNodeData, 'renderOutput'>;
+  | Node<OutputNodeData, 'renderOutput'>
+  | Node<RenderNodeData, 'render'>
+  | Node<FormatterNodeData, 'formatter'>
+  | Node<ExportNodeData, 'export'>;
 
 /** Starting width of the output preview, in graph units. */
 export const DEFAULT_PREVIEW_WIDTH = 360;
@@ -56,9 +99,10 @@ export const DEFAULT_PREVIEW_WIDTH = 360;
  * Keeping it that way is what lets documents saved before there was more
  * than one input load unchanged. Everything added since is named: an
  * effect's extra inputs by their key, a param's modulation port by
- * `param:<key>`, a modulator's output as `mod`.
+ * `param:<key>`, a modulator's output as `mod`, and a rendered media file as `render`.
  */
 export const MOD_OUTPUT = 'mod';
+export const RENDER_PORT = 'render';
 const PARAM_PORT_PREFIX = 'param:';
 
 export const paramPort = (key: string): string => PARAM_PORT_PREFIX + key;
@@ -66,9 +110,58 @@ export const paramPort = (key: string): string => PARAM_PORT_PREFIX + key;
 export const isParamPort = (handle: string | null | undefined): handle is string =>
   !!handle && handle.startsWith(PARAM_PORT_PREFIX);
 
+export const isRenderPort = (handle: string | null | undefined): boolean =>
+  handle === RENDER_PORT;
+
 /** A wire carrying a modulator's signal rather than a picture. */
 export const isModulationEdge = (edge: Pick<Edge, 'targetHandle'>): boolean =>
   isParamPort(edge.targetHandle);
+
+/** A wire carrying a baked/rendered file asset. */
+export const isRenderEdge = (edge: Pick<Edge, 'sourceHandle' | 'targetHandle'>): boolean =>
+  isRenderPort(edge.sourceHandle) || isRenderPort(edge.targetHandle);
+
+/**
+ * Walk backwards along purple edges through any intermediate pass-through viewers
+ * to locate the upstream Render node producing the asset.
+ */
+export const findUpstreamRenderNode = (
+  nodes: AppNode[],
+  edges: Edge[],
+  startNodeId: string,
+): Node<RenderNodeData, 'render'> | null => {
+  let currentId: string | undefined = startNodeId;
+  const visited = new Set<string>();
+
+  while (currentId && !visited.has(currentId)) {
+    visited.add(currentId);
+    const inEdges = edges.filter((e) => e.target === currentId);
+    if (inEdges.length === 0) return null;
+
+    const inEdge = inEdges.find((e) => {
+      if (isRenderPort(e.targetHandle) || isRenderPort(e.sourceHandle)) return true;
+      const src = nodes.find((n) => n.id === e.source);
+      if (src?.type === 'render' || src?.type === 'formatter') return true;
+      if (src?.type === 'renderOutput') {
+        return !!findUpstreamRenderNode(nodes, edges, src.id);
+      }
+      return false;
+    });
+
+    if (!inEdge) return null;
+    const srcNode = nodes.find((n) => n.id === inEdge.source);
+    if (!srcNode) return null;
+    if (srcNode.type === 'render' || srcNode.type === 'formatter') {
+      return srcNode as Node<RenderNodeData, 'render'>;
+    }
+    if (srcNode.type === 'renderOutput') {
+      currentId = srcNode.id;
+      continue;
+    }
+    return null;
+  }
+  return null;
+};
 
 /** Whether two ends name the same input port. Null and undefined both mean the main one. */
 export const samePort = (a: string | null | undefined, b: string | null | undefined): boolean =>
@@ -80,7 +173,15 @@ export const samePort = (a: string | null | undefined, b: string | null | undefi
  * pointing at nothing.
  */
 export const hasTargetPort = (node: AppNode, handle: string | null | undefined): boolean => {
-  if (node.type === 'renderOutput') return !handle;
+  if (node.type === 'renderOutput') {
+    return !handle || isRenderPort(handle);
+  }
+  if (node.type === 'export') {
+    return isRenderPort(handle);
+  }
+  if (node.type === 'render' || node.type === 'formatter') {
+    return !handle;
+  }
   if (node.type === 'modulator') {
     const def = getModulator(node.data.modulatorId);
     return !!def && isParamPort(handle) && modulatorPortsOf(def).includes(handle.slice(PARAM_PORT_PREFIX.length));
@@ -180,6 +281,8 @@ export type ResolvedChain = {
   plan: RenderPlan;
   /** Every effect in the plan, in run order. */
   passes: Pass[];
+  /** The recipe from the nearest upstream formatter node, if any. */
+  formatter?: FormatterNodeData;
 };
 
 /** Thrown to abandon a walk that has come back round to where it started. */
@@ -213,7 +316,18 @@ export const resolveChain = (
   // Resolved for one named viewer rather than "the" viewer: there can be
   // several, each watching a different branch of the graph.
   const output = byId.get(outputNodeId);
-  if (!output || output.type !== 'renderOutput') return null;
+  if (
+    !output ||
+    (output.type !== 'renderOutput' &&
+      output.type !== 'export' &&
+      output.type !== 'render' &&
+      output.type !== 'formatter')
+  ) {
+    return null;
+  }
+
+  let activeFormatter: RenderNodeData | undefined =
+    output.type === 'render' || output.type === 'formatter' ? output.data : undefined;
 
   const steps: Step[] = [];
   const done = new Map<string, number | null>();
@@ -243,8 +357,16 @@ export const resolveChain = (
 
     if (node?.type === 'image') {
       if (getImage(node.id)) index = steps.push({ kind: 'image', nodeId: node.id }) - 1;
-    } else if (node?.type === 'renderOutput') {
-      // A viewer part-way along a chain is a tap, not a stage: it shows what
+    } else if (
+      node?.type === 'renderOutput' ||
+      node?.type === 'export' ||
+      node?.type === 'render' ||
+      node?.type === 'formatter'
+    ) {
+      if ((node?.type === 'render' || node?.type === 'formatter') && !activeFormatter) {
+        activeFormatter = node.data;
+      }
+      // A viewer, exporter, or render part-way along a chain is a tap, not a stage: it shows what
       // has reached it and passes the picture on untouched. Several strung
       // together is how you watch the same edit at different points.
       index = visit(sourceOf(node.id, null));
@@ -284,7 +406,12 @@ export const resolveChain = (
   while (head.kind === 'effect') head = steps[head.input];
 
   const passes = steps.flatMap((step) => (step.kind === 'effect' ? [step.pass] : []));
-  return { sourceNodeId: head.nodeId, plan: { steps, output: outputIndex }, passes };
+  return {
+    sourceNodeId: head.nodeId,
+    plan: { steps, output: outputIndex },
+    passes,
+    formatter: activeFormatter,
+  };
 };
 
 /** Whether anything in the chain needs a continuous frame loop. */

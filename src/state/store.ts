@@ -15,11 +15,16 @@ import { defaultParams, type ParamValue } from '../engine/effects';
 import { defaultModulatorParams, getModulator } from '../engine/modulators';
 import { decodeImage, dropImage, putImage, shareImage, swapImages } from '../engine/imageStore';
 import {
+  DEFAULT_EXPORT_DATA,
   DEFAULT_PREVIEW_WIDTH,
+  DEFAULT_RENDER_DATA,
   identityAliases,
   isModulationEdge,
   samePort,
   type AppNode,
+  type ExportNodeData,
+  type FormatterNodeData,
+  type RenderNodeData,
 } from './graph';
 import { highestIdSuffix, loadGraph, saveGraph } from './document';
 import { snapDrag, type Box, type SnapGuide } from './snapping';
@@ -48,6 +53,8 @@ const nextId = (prefix: string): string => {
 const idPrefixFor = (node: AppNode): string => {
   if (node.type === 'effect') return node.data.effectId;
   if (node.type === 'modulator') return node.data.modulatorId;
+  if (node.type === 'render' || node.type === 'formatter') return 'render';
+  if (node.type === 'export') return 'export';
   return node.type === 'image' ? 'image' : 'output';
 };
 
@@ -237,8 +244,14 @@ type GraphStore = {
   addModulatorNode: (modulatorId: string, position?: XYPosition) => void;
   addImageNode: (position?: XYPosition) => void;
   addOutputNode: (position?: XYPosition) => void;
+  addRenderNode: (position?: XYPosition) => void;
+  addFormatterNode: (position?: XYPosition) => void;
+  addExportNode: (position?: XYPosition) => void;
   setParam: (nodeId: string, key: string, value: ParamValue) => void;
   setPreviewWidth: (nodeId: string, width: number) => void;
+  setRenderData: (nodeId: string, patch: Partial<RenderNodeData>) => void;
+  setFormatterData: (nodeId: string, patch: Partial<FormatterNodeData>) => void;
+  setExportData: (nodeId: string, patch: Partial<ExportNodeData>) => void;
   loadImage: (nodeId: string, file: File) => Promise<void>;
   beginDrag: (dragged: AppNode[]) => void;
   endDrag: () => void;
@@ -466,6 +479,30 @@ export const useGraph = create<GraphStore>((set, get) => ({
     set({ nodes: [...get().nodes, node] });
   },
 
+  addRenderNode: (position) => {
+    const node: AppNode = {
+      id: nextId('render'),
+      type: 'render',
+      position: position ?? { x: 760, y: 100 + (get().nodes.length % 6) * 40 },
+      data: { ...DEFAULT_RENDER_DATA },
+    };
+    set({ nodes: [...get().nodes, node] });
+  },
+
+  addFormatterNode: (position) => {
+    get().addRenderNode(position);
+  },
+
+  addExportNode: (position) => {
+    const node: AppNode = {
+      id: nextId('export'),
+      type: 'export',
+      position: position ?? { x: 760, y: 100 + (get().nodes.length % 6) * 40 },
+      data: { ...DEFAULT_EXPORT_DATA },
+    };
+    set({ nodes: [...get().nodes, node] });
+  },
+
   setParam: (nodeId, key, value) => {
     set({
       nodes: get().nodes.map((node) => {
@@ -480,6 +517,28 @@ export const useGraph = create<GraphStore>((set, get) => ({
       nodes: get().nodes.map((node) => {
         if (node.id !== nodeId || node.type !== 'renderOutput') return node;
         return { ...node, data: { ...node.data, width } };
+      }),
+    });
+  },
+
+  setRenderData: (nodeId, patch) => {
+    set({
+      nodes: get().nodes.map((node) => {
+        if (node.id !== nodeId || (node.type !== 'render' && node.type !== 'formatter')) return node;
+        return { ...node, data: { ...node.data, ...patch } };
+      }),
+    });
+  },
+
+  setFormatterData: (nodeId, patch) => {
+    get().setRenderData(nodeId, patch);
+  },
+
+  setExportData: (nodeId, patch) => {
+    set({
+      nodes: get().nodes.map((node) => {
+        if (node.id !== nodeId || node.type !== 'export') return node;
+        return { ...node, data: { ...node.data, ...patch } };
       }),
     });
   },

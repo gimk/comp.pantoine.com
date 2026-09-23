@@ -16,7 +16,13 @@ import type { Edge, XYPosition } from '@xyflow/react';
 import { paramsOf, type ParamSpec, type ParamValue } from '../engine/effects';
 import { getEffect } from '../engine/registry';
 import { getModulator, modulatorParamsOf } from '../engine/modulators';
-import { DEFAULT_PREVIEW_WIDTH, hasTargetPort, type AppNode } from './graph';
+import {
+  DEFAULT_PREVIEW_WIDTH,
+  DEFAULT_RENDER_DATA,
+  hasTargetPort,
+  type AppNode,
+  type ExportFormat,
+} from './graph';
 
 /**
  * Bumped when the shape changes in a way older documents cannot satisfy.
@@ -47,6 +53,24 @@ type SerializedNode =
       position: XYPosition;
       modulatorId: string;
       params: Record<string, ParamValue>;
+    }
+  | {
+      id: string;
+      type: 'render' | 'formatter';
+      position: XYPosition;
+      format: ExportFormat;
+      quality: number;
+      scale: number;
+      time: number;
+      duration: number;
+      fps: number;
+      loopPreview?: boolean;
+    }
+  | {
+      id: string;
+      type: 'export';
+      position: XYPosition;
+      filenamePrefix?: string;
     }
   | { id: string; type: 'renderOutput'; position: XYPosition; width: number };
 
@@ -95,6 +119,28 @@ export const serializeGraph = (nodes: AppNode[], edges: Edge[]): SerializedGraph
         position,
         modulatorId: node.data.modulatorId,
         params: node.data.params,
+      };
+    }
+    if (node.type === 'render' || node.type === 'formatter') {
+      return {
+        id: node.id,
+        type: 'render',
+        position,
+        format: node.data.format,
+        quality: node.data.quality,
+        scale: node.data.scale,
+        time: node.data.time,
+        duration: node.data.duration,
+        fps: node.data.fps,
+        loopPreview: node.data.loopPreview,
+      };
+    }
+    if (node.type === 'export') {
+      return {
+        id: node.id,
+        type: 'export',
+        position,
+        filenamePrefix: node.data.filenamePrefix,
       };
     }
     return { id: node.id, type: 'renderOutput', position, width: node.data.width };
@@ -226,6 +272,44 @@ export const deserializeGraph = (raw: unknown): { nodes: AppNode[]; edges: Edge[
         data: {
           modulatorId: entry.modulatorId,
           params: def ? reconcileParams(modulatorParamsOf(def), entry.params) : {},
+        },
+      });
+      continue;
+    }
+
+    if (entry.type === 'render' || entry.type === 'formatter') {
+      const validFormats: ExportFormat[] = ['jpg', 'png', 'gif', 'mp4', 'webm'];
+      const format =
+        typeof entry.format === 'string' && validFormats.includes(entry.format as ExportFormat)
+          ? (entry.format as ExportFormat)
+          : DEFAULT_RENDER_DATA.format;
+      nodes.push({
+        id: entry.id,
+        type: 'render',
+        position,
+        data: {
+          format,
+          quality: isNumber(entry.quality) ? entry.quality : DEFAULT_RENDER_DATA.quality,
+          scale: isNumber(entry.scale) ? entry.scale : DEFAULT_RENDER_DATA.scale,
+          time: isNumber(entry.time) ? entry.time : DEFAULT_RENDER_DATA.time,
+          duration: isNumber(entry.duration) ? entry.duration : DEFAULT_RENDER_DATA.duration,
+          fps: isNumber(entry.fps) ? entry.fps : DEFAULT_RENDER_DATA.fps,
+          loopPreview:
+            typeof entry.loopPreview === 'boolean'
+              ? entry.loopPreview
+              : DEFAULT_RENDER_DATA.loopPreview,
+        },
+      });
+      continue;
+    }
+
+    if (entry.type === 'export') {
+      nodes.push({
+        id: entry.id,
+        type: 'export',
+        position,
+        data: {
+          filenamePrefix: typeof entry.filenamePrefix === 'string' ? entry.filenamePrefix : '',
         },
       });
       continue;

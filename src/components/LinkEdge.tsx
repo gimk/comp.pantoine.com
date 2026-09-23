@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { BaseEdge, EdgeLabelRenderer, getBezierPath, type EdgeProps } from '@xyflow/react';
 import { X } from 'lucide-react';
 import { useGraph } from '../state/store';
-import { isParamPort } from '../state/graph';
+import { findUpstreamRenderNode, isParamPort, isRenderPort } from '../state/graph';
 
 /**
  * A wire, with the two things you need to do to one close at hand.
@@ -18,6 +18,7 @@ import { isParamPort } from '../state/graph';
  */
 export const LinkEdge: React.FC<EdgeProps> = ({
   id,
+  source,
   sourceX,
   sourceY,
   sourcePosition,
@@ -27,8 +28,11 @@ export const LinkEdge: React.FC<EdgeProps> = ({
   selected,
   markerEnd,
   style,
+  sourceHandleId,
   targetHandleId,
 }) => {
+  const nodes = useGraph((state) => state.nodes);
+  const edges = useGraph((state) => state.edges);
   const removeEdge = useGraph((state) => state.removeEdge);
   const [hovered, setHovered] = useState(false);
 
@@ -41,15 +45,31 @@ export const LinkEdge: React.FC<EdgeProps> = ({
     targetPosition,
   });
 
+  const isRender =
+    isRenderPort(targetHandleId) ||
+    isRenderPort(sourceHandleId) ||
+    (() => {
+      const srcNode = nodes.find((n) => n.id === source);
+      if (srcNode?.type === 'render' || srcNode?.type === 'formatter') return true;
+      if (srcNode?.type === 'renderOutput') return !!findUpstreamRenderNode(nodes, edges, srcNode.id);
+      return false;
+    })();
+
   return (
     <>
-      {/* A modulation wire is dashed: it carries a signal, not a picture. */}
+      {/* Purple for rendered media asset, dashed for modulation signal, solid ink for picture */}
       <BaseEdge
         id={id}
         path={path}
         markerEnd={markerEnd}
         style={style}
-        className={isParamPort(targetHandleId) ? 'link-edge-mod' : undefined}
+        className={
+          isRender
+            ? 'link-edge-render'
+            : isParamPort(targetHandleId)
+              ? 'link-edge-mod'
+              : undefined
+        }
       />
 
       <path

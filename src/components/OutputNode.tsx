@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { Handle, Position, useReactFlow, type Node, type NodeProps } from '@xyflow/react';
+import { Handle, Position, useReactFlow, useUpdateNodeInternals, type Node, type NodeProps } from '@xyflow/react';
 import { useGraph } from '../state/store';
 import {
   DEFAULT_PREVIEW_WIDTH,
   chainIsAnimated,
+  findUpstreamRenderNode,
   resolveChain,
   type OutputNodeData,
 } from '../state/graph';
@@ -95,6 +96,12 @@ const MAX_PREVIEW_WIDTH = 880;
  */
 const MAX_PREVIEW_HEIGHT = 520;
 
+const formatBytes = (bytes: number): string => {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+};
+
 /**
  * The sink, and the picture itself.
  *
@@ -120,6 +127,7 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
   const edges = useGraph((state) => state.edges);
   const setPreviewWidth = useGraph((state) => state.setPreviewWidth);
   const { getZoom } = useReactFlow();
+  const updateNodeInternals = useUpdateNodeInternals();
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const pipelineRef = useRef<Pipeline | null>(null);
@@ -131,22 +139,33 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
   const [fps, setFps] = useState<number | null>(null);
   const fpsWindowRef = useRef({ frames: 0, since: 0 });
   const animatedRef = useRef(false);
+  const lastLoopIndexRef = useRef<number | null>(null);
+
+  // Check if connected to purple input (Render asset), including through any upstream pass-through viewers
+  const upstreamRenderNode = findUpstreamRenderNode(nodes, edges, id);
+  const isRenderMode = !!upstreamRenderNode;
+  const renderAssetData = upstreamRenderNode?.data;
+  const hasRenderedAsset = !!renderAssetData?.renderedBlob && !!renderAssetData?.renderedUrl;
 
   const chain = resolveChain(nodes, edges, id);
   const animated = chainIsAnimated(chain);
   const playing = useSyncExternalStore(subscribeClock, isPlaying);
   const resets = useSyncExternalStore(subscribeClock, resetCount);
+  const isStillFormatter =
+    chain?.formatter?.format === 'jpg' || chain?.formatter?.format === 'png';
   // The frame loop runs only for a chain that moves, and only while the
-  // transport is playing.
-  const looping = animated && playing;
+  // transport is playing (and not in rendered asset mode).
+  const looping = !isRenderMode && !isStillFormatter && animated && playing;
 
   // Held in a ref so the draw callback can stay stable across node drags,
   // which change the nodes array without changing what gets rendered.
   const chainRef = useRef(chain);
   chainRef.current = chain;
 
-  // Redraw only when something the picture depends on actually moved.
-  const signature = chain ? signatureOf(chain.plan) : 'empty';
+  // Redraw when something the picture depends on changes, including upstream formatter settings.
+  const signature = chain
+    ? signatureOf(chain.plan) + (chain.formatter ? JSON.stringify(chain.formatter) : '')
+    : 'empty';
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -178,16 +197,46 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
       }
     }
 
+    const rawTime = clockSeconds(now);
+    let time = rawTime;
+
+    if (current.formatter) {
+      if (current.formatter.format === 'jpg' || current.formatter.format === 'png') {
+        time = current.formatter.time;
+      } else if (current.formatter.loopPreview) {
+        const dur = Math.max(0.1, current.formatter.duration);
+        const start = Math.max(0, current.formatter.time);
+        const fps = Math.max(1, current.formatter.fps);
+        const elapsed = Math.max(0, rawTime - start);
+        const loopIndex = Math.floor(elapsed / dur);
+        if (lastLoopIndexRef.current !== null && loopIndex !== lastLoopIndexRef.current) {
+          pipeline.resetFeedback();
+        }
+        lastLoopIndexRef.current = loopIndex;
+
+        // Step time in increments of 1/fps so playback cadence matches the target FPS
+        const progressInLoop = elapsed % dur;
+        const steppedProgress = Math.floor(progressInLoop * fps) / fps;
+        time = start + steppedProgress;
+      }
+    }
+
+    const primaryImage = getImage(current.sourceNodeId);
+    const maxDim = primaryImage ? Math.max(primaryImage.width, primaryImage.height) : 2048;
+    const targetWorkingSize = current.formatter
+      ? Math.max(16, Math.round(maxDim * current.formatter.scale))
+      : MAX_WORKING_SIZE;
+
     pipeline.render({
       plan: current.plan,
       images,
       primaryNodeId: current.sourceNodeId,
-      time: clockSeconds(now),
+      time,
       delta,
       frame: frameRef.current,
       canvasWidth: canvas.width,
       canvasHeight: canvas.height,
-      maxWorkingSize: MAX_WORKING_SIZE,
+      maxWorkingSize: targetWorkingSize,
     });
   }, []);
 
@@ -252,11 +301,12 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
       if (canvas.width === width && canvas.height === height) return;
       canvas.width = width;
       canvas.height = height;
+      updateNodeInternals(id);
       drawRef.current();
     });
     observer.observe(canvas);
     return () => observer.disconnect();
-  }, []);
+  }, [id, updateNodeInternals]);
 
   useEffect(() => {
     draw();
@@ -266,6 +316,7 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
   // the first time, rather than carrying on over the reset.
   useEffect(() => {
     if (resets === 0) return;
+    lastLoopIndexRef.current = null;
     pipelineRef.current?.resetFeedback();
     frameRef.current = 0;
     lastFrameRef.current = performance.now();
@@ -275,6 +326,7 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
   // Paused or resumed: one draw either way, so the frame shown is the one
   // at the paused moment rather than whichever the loop last reached.
   useEffect(() => {
+    lastLoopIndexRef.current = null;
     lastFrameRef.current = performance.now();
     drawRef.current();
   }, [playing]);
@@ -299,7 +351,32 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
   }, [looping]);
 
   const image = chain ? getImage(chain.sourceNodeId) : undefined;
-  const ratio = image ? image.width / image.height : DEFAULT_RATIO;
+  const renderedRatio = renderAssetData?.renderedDimensions
+    ? renderAssetData.renderedDimensions.width / renderAssetData.renderedDimensions.height
+    : null;
+  const ratio = isRenderMode
+    ? renderedRatio ?? (image ? image.width / image.height : DEFAULT_RATIO)
+    : image
+      ? image.width / image.height
+      : DEFAULT_RATIO;
+
+  const displayWidth = isRenderMode
+    ? renderAssetData?.renderedDimensions?.width ??
+      (image ? Math.round(image.width * (renderAssetData?.scale ?? 1)) : 0)
+    : image
+      ? chain?.formatter
+        ? Math.max(1, Math.round(image.width * chain.formatter.scale))
+        : image.width
+      : 0;
+
+  const displayHeight = isRenderMode
+    ? renderAssetData?.renderedDimensions?.height ??
+      (image ? Math.round(image.height * (renderAssetData?.scale ?? 1)) : 0)
+    : image
+      ? chain?.formatter
+        ? Math.max(1, Math.round(image.height * chain.formatter.scale))
+        : image.height
+      : 0;
 
   // Width is the only stored dimension; the height follows from the ratio,
   // and the ratio is also what caps how wide the card may get.
@@ -348,27 +425,121 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
     [id, setPreviewWidth, width],
   );
 
+  // Re-measure handle positions in React Flow when card dimensions, ratio, or mode change
+  useEffect(() => {
+    updateNodeInternals(id);
+  }, [id, width, ratio, isRenderMode, displayWidth, displayHeight, updateNodeInternals]);
+
+  useEffect(() => {
+    const handle = requestAnimationFrame(() => {
+      updateNodeInternals(id);
+    });
+    return () => cancelAnimationFrame(handle);
+  }, [id, updateNodeInternals]);
+
   const stageStyle = { '--stage-ratio': ratio } as React.CSSProperties;
 
   return (
     <div className="node node-output" style={{ width }}>
       <div className="render-head">
         <span className="render-title">Viewer</span>
-        <span className="render-info">{image ? image.width + ' × ' + image.height : '—'}</span>
+        <span className="render-info">
+          {isRenderMode
+            ? renderAssetData?.renderedDimensions
+              ? `${renderAssetData.renderedDimensions.width} × ${renderAssetData.renderedDimensions.height}${renderAssetData.renderedSize ? ` · ${formatBytes(renderAssetData.renderedSize)}` : ''}`
+              : renderAssetData
+                ? renderAssetData.format.toUpperCase()
+                : '—'
+            : image
+              ? `${displayWidth} × ${displayHeight}`
+              : '—'}
+        </span>
       </div>
 
       <div className="render-stage" style={stageStyle}>
-        <canvas ref={canvasRef} className="render-canvas" />
-        {unsupported && <p className="render-empty">This browser has no WebGL2.</p>}
-        {contextLost && <p className="render-empty">GPU context lost — restoring…</p>}
-        {!unsupported && !contextLost && !chain && <p className="render-empty">Wire an image in to see it here.</p>}
+        {isRenderMode ? (
+          hasRenderedAsset ? (
+            renderAssetData.format === 'mp4' || renderAssetData.format === 'webm' ? (
+              <video
+                key={renderAssetData.renderedUrl}
+                src={renderAssetData.renderedUrl!}
+                autoPlay
+                loop
+                muted
+                playsInline
+                className="render-canvas"
+                style={{ objectFit: 'contain', width: '100%', height: '100%', pointerEvents: 'none' }}
+              />
+            ) : (
+              <img
+                key={renderAssetData.renderedUrl}
+                src={renderAssetData.renderedUrl!}
+                alt="Rendered Preview"
+                className="render-canvas"
+                style={{ objectFit: 'contain', width: '100%', height: '100%', pointerEvents: 'none' }}
+              />
+            )
+          ) : renderAssetData?.rendering ? (
+            <p className="render-empty">Rendering {renderAssetData.format.toUpperCase()} asset…</p>
+          ) : (
+            <p className="render-empty">
+              Click <strong>Render</strong> on upstream node.
+            </p>
+          )
+        ) : (
+          <>
+            <canvas ref={canvasRef} className="render-canvas" />
+            {unsupported && <p className="render-empty">This browser has no WebGL2.</p>}
+            {contextLost && <p className="render-empty">GPU context lost — restoring…</p>}
+            {!unsupported && !contextLost && !chain && (
+              <p className="render-empty">Wire an image in to see it here.</p>
+            )}
+          </>
+        )}
       </div>
 
       <div className="render-foot">
-        <span className={'render-dot' + (chain ? ' is-live' : '')} />
-        <span>{chain ? (animated ? (playing ? 'Playing' : 'Paused') : 'Live') : 'Idle'}</span>
-        {looping && fps !== null && <span className="render-fps">{Math.round(fps)} fps</span>}
-        {chain && (
+        <span
+          className={
+            'render-dot' +
+            (isRenderMode
+              ? hasRenderedAsset
+                ? ' is-live'
+                : ''
+              : chain
+                ? ' is-live'
+                : '')
+          }
+          style={isRenderMode && hasRenderedAsset ? { background: 'var(--port-render)' } : undefined}
+        />
+        <span>
+          {isRenderMode
+            ? hasRenderedAsset
+              ? `Asset (${renderAssetData?.format.toUpperCase()})`
+              : renderAssetData?.rendering
+                ? 'Rendering…'
+                : 'Awaiting Render'
+            : chain
+              ? isStillFormatter
+                ? 'Still'
+                : animated
+                  ? playing
+                    ? 'Playing'
+                    : 'Paused'
+                  : 'Live'
+              : 'Idle'}
+        </span>
+        {isRenderMode && renderAssetData?.renderedSize && (
+          <span className="render-fps" style={{ color: 'var(--port-render)', fontWeight: 600 }}>
+            {formatBytes(renderAssetData.renderedSize)}
+          </span>
+        )}
+        {!isRenderMode && looping && (
+          <span className="render-fps">
+            {fps !== null ? `${Math.round(fps)} fps` : ''}
+          </span>
+        )}
+        {chain && !isRenderMode && (
           <span className="render-chain">
             {chain.passes.length} effect{chain.passes.length === 1 ? '' : 's'}
           </span>
@@ -391,10 +562,23 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
         title="Drag to resize · double-click to reset"
       />
 
-      <Handle type="target" position={Position.Left} className="port port-in" />
-      {/* A viewer passes its input straight through, so it can sit part-way
-          along a chain with more work after it. */}
-      <Handle type="source" position={Position.Right} className="port port-out" />
+      {/* Dual input: split circle (blue live picture / purple rendered asset) */}
+      <Handle
+        type="target"
+        position={Position.Left}
+        className="port port-in port-title port-dual"
+        style={{ top: 22 }}
+        title="Input (Live picture or Rendered asset)"
+      />
+
+      {/* Dual output: split circle (blue live picture / purple rendered asset) */}
+      <Handle
+        type="source"
+        position={Position.Right}
+        className="port port-out port-title port-dual"
+        style={{ top: 22 }}
+        title="Pass-through output (Live picture or Rendered asset)"
+      />
     </div>
   );
 };

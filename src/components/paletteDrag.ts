@@ -14,7 +14,10 @@ export type PaletteItem =
   | { kind: 'effect'; effectId: string }
   | { kind: 'modulator'; modulatorId: string }
   | { kind: 'image' }
-  | { kind: 'output' };
+  | { kind: 'output' }
+  | { kind: 'render' }
+  | { kind: 'formatter' }
+  | { kind: 'export' };
 
 export const encodePaletteItem = (item: PaletteItem): string => JSON.stringify(item);
 
@@ -32,7 +35,15 @@ export const decodePaletteItem = (raw: string): PaletteItem | null => {
     const item = parsed as PaletteItem;
     if (item.kind === 'effect') return typeof item.effectId === 'string' ? item : null;
     if (item.kind === 'modulator') return typeof item.modulatorId === 'string' ? item : null;
-    if (item.kind === 'image' || item.kind === 'output') return item;
+    if (
+      item.kind === 'image' ||
+      item.kind === 'output' ||
+      item.kind === 'render' ||
+      item.kind === 'formatter' ||
+      item.kind === 'export'
+    ) {
+      return item;
+    }
     return null;
   } catch {
     return null;
@@ -53,6 +64,11 @@ export const decodePaletteItem = (raw: string): PaletteItem | null => {
  * it from before the node exists.
  */
 export const paletteDropOffset = (item: PaletteItem): { x: number; y: number } => ({
-  x: item.kind === 'output' ? DEFAULT_PREVIEW_WIDTH / 2 : 98,
+  x:
+    item.kind === 'output'
+      ? DEFAULT_PREVIEW_WIDTH / 2
+      : item.kind === 'formatter' || item.kind === 'export'
+        ? 120
+        : 98,
   y: 18,
 });

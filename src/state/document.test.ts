@@ -86,4 +86,94 @@ describe('document serialization & deserialization', () => {
     expect(deserialized!.nodes).toHaveLength(1);
     expect(deserialized!.edges).toHaveLength(0);
   });
+
+  it('serializes and deserializes render nodes correctly and migrates legacy formatter nodes', () => {
+    const nodes: AppNode[] = [
+      {
+        id: 'render-1',
+        type: 'render',
+        position: { x: 400, y: 200 },
+        data: {
+          format: 'gif',
+          quality: 0.85,
+          scale: 0.5,
+          time: 2.5,
+          duration: 4,
+          fps: 20,
+          loopPreview: true,
+        },
+      },
+      {
+        id: 'export-1',
+        type: 'export',
+        position: { x: 650, y: 200 },
+        data: {
+          filenamePrefix: 'my_clip',
+        },
+      },
+    ];
+
+    const serialized = serializeGraph(nodes, []);
+    expect(serialized.nodes[0]).toEqual({
+      id: 'render-1',
+      type: 'render',
+      position: { x: 400, y: 200 },
+      format: 'gif',
+      quality: 0.85,
+      scale: 0.5,
+      time: 2.5,
+      duration: 4,
+      fps: 20,
+      loopPreview: true,
+    });
+    expect(serialized.nodes[1]).toEqual({
+      id: 'export-1',
+      type: 'export',
+      position: { x: 650, y: 200 },
+      filenamePrefix: 'my_clip',
+    });
+
+    const deserialized = deserializeGraph(serialized);
+    expect(deserialized).not.toBeNull();
+    expect(deserialized!.nodes[0]).toEqual({
+      id: 'render-1',
+      type: 'render',
+      position: { x: 400, y: 200 },
+      data: {
+        format: 'gif',
+        quality: 0.85,
+        scale: 0.5,
+        time: 2.5,
+        duration: 4,
+        fps: 20,
+        loopPreview: true,
+      },
+    });
+
+    // Test legacy formatter migration
+    const legacyPayload = {
+      version: DOCUMENT_VERSION,
+      nodes: [
+        {
+          id: 'old-formatter',
+          type: 'formatter',
+          position: { x: 100, y: 100 },
+          format: 'mp4',
+          quality: 0.9,
+          scale: 1,
+          time: 0,
+          duration: 3,
+          fps: 30,
+        },
+      ],
+      edges: [],
+    };
+    const legacyDeserialized = deserializeGraph(legacyPayload);
+    expect(legacyDeserialized).not.toBeNull();
+    const migratedNode = legacyDeserialized!.nodes[0];
+    expect(migratedNode.type).toBe('render');
+    if (migratedNode.type === 'render') {
+      expect(migratedNode.data.format).toBe('mp4');
+    }
+  });
 });

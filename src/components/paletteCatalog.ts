@@ -78,7 +78,15 @@ export const catalog: CatalogFolder[] = [
   {
     id: 'output',
     label: 'Output',
-    groups: [{ entries: [{ key: 'output', label: 'Viewer', payload: { kind: 'output' } }] }],
+    groups: [
+      {
+        entries: [
+          { key: 'output', label: 'Viewer', payload: { kind: 'output' } },
+          { key: 'render', label: 'Render', payload: { kind: 'render' } },
+          { key: 'export', label: 'Exporter', payload: { kind: 'export' } },
+        ],
+      },
+    ],
   },
 ];
 
@@ -88,5 +96,8 @@ export const addPaletteItem = (item: PaletteItem, position?: XYPosition): void =
   if (item.kind === 'effect') store.addEffectNode(item.effectId, position);
   else if (item.kind === 'modulator') store.addModulatorNode(item.modulatorId, position);
   else if (item.kind === 'image') store.addImageNode(position);
+  else if (item.kind === 'render') store.addRenderNode(position);
+  else if (item.kind === 'formatter') store.addFormatterNode(position);
+  else if (item.kind === 'export') store.addExportNode(position);
   else store.addOutputNode(position);
 };

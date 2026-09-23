@@ -19,11 +19,13 @@ import {
 } from './components/paletteDrag';
 import { addPaletteItem } from './components/paletteCatalog';
 import { QuickAdd } from './components/QuickAdd';
-import { MOD_OUTPUT, isModulationEdge, isParamPort, type AppNode } from './state/graph';
+import { MOD_OUTPUT, findUpstreamRenderNode, isModulationEdge, isParamPort, isRenderPort, type AppNode } from './state/graph';
 import { ImageNode } from './components/ImageNode';
 import { EffectNode } from './components/EffectNode';
 import { ModulatorNode } from './components/ModulatorNode';
 import { OutputNode } from './components/OutputNode';
+import { RenderNode } from './components/RenderNode';
+import { ExportNode } from './components/ExportNode';
 import { SnapGuides } from './components/SnapGuides';
 import { Toolbar } from './components/Toolbar';
 import { Transport } from './components/Transport';
@@ -45,19 +47,57 @@ const nodeTypes = {
   effect: EffectNode,
   modulator: ModulatorNode,
   renderOutput: OutputNode,
+  render: RenderNode,
+  formatter: RenderNode,
+  export: ExportNode,
 };
 
 /**
- * Pictures go into picture inputs, signals into param ports, and never
- * the other way round.
+ * Pictures go into picture inputs, signals into param ports, and rendered
+ * media assets into render ports -- and never cross-wired.
  *
  * Checked while the wire is still being dragged, so a port that would not
  * take it never lights up -- rather than accepting the drop and then
  * producing nothing, which would look like a bug in the effect.
  */
-const isValidConnection = (connection: Connection | Edge): boolean =>
-  connection.source !== connection.target &&
-  (connection.sourceHandle === MOD_OUTPUT) === isParamPort(connection.targetHandle);
+const isValidConnection = (connection: Connection | Edge): boolean => {
+  if (connection.source === connection.target) return false;
+
+  const { nodes, edges } = useGraph.getState();
+  const sourceNode = nodes.find((n) => n.id === connection.source);
+  const targetNode = nodes.find((n) => n.id === connection.target);
+
+  const isSourceMod = connection.sourceHandle === MOD_OUTPUT || sourceNode?.type === 'modulator';
+  const isTargetMod = isParamPort(connection.targetHandle);
+
+  // Modulation signals can only connect to modulation param ports
+  if (isSourceMod || isTargetMod) {
+    return isSourceMod && isTargetMod;
+  }
+
+  // Determine whether the source stream is a rendered asset (purple) or live picture (blue)
+  let isSourceRender = isRenderPort(connection.sourceHandle);
+  if (!isSourceRender && sourceNode) {
+    if (sourceNode.type === 'render' || sourceNode.type === 'formatter') {
+      isSourceRender = true;
+    } else if (sourceNode.type === 'renderOutput') {
+      isSourceRender = !!findUpstreamRenderNode(nodes, edges, sourceNode.id);
+    }
+  }
+
+  // If target is Viewer (renderOutput), it accepts BOTH live picture and rendered asset
+  if (targetNode?.type === 'renderOutput') {
+    return true;
+  }
+
+  // If target is Export, it ONLY accepts rendered assets
+  if (targetNode?.type === 'export' || isRenderPort(connection.targetHandle)) {
+    return isSourceRender;
+  }
+
+  // Other targets (effects, render node, etc.) ONLY accept live WebGL pictures
+  return !isSourceRender;
+};
 
 /**
  * Every wire is a `LinkEdge` -- the built-in bezier plus a hit band and a

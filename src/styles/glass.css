@@ -35,6 +35,8 @@
   --port-image-soft: rgba(47, 111, 214, 0.5);
   --port-mod: #d97a1e;
   --port-mod-soft: rgba(217, 122, 30, 0.6);
+  --port-render: #a855f7;
+  --port-render-soft: rgba(168, 85, 247, 0.6);
 
   /* The glass itself: a milky white fill over a bright top edge. Kept well
      below opaque on purpose -- on a flat ground the blur only shows where
@@ -470,6 +472,7 @@ textarea,
  * dimension to set and the ratio cannot be broken by setting it.
  */
 .node-output {
+  position: relative;
   display: flex;
   flex-direction: column;
   /* The fixed 196px of a normal node does not apply to this one. */
@@ -897,6 +900,29 @@ textarea,
   background: var(--port-mod);
 }
 
+/* A rendered asset's output or input: purple, carrying a baked media file. */
+.react-flow__handle.port-render::after {
+  background: var(--port-render-soft);
+}
+
+.react-flow__handle.port-render:hover::after,
+.react-flow__handle.port-render.connectingfrom::after,
+.react-flow__handle.port-render.connectingto::after {
+  background: var(--port-render);
+}
+
+/* A dual-color port (Viewer input & output): split circle half blue (image), half purple (render). */
+.react-flow__handle.port-dual::after {
+  background: linear-gradient(135deg, var(--port-image-soft) 0% 50%, var(--port-render-soft) 50% 100%);
+}
+
+.react-flow__handle.port-dual:hover::after,
+.react-flow__handle.port-dual.connectingfrom::after,
+.react-flow__handle.port-dual.connectingto::after {
+  background: linear-gradient(135deg, var(--port-image) 0% 50%, var(--port-render) 50% 100%);
+  inset: 3px;
+}
+
 /*
  * Flush with the edge, not offset from it.
  *
@@ -922,6 +948,10 @@ textarea,
  */
 .react-flow__handle.port-title {
   top: 16px;
+}
+
+.node-output > .react-flow__handle.port-title {
+  top: 22px;
 }
 
 /*
@@ -1448,6 +1478,17 @@ textarea,
   stroke-dasharray: 3 4;
 }
 
+/* A render wire: a rendered media asset rather than a live WebGL pipeline. */
+.react-flow__edge-path.link-edge-render {
+  stroke: var(--port-render);
+}
+
+.react-flow__edge.selected .react-flow__edge-path.link-edge-render,
+.react-flow__edge:hover .react-flow__edge-path.link-edge-render {
+  stroke: var(--port-render);
+  filter: drop-shadow(0 0 3px rgba(168, 85, 247, 0.4));
+}
+
 /* The link a dragged effect is about to be spliced into. */
 .react-flow__edge.edge-insert-target .react-flow__edge-path {
   stroke: var(--accent);
@@ -1511,7 +1552,266 @@ textarea,
 }
 
 /* --------------------------------------------------------------------------
+   Render & Export Nodes
+   -------------------------------------------------------------------------- */
+
+.node-render,
+.node-formatter {
+  width: 240px;
+}
+
+.node-export {
+  width: 220px;
+}
+
+.export-recipe-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: rgba(23, 23, 26, 0.04);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+}
+
+.export-recipe-card.is-default {
+  opacity: 0.8;
+  border-style: dashed;
+}
+
+.export-recipe-tag {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--accent);
+  color: #ffffff;
+}
+
+.export-recipe-card.is-default .export-recipe-tag {
+  background: var(--text-dim);
+}
+
+.export-recipe-desc {
+  display: flex;
+  flex-direction: column;
+  font-size: 10px;
+  color: var(--text-muted);
+  line-height: 1.35;
+}
+
+.formatter-loop-toggle {
+  padding-top: 4px;
+  border-top: 1px solid var(--hairline);
+}
+
+.export-formats {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  background: rgba(23, 23, 26, 0.06);
+  border-radius: var(--radius-sm);
+}
+
+.export-format-btn {
+  flex: 1;
+  padding: 4px 2px;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease, box-shadow 140ms ease;
+}
+
+.export-format-btn:hover {
+  color: var(--text-primary);
+}
+
+.export-format-btn.is-active {
+  background: rgba(255, 255, 255, 0.85);
+  color: var(--text-primary);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(23, 23, 26, 0.12);
+}
+
+.export-time-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.export-time-row .control {
+  flex: 1;
+}
+
+.export-now-btn {
+  padding: 3px 7px;
+  font-size: 10px;
+  font-weight: 500;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.5);
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 140ms ease, color 140ms ease;
+}
+
+.export-now-btn:hover {
+  background: rgba(255, 255, 255, 0.85);
+  color: var(--text-primary);
+}
+
+.render-action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 7px 12px;
+  margin-top: 4px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--port-render);
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(168, 85, 247, 0.35);
+  transition: background 140ms ease, transform 140ms ease, opacity 140ms ease;
+}
+
+.render-action-btn:hover:not(:disabled) {
+  background: #9333ea;
+}
+
+.render-action-btn:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.render-action-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.render-badge-baked {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(168, 85, 247, 0.15);
+  color: #9333ea;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.export-action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 7px 12px;
+  margin-top: 4px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(23, 23, 26, 0.2);
+  transition: background 140ms ease, transform 140ms ease, opacity 140ms ease;
+}
+
+.export-action-btn:hover:not(:disabled) {
+  background: #2c2c31;
+}
+
+.export-action-btn:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.export-action-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.export-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.export-progress-track {
+  width: 100%;
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(23, 23, 26, 0.08);
+  overflow: hidden;
+}
+
+.export-progress-bar {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent);
+  transition: width 100ms linear;
+}
+
+.export-progress-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+.export-cancel-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 1px solid var(--hairline);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.8);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease;
+}
+
+.export-cancel-btn:hover {
+  background: #ef4444;
+  border-color: transparent;
+  color: #ffffff;
+}
+
+.export-error {
+  padding: 6px 8px;
+  font-size: 10px;
+  line-height: 1.4;
+  border-radius: var(--radius-sm);
+  background: rgba(239, 68, 68, 0.08);
+  color: #dc2626;
+  border: 1px solid rgba(239, 68, 68, 0.2);
+}
+
+/* --------------------------------------------------------------------------
    Narrow screens
+
 
    The render view stops being a fixed column and sits above the graph, so
    the tool still works on a laptop in split screen.
