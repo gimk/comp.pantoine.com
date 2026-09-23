@@ -126,6 +126,7 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
   const lastFrameRef = useRef(performance.now());
   const frameRef = useRef(0);
   const [unsupported, setUnsupported] = useState(false);
+  const [contextLost, setContextLost] = useState(false);
 
   const [fps, setFps] = useState<number | null>(null);
   const fpsWindowRef = useRef({ frames: 0, since: 0 });
@@ -203,7 +204,29 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
       return;
     }
     pipelineRef.current = new Pipeline(gl);
+
+    const onContextLost = (event: Event) => {
+      event.preventDefault();
+      setContextLost(true);
+      pipelineRef.current?.dispose();
+      pipelineRef.current = null;
+    };
+
+    const onContextRestored = () => {
+      setContextLost(false);
+      const newGl = createContext(canvas);
+      if (newGl) {
+        pipelineRef.current = new Pipeline(newGl);
+        drawRef.current();
+      }
+    };
+
+    canvas.addEventListener('webglcontextlost', onContextLost);
+    canvas.addEventListener('webglcontextrestored', onContextRestored);
+
     return () => {
+      canvas.removeEventListener('webglcontextlost', onContextLost);
+      canvas.removeEventListener('webglcontextrestored', onContextRestored);
       pipelineRef.current?.dispose();
       pipelineRef.current = null;
     };
@@ -337,7 +360,8 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
       <div className="render-stage" style={stageStyle}>
         <canvas ref={canvasRef} className="render-canvas" />
         {unsupported && <p className="render-empty">This browser has no WebGL2.</p>}
-        {!unsupported && !chain && <p className="render-empty">Wire an image in to see it here.</p>}
+        {contextLost && <p className="render-empty">GPU context lost — restoring…</p>}
+        {!unsupported && !contextLost && !chain && <p className="render-empty">Wire an image in to see it here.</p>}
       </div>
 
       <div className="render-foot">

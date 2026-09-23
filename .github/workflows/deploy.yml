@@ -28,6 +28,8 @@ jobs:
 
       - run: npm ci
 
+      - run: npm test
+
       # `npm run build` is `tsc -b && vite build`, so a type error fails the
       # deploy rather than shipping.
       - run: npm run build

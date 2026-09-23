@@ -29,6 +29,7 @@ import { Toolbar } from './components/Toolbar';
 import { Transport } from './components/Transport';
 import { useCanvasShortcuts } from './components/useCanvasShortcuts';
 import { dragMode, setDragModifiers, setVisibleAreaSource, useGraph } from './state/store';
+import { commitNow } from './state/history';
 import '@xyflow/react/dist/style.css';
 import './styles/glass.css';
 
@@ -125,6 +126,7 @@ const Editor: React.FC = () => {
     const { insertTargetEdgeId: target, insertNodeOnEdge, setInsertTarget } = useGraph.getState();
     if (target) insertNodeOnEdge(landed, target);
     else setInsertTarget(null);
+    commitNow();
   }, []);
 
   const { screenToFlowPosition } = useReactFlow();

@@ -17,6 +17,8 @@ export type ImageNodeData = {
   name: string;
   width: number;
   height: number;
+  /** Error message if decoding or loading failed. */
+  error?: string | null;
 };
 
 export type EffectNodeData = {

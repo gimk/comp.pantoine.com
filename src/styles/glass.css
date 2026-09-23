@@ -1517,8 +1517,14 @@ textarea,
    the tool still works on a laptop in split screen.
    -------------------------------------------------------------------------- */
 
-/*
- * No narrow-width rules any more. The preview used to be a fixed panel that
- * had to be relocated out of the way on a small screen; now that it is a
- * node, it pans and zooms with everything else and needs no special case.
- */
+@media (max-width: 650px) {
+  .transport {
+    top: auto;
+    bottom: var(--gutter);
+  }
+
+  .toolbar {
+    max-height: calc(100% - var(--gutter) * 2 - 60px);
+  }
+}
+

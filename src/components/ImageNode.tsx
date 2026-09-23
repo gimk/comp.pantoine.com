@@ -40,6 +40,12 @@ export const ImageNode: React.FC<NodeProps<Node<ImageNodeData, 'image'>>> = ({ i
         <span>Image</span>
       </div>
 
+      {data.error && (
+        <div className="node-body node-warning" title={data.error}>
+          {data.error}
+        </div>
+      )}
+
       <button className="node-body image-drop nodrag" onClick={() => inputRef.current?.click()}>
         {data.src ? (
           <img className="image-thumb" src={data.src} alt={data.name} />

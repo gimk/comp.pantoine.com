@@ -128,6 +128,15 @@ export const setVisibleAreaSource = (source: () => Box | null): void => {
 /** Whether nodes are mid-drag -- history waits for the drop. */
 export const isDragging = (): boolean => dragOrigins !== null;
 
+const dragEndListeners = new Set<() => void>();
+
+export const onDragEnd = (listener: () => void): (() => void) => {
+  dragEndListeners.add(listener);
+  return () => {
+    dragEndListeners.delete(listener);
+  };
+};
+
 /** Shift, as the canvas sees it: snap a node drag to the other modules. */
 export const setSnapping = (on: boolean): void => {
   snapping = on;
@@ -476,18 +485,31 @@ export const useGraph = create<GraphStore>((set, get) => ({
   },
 
   loadImage: async (nodeId, file) => {
-    const bitmap = await decodeImage(file);
-    const url = URL.createObjectURL(file);
-    const loaded = putImage(nodeId, bitmap, url, file.name);
-    set({
-      nodes: get().nodes.map((node) => {
-        if (node.id !== nodeId || node.type !== 'image') return node;
-        return {
-          ...node,
-          data: { src: loaded.url, name: loaded.name, width: loaded.width, height: loaded.height },
-        };
-      }),
-    });
+    try {
+      const bitmap = await decodeImage(file);
+      const url = URL.createObjectURL(file);
+      const loaded = putImage(nodeId, bitmap, url, file.name);
+      set({
+        nodes: get().nodes.map((node) => {
+          if (node.id !== nodeId || node.type !== 'image') return node;
+          return {
+            ...node,
+            data: { src: loaded.url, name: loaded.name, width: loaded.width, height: loaded.height, error: null },
+          };
+        }),
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Could not decode image file';
+      set({
+        nodes: get().nodes.map((node) => {
+          if (node.id !== nodeId || node.type !== 'image') return node;
+          return {
+            ...node,
+            data: { ...node.data, error: message },
+          };
+        }),
+      });
+    }
   },
 
   beginDrag: (dragged) => {
@@ -499,6 +521,7 @@ export const useGraph = create<GraphStore>((set, get) => ({
     dragOrigins = null;
     drag = null;
     if (get().snapGuides.length > 0) set({ snapGuides: [] });
+    for (const listener of dragEndListeners) listener();
   },
 
   /**

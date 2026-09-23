@@ -109,18 +109,19 @@ export const Control: React.FC<{
  */
 const usePortSignal = (nodeId: string, key: string, enabled: boolean): Signal | null => {
   const handle = paramPort(key);
+  const sourceId = useGraph((state) =>
+    enabled ? state.edges.find((edge) => edge.target === nodeId && edge.targetHandle === handle)?.source : undefined,
+  );
   const signature = useGraph((state) => {
-    if (!enabled) return '';
-    const source = state.edges.find((edge) => edge.target === nodeId && edge.targetHandle === handle)?.source;
-    const signal = source === undefined ? null : resolveSignal(state.nodes, state.edges, source);
+    if (!sourceId) return '';
+    const signal = resolveSignal(state.nodes, state.edges, sourceId);
     return signal ? JSON.stringify(signalKey(signal)) : '';
   });
   return useMemo(() => {
-    if (!signature) return null;
+    if (!sourceId || !signature) return null;
     const { nodes, edges } = useGraph.getState();
-    const source = edges.find((edge) => edge.target === nodeId && edge.targetHandle === handle)?.source;
-    return source === undefined ? null : resolveSignal(nodes, edges, source);
-  }, [nodeId, handle, signature]);
+    return resolveSignal(nodes, edges, sourceId);
+  }, [sourceId, signature]);
 };
 
 /**

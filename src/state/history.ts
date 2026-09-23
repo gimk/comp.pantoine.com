@@ -17,7 +17,7 @@ import type { Edge } from '@xyflow/react';
 import { dropImage, getImage, shareImage } from '../engine/imageStore';
 import type { AppNode } from './graph';
 import { serializeGraph } from './document';
-import { isDragging, useGraph } from './store';
+import { isDragging, onDragEnd, useGraph } from './store';
 
 const SETTLE_MS = 300;
 const MAX_STEPS = 100;
@@ -51,7 +51,12 @@ const take = (nodes: AppNode[], edges: Edge[]): Snapshot => {
     shareImage(node.id, key);
     images.set(node.id, key);
   }
-  return { nodes, edges, key: documentKey(nodes, edges), images };
+  return {
+    nodes: structuredClone(nodes),
+    edges: structuredClone(edges),
+    key: documentKey(nodes, edges),
+    images,
+  };
 };
 
 const release = (snapshot: Snapshot): void => {
@@ -95,6 +100,13 @@ useGraph.subscribe((state) => {
   timer = setTimeout(commit, SETTLE_MS);
 });
 
+// A drop might not change node positions on that exact tick, but settles the drag.
+onDragEnd(() => {
+  if (restoring) return;
+  if (timer !== undefined) clearTimeout(timer);
+  timer = setTimeout(commit, SETTLE_MS);
+});
+
 /** Put the graph back to a snapshot, pixels included. */
 const restore = (snapshot: Snapshot): void => {
   const { nodes: live } = useGraph.getState();
@@ -121,6 +133,11 @@ const restore = (snapshot: Snapshot): void => {
   restoring = false;
 };
 
+/** Immediately commit the current state to history if different from last snapshot. */
+export const commitNow = (): void => {
+  commit();
+};
+
 export const undo = (): void => {
   if (isDragging()) return;
   // An edit still settling is the one being undone, so land it first.
@@ -141,3 +158,4 @@ export const redo = (): void => {
   committed = next;
   restore(next);
 };
+
