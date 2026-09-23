@@ -13,12 +13,24 @@
  * it. A restored image node comes back empty, naming the file it wants.
  */
 import type { Edge, XYPosition } from '@xyflow/react';
-import { defaultParams, paramsOf, type ParamSpec, type ParamValue } from '../engine/effects';
+import { paramsOf, type ParamSpec, type ParamValue } from '../engine/effects';
 import { getEffect } from '../engine/registry';
-import { DEFAULT_PREVIEW_WIDTH, type AppNode } from './graph';
+import { getModulator, modulatorParamsOf } from '../engine/modulators';
+import { DEFAULT_PREVIEW_WIDTH, hasTargetPort, type AppNode } from './graph';
 
-/** Bumped when the shape changes in a way older documents cannot satisfy. */
-export const DOCUMENT_VERSION = 1;
+/**
+ * Bumped when the shape changes in a way older documents cannot satisfy.
+ *
+ * 2 added modulator nodes and named ports on edges. A version 1 document
+ * is still read: it has neither, and without them it means exactly what it
+ * meant before -- every wire into the one input a node had. A version 2
+ * document is not readable by a build that only knows 1, which is what the
+ * number is for.
+ */
+export const DOCUMENT_VERSION = 2;
+
+/** Older versions this build still reads as they are. */
+const READABLE_VERSIONS = new Set([1, DOCUMENT_VERSION]);
 
 type SerializedNode =
   | { id: string; type: 'image'; position: XYPosition; name: string; width: number; height: number }
@@ -29,9 +41,23 @@ type SerializedNode =
       effectId: string;
       params: Record<string, ParamValue>;
     }
+  | {
+      id: string;
+      type: 'modulator';
+      position: XYPosition;
+      modulatorId: string;
+      params: Record<string, ParamValue>;
+    }
   | { id: string; type: 'renderOutput'; position: XYPosition; width: number };
 
-type SerializedEdge = { id: string; source: string; target: string };
+/** Ports are named only where they are not the main one. */
+type SerializedEdge = {
+  id: string;
+  source: string;
+  target: string;
+  sourceHandle?: string;
+  targetHandle?: string;
+};
 
 export type SerializedGraph = {
   version: number;
@@ -62,9 +88,23 @@ export const serializeGraph = (nodes: AppNode[], edges: Edge[]): SerializedGraph
         params: node.data.params,
       };
     }
+    if (node.type === 'modulator') {
+      return {
+        id: node.id,
+        type: 'modulator',
+        position,
+        modulatorId: node.data.modulatorId,
+        params: node.data.params,
+      };
+    }
     return { id: node.id, type: 'renderOutput', position, width: node.data.width };
   }),
-  edges: edges.map((edge) => ({ id: edge.id, source: edge.source, target: edge.target })),
+  edges: edges.map((edge) => {
+    const saved: SerializedEdge = { id: edge.id, source: edge.source, target: edge.target };
+    if (edge.sourceHandle) saved.sourceHandle = edge.sourceHandle;
+    if (edge.targetHandle) saved.targetHandle = edge.targetHandle;
+    return saved;
+  }),
 });
 
 const isNumber = (value: unknown): value is number =>
@@ -93,23 +133,21 @@ const valueFits = (spec: ParamSpec, value: unknown): boolean => {
 };
 
 /**
- * Saved parameters reconciled against what the effect declares now.
+ * Saved parameters reconciled against what the module declares now.
  *
- * Start from the defaults and take back only the keys the effect still has,
+ * Start from the defaults and take back only the keys the module still has,
  * and only where the value is still the right shape. A module that gains a
  * knob, loses one, or renames one -- Trails swapping a decay multiplier for
  * a persistence in seconds, say -- then loads an old document without
  * either crashing or quietly feeding a stale number into a uniform that now
  * means something entirely different.
  */
-const reconcileParams = (
-  def: NonNullable<ReturnType<typeof getEffect>>,
-  saved: unknown,
-): Record<string, ParamValue> => {
-  const params = defaultParams(def);
+const reconcileParams = (specs: ParamSpec[], saved: unknown): Record<string, ParamValue> => {
+  const params: Record<string, ParamValue> = {};
+  for (const spec of specs) params[spec.key] = spec.default;
   if (!saved || typeof saved !== 'object') return params;
   const source = saved as Record<string, unknown>;
-  for (const spec of paramsOf(def)) {
+  for (const spec of specs) {
     const value = source[spec.key];
     if (valueFits(spec, value)) params[spec.key] = value as ParamValue;
   }
@@ -134,7 +172,7 @@ const outputNode = (id: string, position: XYPosition, width: unknown): AppNode =
 export const deserializeGraph = (raw: unknown): { nodes: AppNode[]; edges: Edge[] } | null => {
   if (!raw || typeof raw !== 'object') return null;
   const doc = raw as Partial<SerializedGraph>;
-  if (doc.version !== DOCUMENT_VERSION) return null;
+  if (typeof doc.version !== 'number' || !READABLE_VERSIONS.has(doc.version)) return null;
   if (!Array.isArray(doc.nodes) || !Array.isArray(doc.edges)) return null;
 
   const nodes: AppNode[] = [];
@@ -171,7 +209,23 @@ export const deserializeGraph = (raw: unknown): { nodes: AppNode[]; edges: Edge[
         // renders as unknown and the user decides what to do about it.
         data: {
           effectId: entry.effectId,
-          params: def ? reconcileParams(def, entry.params) : {},
+          params: def ? reconcileParams(paramsOf(def), entry.params) : {},
+        },
+      });
+      continue;
+    }
+
+    if (entry.type === 'modulator') {
+      if (typeof entry.modulatorId !== 'string') continue;
+      const def = getModulator(entry.modulatorId);
+      // Kept when unknown, for the same reason as an unknown effect.
+      nodes.push({
+        id: entry.id,
+        type: 'modulator',
+        position,
+        data: {
+          modulatorId: entry.modulatorId,
+          params: def ? reconcileParams(modulatorParamsOf(def), entry.params) : {},
         },
       });
       continue;
@@ -183,13 +237,19 @@ export const deserializeGraph = (raw: unknown): { nodes: AppNode[]; edges: Edge[
   // A document with no viewer is left with none. There can be several, and
   // deleting them all is a deliberate act -- the Output menu puts one back.
 
-  const ids = new Set(nodes.map((node) => node.id));
+  const byId = new Map(nodes.map((node) => [node.id, node]));
   const edges: Edge[] = [];
   for (const entry of doc.edges) {
     if (!entry || typeof entry.id !== 'string') continue;
     // A wire to a node that did not survive would be a link to nothing.
-    if (!ids.has(entry.source) || !ids.has(entry.target)) continue;
-    edges.push({ id: entry.id, source: entry.source, target: entry.target, type: 'link' });
+    const target = byId.get(entry.target);
+    if (!byId.has(entry.source) || !target) continue;
+    const sourceHandle = typeof entry.sourceHandle === 'string' ? entry.sourceHandle : null;
+    const targetHandle = typeof entry.targetHandle === 'string' ? entry.targetHandle : null;
+    // Nor would one into a port the module no longer has -- a param that
+    // was renamed, an input that was taken away.
+    if (!hasTargetPort(target, targetHandle)) continue;
+    edges.push({ id: entry.id, source: entry.source, target: entry.target, sourceHandle, targetHandle, type: 'link' });
   }
 
   return { nodes, edges };

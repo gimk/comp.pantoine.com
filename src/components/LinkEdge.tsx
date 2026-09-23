@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { BaseEdge, EdgeLabelRenderer, getBezierPath, type EdgeProps } from '@xyflow/react';
 import { X } from 'lucide-react';
 import { useGraph } from '../state/store';
+import { isParamPort } from '../state/graph';
 
 /**
  * A wire, with the two things you need to do to one close at hand.
@@ -26,6 +27,7 @@ export const LinkEdge: React.FC<EdgeProps> = ({
   selected,
   markerEnd,
   style,
+  targetHandleId,
 }) => {
   const removeEdge = useGraph((state) => state.removeEdge);
   const [hovered, setHovered] = useState(false);
@@ -41,7 +43,14 @@ export const LinkEdge: React.FC<EdgeProps> = ({
 
   return (
     <>
-      <BaseEdge id={id} path={path} markerEnd={markerEnd} style={style} />
+      {/* A modulation wire is dashed: it carries a signal, not a picture. */}
+      <BaseEdge
+        id={id}
+        path={path}
+        markerEnd={markerEnd}
+        style={style}
+        className={isParamPort(targetHandleId) ? 'link-edge-mod' : undefined}
+      />
 
       <path
         d={path}

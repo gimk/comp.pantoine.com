@@ -17,9 +17,10 @@ import {
   decodePaletteItem,
   paletteDropOffset,
 } from './components/paletteDrag';
-import type { AppNode } from './state/graph';
+import { MOD_OUTPUT, isModulationEdge, isParamPort, type AppNode } from './state/graph';
 import { ImageNode } from './components/ImageNode';
 import { EffectNode } from './components/EffectNode';
+import { ModulatorNode } from './components/ModulatorNode';
 import { OutputNode } from './components/OutputNode';
 import { SnapGuides } from './components/SnapGuides';
 import { Toolbar } from './components/Toolbar';
@@ -38,8 +39,21 @@ import './styles/glass.css';
 const nodeTypes = {
   image: ImageNode,
   effect: EffectNode,
+  modulator: ModulatorNode,
   renderOutput: OutputNode,
 };
+
+/**
+ * Pictures go into picture inputs, signals into param ports, and never
+ * the other way round.
+ *
+ * Checked while the wire is still being dragged, so a port that would not
+ * take it never lights up -- rather than accepting the drop and then
+ * producing nothing, which would look like a bug in the effect.
+ */
+const isValidConnection = (connection: Connection | Edge): boolean =>
+  connection.source !== connection.target &&
+  (connection.sourceHandle === MOD_OUTPUT) === isParamPort(connection.targetHandle);
 
 /**
  * Every wire is a `LinkEdge` -- the built-in bezier plus a hit band and a
@@ -78,9 +92,11 @@ const Editor: React.FC = () => {
       setInsertTarget(null);
       return;
     }
+    // The node's own wires are always underneath it, and a modulation wire
+    // has no picture on it to put an effect into.
     const own = new Set(
       current
-        .filter((edge) => edge.source === node.id || edge.target === node.id)
+        .filter((edge) => edge.source === node.id || edge.target === node.id || isModulationEdge(edge))
         .map((edge) => edge.id),
     );
     const centerX = node.position.x + (node.measured?.width ?? 0) / 2;
@@ -149,6 +165,7 @@ const Editor: React.FC = () => {
 
       const store = useGraph.getState();
       if (item.kind === 'effect') store.addEffectNode(item.effectId, position);
+      else if (item.kind === 'modulator') store.addModulatorNode(item.modulatorId, position);
       else if (item.kind === 'image') store.addImageNode(position);
       else store.addOutputNode(position);
     },
@@ -196,6 +213,7 @@ const Editor: React.FC = () => {
       onNodesChange={onNodesChange}
       onEdgesChange={onEdgesChange}
       onConnect={onConnect}
+      isValidConnection={isValidConnection}
       onNodeDragStart={handleNodeDragStart}
       onNodeDrag={handleNodeDrag}
       onNodeDragStop={handleNodeDragStop}

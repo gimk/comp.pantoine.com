@@ -7,9 +7,10 @@
    whole tool keeps reading as one sheet of material.
 
    The palette is deliberately monochrome: flat light grey ground, white
-   glass, near-black type. No gradients and no hues anywhere, so the only
-   things that carry the interface are the translucency, the hairlines and
-   the shadows.
+   glass, near-black type. No gradients, and hue in one place only: the
+   ports, where colour says what kind of thing a connector carries. Every
+   other surface is carried by the translucency, the hairlines and the
+   shadows.
    -------------------------------------------------------------------------- */
 
 :root {
@@ -22,6 +23,18 @@
   /* "Accent" is just ink. Emphasis comes from weight and contrast. */
   --accent: #17171a;
   --accent-soft: rgba(23, 23, 26, 0.28);
+
+  /*
+   * Connector types. The one place the palette takes a hue, because the
+   * question a port has to answer -- will this wire fit here? -- is one of
+   * kind, and kind reads fastest as colour. Blue carries a picture; amber a
+   * modulation signal. The soft form is the socket at rest, the full form
+   * is the socket being hovered or connected.
+   */
+  --port-image: #2f6fd6;
+  --port-image-soft: rgba(47, 111, 214, 0.5);
+  --port-mod: #d97a1e;
+  --port-mod-soft: rgba(217, 122, 30, 0.6);
 
   /* The glass itself: a milky white fill over a bright top edge. Kept well
      below opaque on purpose -- on a flat ground the blur only shows where
@@ -554,6 +567,30 @@ textarea,
 
 /* Output node */
 
+/* Modulator node */
+
+.mod-scope {
+  display: block;
+  width: 100%;
+  height: 34px;
+  border-radius: var(--radius-sm);
+  background: rgba(23, 23, 26, 0.04);
+}
+
+.mod-scope-axis {
+  stroke: var(--hairline);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.mod-scope-trace {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.4;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
 /* Ports */
 
 /*
@@ -597,7 +634,7 @@ textarea,
   position: absolute;
   inset: 4px;
   border-radius: 50%;
-  background: var(--accent-soft);
+  background: var(--port-image-soft);
   transition: background 140ms ease, inset 140ms ease;
 }
 
@@ -627,8 +664,19 @@ textarea,
 .react-flow__handle.port:hover::after,
 .react-flow__handle.port.connectingfrom::after,
 .react-flow__handle.port.connectingto::after {
-  background: var(--accent);
+  background: var(--port-image);
   inset: 3px;
+}
+
+/* A modulator's output: the same lug, carrying a signal rather than a picture. */
+.react-flow__handle.port-mod::after {
+  background: var(--port-mod-soft);
+}
+
+.react-flow__handle.port-mod:hover::after,
+.react-flow__handle.port-mod.connectingfrom::after,
+.react-flow__handle.port-mod.connectingto::after {
+  background: var(--port-mod);
 }
 
 /*
@@ -646,6 +694,74 @@ textarea,
 
 .react-flow__handle.port-out {
   right: 0;
+}
+
+/*
+ * On effect and modulator cards the main ports sit level with the title
+ * rather than halfway down. The rest of the left edge belongs to the
+ * modulation ports beside the sliders, and a main input dropped into the
+ * middle of them would land on one.
+ */
+.react-flow__handle.port-title {
+  top: 16px;
+}
+
+/*
+ * Ports laid out with a row of the card body -- an extra image input, a
+ * param's modulation port. The row is the positioning context, so the port
+ * stays level with its label; the offset takes it back out through the
+ * body's padding to the card's edge, where the main ports are.
+ */
+.node-input,
+.param-row {
+  position: relative;
+}
+
+.node-input {
+  display: flex;
+  align-items: center;
+  min-height: 16px;
+}
+
+.node-input > .react-flow__handle.port-in,
+.param-row > .react-flow__handle.port-param {
+  left: -12px;
+}
+
+/*
+ * A modulation port: amber like the output it takes, and also smaller and
+ * hollow, so the two kinds of input still read apart for anyone who does
+ * not see the colours distinctly. Level with the slider's label rather
+ * than centred on the whole control.
+ */
+.react-flow__handle.port-param {
+  top: 7px;
+  width: 11px;
+  height: 11px;
+}
+
+.react-flow__handle.port-param::after {
+  inset: 2px;
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--port-mod-soft);
+}
+
+.react-flow__handle.port-param:hover::after,
+.react-flow__handle.port-param.connectingfrom::after,
+.react-flow__handle.port-param.connectingto::after {
+  background: var(--port-mod);
+  box-shadow: none;
+}
+
+.react-flow__handle.port-param::before {
+  inset: -6px;
+}
+
+/* A modulated slider is marked on its label; the slider keeps its own value. */
+.param-row.is-modulated .control-label::after {
+  content: ' ~';
+  color: var(--text-primary);
+  font-weight: 600;
 }
 
 /* --------------------------------------------------------------------------
@@ -844,6 +960,11 @@ textarea,
 .react-flow__edge.selected .react-flow__edge-path,
 .react-flow__edge:hover .react-flow__edge-path {
   stroke: var(--accent);
+}
+
+/* A modulation wire: a signal rather than a picture. */
+.react-flow__edge-path.link-edge-mod {
+  stroke-dasharray: 3 4;
 }
 
 /* The link a dragged effect is about to be spliced into. */

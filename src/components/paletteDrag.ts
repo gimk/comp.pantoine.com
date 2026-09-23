@@ -12,6 +12,7 @@ export const PALETTE_DRAG_MIME = 'application/x-comp-palette';
 /** Everything the palette can put on the canvas. */
 export type PaletteItem =
   | { kind: 'effect'; effectId: string }
+  | { kind: 'modulator'; modulatorId: string }
   | { kind: 'image' }
   | { kind: 'output' };
 
@@ -30,6 +31,7 @@ export const decodePaletteItem = (raw: string): PaletteItem | null => {
     if (!parsed || typeof parsed !== 'object') return null;
     const item = parsed as PaletteItem;
     if (item.kind === 'effect') return typeof item.effectId === 'string' ? item : null;
+    if (item.kind === 'modulator') return typeof item.modulatorId === 'string' ? item : null;
     if (item.kind === 'image' || item.kind === 'output') return item;
     return null;
   } catch {

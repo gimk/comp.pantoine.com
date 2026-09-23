@@ -1,8 +1,9 @@
 import type { Edge, Node } from '@xyflow/react';
 import { getEffect } from '../engine/registry';
-import { isAnimated, type ParamValue } from '../engine/effects';
+import { inputsOf, isAnimated, paramsOf, type ParamValue } from '../engine/effects';
+import { getModulator, isModulatable, type Modulation } from '../engine/modulators';
 import { getImage } from '../engine/imageStore';
-import type { Pass } from '../engine/pipeline';
+import type { Pass, RenderPlan, Step } from '../engine/pipeline';
 
 export type ImageNodeData = {
   /** Object URL for the thumbnail, or null while the node is still empty. */
@@ -17,6 +18,11 @@ export type EffectNodeData = {
   params: Record<string, ParamValue>;
 };
 
+export type ModulatorNodeData = {
+  modulatorId: string;
+  params: Record<string, ParamValue>;
+};
+
 export type OutputNodeData = {
   /**
    * Preview width in graph units. The height is not stored: it follows the
@@ -28,10 +34,55 @@ export type OutputNodeData = {
 export type AppNode =
   | Node<ImageNodeData, 'image'>
   | Node<EffectNodeData, 'effect'>
+  | Node<ModulatorNodeData, 'modulator'>
   | Node<OutputNodeData, 'renderOutput'>;
 
 /** Starting width of the output preview, in graph units. */
 export const DEFAULT_PREVIEW_WIDTH = 360;
+
+/*
+ * Ports.
+ *
+ * The main image input has no handle id -- it is the one every node with an
+ * input has always had, and an edge that names no target handle means it.
+ * Keeping it that way is what lets documents saved before there was more
+ * than one input load unchanged. Everything added since is named: an
+ * effect's extra inputs by their key, a param's modulation port by
+ * `param:<key>`, a modulator's output as `mod`.
+ */
+export const MOD_OUTPUT = 'mod';
+const PARAM_PORT_PREFIX = 'param:';
+
+export const paramPort = (key: string): string => PARAM_PORT_PREFIX + key;
+
+export const isParamPort = (handle: string | null | undefined): handle is string =>
+  !!handle && handle.startsWith(PARAM_PORT_PREFIX);
+
+/** A wire carrying a modulator's signal rather than a picture. */
+export const isModulationEdge = (edge: Pick<Edge, 'targetHandle'>): boolean =>
+  isParamPort(edge.targetHandle);
+
+/** Whether two ends name the same input port. Null and undefined both mean the main one. */
+export const samePort = (a: string | null | undefined, b: string | null | undefined): boolean =>
+  (a ?? null) === (b ?? null);
+
+/**
+ * Whether a node has an input port by this id -- so a saved wire into a
+ * port the module no longer has can be dropped on load rather than left
+ * pointing at nothing.
+ */
+export const hasTargetPort = (node: AppNode, handle: string | null | undefined): boolean => {
+  if (node.type === 'renderOutput') return !handle;
+  if (node.type !== 'effect') return false;
+  if (!handle) return true;
+  const def = getEffect(node.data.effectId);
+  if (!def) return false;
+  if (isParamPort(handle)) {
+    const key = handle.slice(PARAM_PORT_PREFIX.length);
+    return paramsOf(def).some((spec) => spec.key === key && isModulatable(spec));
+  }
+  return inputsOf(def).some((input) => input.key === handle);
+};
 
 /**
  * A stable per-node random, derived from the node id (FNV-1a).
@@ -63,17 +114,31 @@ export const identityAliases = new Map<string, string>();
 const identityOf = (id: string): string => identityAliases.get(id) ?? id;
 
 export type ResolvedChain = {
+  /** The image at the head of the main input path; it sets the frame. */
   sourceNodeId: string;
+  plan: RenderPlan;
+  /** Every effect in the plan, in run order. */
   passes: Pass[];
 };
 
+/** Thrown to abandon a walk that has come back round to where it started. */
+class Loop extends Error {}
+
 /**
- * Walk backwards from the Output node to the image feeding it.
+ * Work out what one viewer has to draw, as a list of steps in run order.
+ *
+ * Walks backwards from the viewer along every input, depth first, and
+ * emits each node after the ones it reads -- so the list can be run front
+ * to back. A node reached twice, as when one picture feeds both sides of a
+ * Blend, is emitted once and read twice.
  *
  * Returns null whenever the graph cannot produce a picture -- nothing wired
- * to the output, a dangling effect, or an image node with no image loaded.
- * The render view treats that as its empty state rather than an error, since
- * it is the normal condition while the user is still wiring things up.
+ * to the viewer, an effect with nothing on its main input, or an image node
+ * with no image loaded on the main path. The render view treats that as its
+ * empty state rather than an error, since it is the normal condition while
+ * the user is still wiring things up. An extra input that cannot produce a
+ * picture is not fatal: it samples as transparent, and the effect carries
+ * on without it.
  */
 export const resolveChain = (
   nodes: AppNode[],
@@ -82,58 +147,103 @@ export const resolveChain = (
 ): ResolvedChain | null => {
   const byId = new Map(nodes.map((node) => [node.id, node]));
 
-  // Inputs accept a single edge, so one source per target is the whole story.
-  const incoming = new Map<string, string>();
-  for (const edge of edges) incoming.set(edge.target, edge.source);
+  // Each port takes a single wire, so a port names exactly one source.
+  const incoming = new Map<string, Map<string | null, string>>();
+  for (const edge of edges) {
+    let ports = incoming.get(edge.target);
+    if (!ports) incoming.set(edge.target, (ports = new Map()));
+    ports.set(edge.targetHandle ?? null, edge.source);
+  }
+  const sourceOf = (nodeId: string, handle: string | null): string | undefined =>
+    incoming.get(nodeId)?.get(handle);
 
   // Resolved for one named viewer rather than "the" viewer: there can be
   // several, each watching a different branch of the graph.
-  const output = nodes.find((node) => node.id === outputNodeId && node.type === 'renderOutput');
-  if (!output) return null;
+  const output = byId.get(outputNodeId);
+  if (!output || output.type !== 'renderOutput') return null;
 
-  // Collected output-first, so the chain comes out reversed.
-  const reversed: Pass[] = [];
-  const seen = new Set<string>();
-  let cursor = incoming.get(output.id);
+  const steps: Step[] = [];
+  const done = new Map<string, number | null>();
+  const visiting = new Set<string>();
 
-  while (cursor !== undefined) {
-    // A user can wire a loop; refusing to follow it twice keeps the walk
-    // finite instead of hanging the renderer.
-    if (seen.has(cursor)) return null;
-    seen.add(cursor);
-
-    const node = byId.get(cursor);
-    if (!node) return null;
-
-    if (node.type === 'image') {
-      if (!getImage(node.id)) return null;
-      reversed.reverse();
-      return { sourceNodeId: node.id, passes: reversed };
+  const modulationFor = (nodeId: string, specs: ReturnType<typeof paramsOf>): Record<string, Modulation> => {
+    const modulation: Record<string, Modulation> = {};
+    for (const spec of specs) {
+      if (!isModulatable(spec)) continue;
+      const sourceId = sourceOf(nodeId, paramPort(spec.key));
+      const source = sourceId === undefined ? undefined : byId.get(sourceId);
+      if (!source || source.type !== 'modulator') continue;
+      const def = getModulator(source.data.modulatorId);
+      if (!def) continue;
+      const identity = identityOf(source.id);
+      modulation[spec.key] = { def, params: source.data.params, seed: seedFor(identity) };
     }
+    return modulation;
+  };
 
-    if (node.type === 'effect') {
-      const def = getEffect(node.data.effectId);
-      if (!def) return null;
-      const identity = identityOf(node.id);
-      reversed.push({ nodeId: identity, seed: seedFor(identity), def, params: node.data.params });
-      cursor = incoming.get(node.id);
-      continue;
-    }
+  /** The step index for a node's picture, or null if it cannot make one. */
+  const visit = (nodeId: string | undefined): number | null => {
+    if (nodeId === undefined) return null;
+    if (done.has(nodeId)) return done.get(nodeId)!;
+    // A user can wire a loop; refusing to follow it keeps the walk finite
+    // instead of hanging the renderer.
+    if (visiting.has(nodeId)) throw new Loop();
+    visiting.add(nodeId);
 
-    if (node.type === 'renderOutput') {
+    const node = byId.get(nodeId);
+    let index: number | null = null;
+
+    if (node?.type === 'image') {
+      if (getImage(node.id)) index = steps.push({ kind: 'image', nodeId: node.id }) - 1;
+    } else if (node?.type === 'renderOutput') {
       // A viewer part-way along a chain is a tap, not a stage: it shows what
       // has reached it and passes the picture on untouched. Several strung
       // together is how you watch the same edit at different points.
-      cursor = incoming.get(node.id);
-      continue;
+      index = visit(sourceOf(node.id, null));
+    } else if (node?.type === 'effect') {
+      const def = getEffect(node.data.effectId);
+      const input = def ? visit(sourceOf(node.id, null)) : null;
+      if (def && input !== null) {
+        const extras = inputsOf(def).map((spec) => visit(sourceOf(node.id, spec.key)));
+        const identity = identityOf(node.id);
+        const pass: Pass = {
+          nodeId: identity,
+          seed: seedFor(identity),
+          def,
+          params: node.data.params,
+          modulation: modulationFor(node.id, paramsOf(def)),
+        };
+        index = steps.push({ kind: 'effect', pass, input, extras }) - 1;
+      }
     }
 
-    return null;
-  }
+    visiting.delete(nodeId);
+    done.set(nodeId, index);
+    return index;
+  };
 
-  return null;
+  let outputIndex: number | null;
+  try {
+    outputIndex = visit(sourceOf(output.id, null));
+  } catch (error) {
+    if (error instanceof Loop) return null;
+    throw error;
+  }
+  if (outputIndex === null) return null;
+
+  // Follow main inputs back up to the image that sets the frame.
+  let head = steps[outputIndex];
+  while (head.kind === 'effect') head = steps[head.input];
+
+  const passes = steps.flatMap((step) => (step.kind === 'effect' ? [step.pass] : []));
+  return { sourceNodeId: head.nodeId, plan: { steps, output: outputIndex }, passes };
 };
 
 /** Whether anything in the chain needs a continuous frame loop. */
 export const chainIsAnimated = (chain: ResolvedChain | null): boolean =>
-  chain !== null && chain.passes.some((pass) => isAnimated(pass.def, pass.params));
+  chain !== null &&
+  chain.passes.some(
+    (pass) =>
+      isAnimated(pass.def, pass.params) ||
+      Object.values(pass.modulation).some((modulation) => modulation.def.moving(modulation.params)),
+  );

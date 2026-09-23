@@ -43,10 +43,19 @@ const GLSL_TYPE: Record<ParamSpec['kind'], string> = {
  * so the category is part of the definition rather than something the
  * toolbar guesses from the name.
  */
-export type Category = 'color' | 'blur' | 'geometry' | 'scan' | 'noise' | 'temporal' | 'frame';
+export type Category =
+  | 'color'
+  | 'composite'
+  | 'blur'
+  | 'geometry'
+  | 'scan'
+  | 'noise'
+  | 'temporal'
+  | 'frame';
 
 export const CATEGORY_ORDER: Category[] = [
   'color',
+  'composite',
   'blur',
   'geometry',
   'scan',
@@ -57,6 +66,7 @@ export const CATEGORY_ORDER: Category[] = [
 
 export const CATEGORY_LABELS: Record<Category, string> = {
   color: 'Color',
+  composite: 'Composite',
   blur: 'Blur & Glow',
   geometry: 'Geometry',
   scan: 'Scan',
@@ -64,6 +74,20 @@ export const CATEGORY_LABELS: Record<Category, string> = {
   temporal: 'Temporal',
   frame: 'Frame',
 };
+
+/**
+ * An image input beyond the main one.
+ *
+ * The main input is `u_src` and every effect has it. These are the others:
+ * each becomes `uniform sampler2D u_<key>`, bound from texture unit 3 up
+ * (0, 1 and 2 are `u_src`, `u_orig` and `u_prev`), and gets a port of its
+ * own on the card. An input with nothing wired to it samples as transparent
+ * black, so an effect should treat alpha 0 as "leave the picture alone".
+ */
+export type InputSpec = { key: string; label: string };
+
+/** The first texture unit free for an effect's extra inputs. */
+export const FIRST_INPUT_UNIT = 3;
 
 export type EffectDef = {
   id: string;
@@ -96,11 +120,13 @@ export type EffectDef = {
    */
   feedback?: boolean;
   params: ParamSpec[];
+  /** Extra image inputs, in port order. Most effects have none. */
+  inputs?: InputSpec[];
   /**
    * Fragment shader body only -- `prelude` supplies the header, the varying
    * and the shared uniforms, so the body just assigns `fragColor`.
    *
-   * An array runs several passes back to back over the same ping-pong pair,
+   * An array runs several passes back to back, each reading the one before,
    * which is what a separable blur needs. `u_pass` says which one is running.
    */
   fragment: string | string[];
@@ -151,11 +177,14 @@ export const paramsOf = (def: EffectDef): ParamSpec[] =>
 export const passesOf = (def: EffectDef): string[] =>
   Array.isArray(def.fragment) ? def.fragment : [def.fragment];
 
+/** Extra inputs as a list, empty for the usual single-input effect. */
+export const inputsOf = (def: EffectDef): InputSpec[] => def.inputs ?? [];
+
 export const isAnimated = (def: EffectDef, params: Record<string, ParamValue>): boolean =>
   typeof def.animated === 'function' ? def.animated(params) : def.animated;
 
 /**
- * Param keys that would collide with a uniform the prelude already declares.
+ * Keys that would collide with a uniform the prelude already declares.
  *
  * A param keyed `time` becomes `u_time`, which compiles -- as a redeclaration
  * that quietly shadows the clock for that effect only. The symptom is an
@@ -182,18 +211,23 @@ const RESERVED_PARAM_KEYS = new Set([
  * a shader that will not compile gets, which is what this is.
  */
 const assertParamsAreSound = (def: EffectDef): void => {
+  // Params and inputs share one namespace: both become `u_<key>`.
   const seen = new Set<string>();
-  for (const spec of paramsOf(def)) {
-    if (RESERVED_PARAM_KEYS.has(spec.key)) {
+  const keys = [
+    ...paramsOf(def).map((spec) => ({ key: spec.key, what: 'a param' })),
+    ...inputsOf(def).map((input) => ({ key: input.key, what: 'an input' })),
+  ];
+  for (const { key, what } of keys) {
+    if (RESERVED_PARAM_KEYS.has(key)) {
       throw new Error(
-        `Effect "${def.id}" has a param keyed "${spec.key}", which collides with the ` +
-          `built-in uniform u_${spec.key}. Rename it.`,
+        `Effect "${def.id}" has ${what} keyed "${key}", which collides with the ` +
+          `built-in uniform u_${key}. Rename it.`,
       );
     }
-    if (seen.has(spec.key)) {
-      throw new Error(`Effect "${def.id}" declares the param "${spec.key}" twice.`);
+    if (seen.has(key)) {
+      throw new Error(`Effect "${def.id}" declares "${key}" twice.`);
     }
-    seen.add(spec.key);
+    seen.add(key);
   }
 };
 
@@ -204,12 +238,13 @@ const assertParamsAreSound = (def: EffectDef): void => {
  * multi-pass effect against the source at every intermediate step would
  * fade out the work in progress, not the result.
  */
-export const buildFragmentSource =(def: EffectDef, passIndex: number): string => {
+export const buildFragmentSource = (def: EffectDef, passIndex: number): string => {
   assertParamsAreSound(def);
 
-  const uniforms = paramsOf(def)
-    .map((p) => `uniform ${GLSL_TYPE[p.kind]} u_${p.key};`)
-    .join('\n');
+  const uniforms = [
+    ...inputsOf(def).map((input) => `uniform sampler2D u_${input.key};`),
+    ...paramsOf(def).map((p) => `uniform ${GLSL_TYPE[p.kind]} u_${p.key};`),
+  ].join('\n');
 
   const bodies = passesOf(def);
   const isLast = passIndex === bodies.length - 1;

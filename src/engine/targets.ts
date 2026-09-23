@@ -1,9 +1,11 @@
 /**
- * Off-screen render targets for chaining effects.
+ * Off-screen render targets for running the graph.
  *
- * Effects read the previous stage and write the next, so a pass cannot read
- * and write the same texture. Two targets are enough for any chain length:
- * each pass reads one and writes the other, and they swap round.
+ * A pass cannot read and write the same texture, so every draw writes into a
+ * target nobody is reading. In a straight chain two targets alternating
+ * would do; a graph with branches needs as many as there are pictures alive
+ * at once -- the base waiting at a Blend while its layer is still being
+ * worked on -- which is what the pool is for.
  */
 
 export type RenderTarget = {
@@ -35,17 +37,20 @@ export const createTarget = (gl: WebGL2RenderingContext, width: number, height: 
 };
 
 /**
- * Targets sized to the working resolution, reallocated only when that
- * resolution actually changes.
+ * Working-resolution targets, handed out and taken back as the frame runs.
  *
- * Two of them alternate as the chain advances. The third is the hold: a
- * multi-pass effect stashes its own input there, because by its second
- * sub-pass the ping-pong has already overwritten it and passes like a bloom
- * combine still need the picture they started from.
+ * The pipeline acquires a target for each draw and releases it once the
+ * last pass that reads it has run, so the pool only ever grows to the most
+ * pictures that were alive at the same moment -- two for a plain chain,
+ * three inside a multi-pass effect, a few more for a graph with branches.
+ * Targets are kept across frames and reallocated only when the working
+ * resolution changes.
  */
-export class PingPong {
+export class TargetPool {
   private gl: WebGL2RenderingContext;
-  private targets: RenderTarget[] | null = null;
+  private all: RenderTarget[] = [];
+  /** A set, so releasing twice cannot hand one target to two owners. */
+  private free = new Set<RenderTarget>();
   private width = 0;
   private height = 0;
 
@@ -54,36 +59,39 @@ export class PingPong {
   }
 
   resize(width: number, height: number): void {
-    if (this.targets && this.width === width && this.height === height) return;
+    if (this.width === width && this.height === height) return;
     this.dispose();
-    this.targets = [
-      createTarget(this.gl, width, height),
-      createTarget(this.gl, width, height),
-      createTarget(this.gl, width, height),
-    ];
     this.width = width;
     this.height = height;
   }
 
-  /** Target `index` of the alternating pair, as the chain advances. */
-  at(index: number): RenderTarget {
-    if (!this.targets) throw new Error('PingPong used before resize()');
-    return this.targets[index % 2];
+  acquire(): RenderTarget {
+    if (this.width === 0) throw new Error('TargetPool used before resize()');
+    for (const target of this.free) {
+      this.free.delete(target);
+      return target;
+    }
+    const target = createTarget(this.gl, this.width, this.height);
+    this.all.push(target);
+    return target;
   }
 
-  /** The buffer set aside for a multi-pass effect's own input. */
-  hold(): RenderTarget {
-    if (!this.targets) throw new Error('PingPong used before resize()');
-    return this.targets[2];
+  release(target: RenderTarget): void {
+    this.free.add(target);
+  }
+
+  /** Everything back in the pool, at the end of a frame. */
+  releaseAll(): void {
+    for (const target of this.all) this.free.add(target);
   }
 
   dispose(): void {
-    if (!this.targets) return;
-    for (const target of this.targets) {
+    for (const target of this.all) {
       this.gl.deleteFramebuffer(target.framebuffer);
       this.gl.deleteTexture(target.texture);
     }
-    this.targets = null;
+    this.all = [];
+    this.free.clear();
     this.width = 0;
     this.height = 0;
   }

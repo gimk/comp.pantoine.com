@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Import, MonitorPlay, Plus } from 'lucide-react';
 import { registry } from '../engine/registry';
+import { modulatorRegistry } from '../engine/modulators';
 import { CATEGORY_LABELS, CATEGORY_ORDER, type Category, type EffectDef } from '../engine/effects';
 import {
   PALETTE_DRAG_MIME,
@@ -49,13 +50,16 @@ const PaletteItem: React.FC<{
  * Floating glass pill holding everything that can go on the canvas.
  *
  * Split the way the graph is: what comes in, what happens in the middle,
- * what comes out. The module menu is built from the effect registry, so a
- * new effect shows up the moment it is registered, and it is grouped by
- * category because a flat list of two dozen is not a menu anyone reads.
+ * what comes out. Modulators count as inputs: like an image, they have an
+ * output and nothing going in. The module menu is built from the effect
+ * registry, so a new effect shows up the moment it is registered, and it is
+ * grouped by category because a flat list of two dozen is not a menu
+ * anyone reads.
  */
 export const Toolbar: React.FC = () => {
   const addImageNode = useGraph((state) => state.addImageNode);
   const addEffectNode = useGraph((state) => state.addEffectNode);
+  const addModulatorNode = useGraph((state) => state.addModulatorNode);
   const addOutputNode = useGraph((state) => state.addOutputNode);
   const [openMenu, setOpenMenu] = useState<MenuId | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -110,12 +114,30 @@ export const Toolbar: React.FC = () => {
 
       {openMenu === 'input' && (
         <div className="glass toolbar-menu">
-          <PaletteItem
-            label="Image"
-            payload={{ kind: 'image' }}
-            onPick={() => addImageNode()}
-            onDone={close}
-          />
+          {/* Sources, both kinds: nodes with an output and nothing going in.
+              Headed by what they produce, since that is what decides where
+              their wire can go. */}
+          <div className="toolbar-menu-group">
+            <span className="toolbar-menu-heading">Picture</span>
+            <PaletteItem
+              label="Image"
+              payload={{ kind: 'image' }}
+              onPick={() => addImageNode()}
+              onDone={close}
+            />
+          </div>
+          <div className="toolbar-menu-group">
+            <span className="toolbar-menu-heading">Modulation</span>
+            {modulatorRegistry.map((def) => (
+              <PaletteItem
+                key={def.id}
+                label={def.label}
+                payload={{ kind: 'modulator', modulatorId: def.id }}
+                onPick={() => addModulatorNode(def.id)}
+                onDone={close}
+              />
+            ))}
+          </div>
         </div>
       )}
 

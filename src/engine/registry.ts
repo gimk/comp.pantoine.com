@@ -1,5 +1,6 @@
 import type { EffectDef } from './effects';
 import { blackwhite } from './modules/blackwhite';
+import { blend } from './modules/blend';
 import { bloom } from './modules/bloom';
 import { blur } from './modules/blur';
 import { chromaBleed } from './modules/chromaBleed';
@@ -44,6 +45,9 @@ export const registry: EffectDef[] = [
   threshold,
   chromaBleed,
   chromaticAberration,
+
+  // Composite
+  blend,
 
   // Blur & Glow
   blur,

@@ -12,8 +12,15 @@ import {
 } from '@xyflow/react';
 import { getEffect } from '../engine/registry';
 import { defaultParams, type ParamValue } from '../engine/effects';
+import { defaultModulatorParams, getModulator } from '../engine/modulators';
 import { decodeImage, dropImage, putImage, shareImage, swapImages } from '../engine/imageStore';
-import { DEFAULT_PREVIEW_WIDTH, identityAliases, type AppNode } from './graph';
+import {
+  DEFAULT_PREVIEW_WIDTH,
+  identityAliases,
+  isModulationEdge,
+  samePort,
+  type AppNode,
+} from './graph';
 import { highestIdSuffix, loadGraph, saveGraph } from './document';
 import { snapDrag, type Box, type SnapGuide } from './snapping';
 
@@ -38,8 +45,21 @@ const nextId = (prefix: string): string => {
 };
 
 /** What a fresh id for a copy of this node should be prefixed with. */
-const idPrefixFor = (node: AppNode): string =>
-  node.type === 'effect' ? node.data.effectId : node.type === 'image' ? 'image' : 'output';
+const idPrefixFor = (node: AppNode): string => {
+  if (node.type === 'effect') return node.data.effectId;
+  if (node.type === 'modulator') return node.data.modulatorId;
+  return node.type === 'image' ? 'image' : 'output';
+};
+
+/** A fresh wire between the same two ports as `edge`. */
+const rewire = (edge: Edge, source: string, target: string): Edge => ({
+  id: nextId('edge'),
+  source,
+  target,
+  sourceHandle: edge.sourceHandle ?? null,
+  targetHandle: edge.targetHandle ?? null,
+  type: 'link',
+});
 
 /**
  * Copies of a set of nodes, with fresh ids and the wiring a copy keeps.
@@ -76,7 +96,7 @@ const copySubgraph = (
     const target = ids.get(edge.target);
     if (!target) continue;
     const source = ids.get(edge.source) ?? (liveIds.has(edge.source) ? edge.source : undefined);
-    if (source) wires.push({ id: nextId('edge'), source, target, type: 'link' });
+    if (source) wires.push(rewire(edge, source, target));
   }
 
   return { nodes, edges: wires };
@@ -150,6 +170,7 @@ type GraphStore = {
   removeEdge: (edgeId: string) => void;
   reconnectLink: (oldEdge: Edge, connection: Connection) => void;
   addEffectNode: (effectId: string, position?: XYPosition) => void;
+  addModulatorNode: (modulatorId: string, position?: XYPosition) => void;
   addImageNode: (position?: XYPosition) => void;
   addOutputNode: (position?: XYPosition) => void;
   setParam: (nodeId: string, key: string, value: ParamValue) => void;
@@ -183,26 +204,31 @@ export const useGraph = create<GraphStore>((set, get) => ({
    * Splice a node into an existing link: A -> B becomes A -> node -> B.
    *
    * Only an effect qualifies, since it is the only kind with both an input
-   * and an output. Whatever the node was previously wired to is dropped --
-   * it is moving into this link, and an input takes one wire anyway.
+   * and an output, and only a link carrying a picture -- a modulation wire
+   * has nowhere for one to go. The node's main input and its outputs are
+   * dropped: it is moving into this link, and an input takes one wire
+   * anyway. Its extra inputs and modulation wires stay, since they belong
+   * to how the node is set up rather than to where it sits in the flow.
    */
   insertNodeOnEdge: (nodeId, edgeId) => {
     const { nodes, edges } = get();
     const node = nodes.find((candidate) => candidate.id === nodeId);
     const edge = edges.find((candidate) => candidate.id === edgeId);
-    if (!node || !edge || node.type !== 'effect') return;
+    if (!node || !edge || node.type !== 'effect' || isModulationEdge(edge)) return;
     if (edge.source === nodeId || edge.target === nodeId) return;
 
     const kept = edges.filter(
       (candidate) =>
-        candidate.id !== edgeId && candidate.source !== nodeId && candidate.target !== nodeId,
+        candidate.id !== edgeId &&
+        candidate.source !== nodeId &&
+        !(candidate.target === nodeId && samePort(candidate.targetHandle, null)),
     );
 
     set({
       edges: [
         ...kept,
-        { id: nextId('edge'), source: edge.source, target: nodeId, type: 'link' },
-        { id: nextId('edge'), source: nodeId, target: edge.target, type: 'link' },
+        { ...rewire(edge, edge.source, nodeId), targetHandle: null },
+        { ...rewire(edge, nodeId, edge.target), sourceHandle: null },
       ],
       insertTargetEdgeId: null,
     });
@@ -249,7 +275,9 @@ export const useGraph = create<GraphStore>((set, get) => ({
   onConnect: (connection) => {
     // An input takes one wire: connecting to an occupied port replaces what
     // was there, which is what dropping a new link on it is asking for.
-    const cleared = get().edges.filter((edge) => edge.target !== connection.target);
+    const cleared = get().edges.filter(
+      (edge) => edge.target !== connection.target || !samePort(edge.targetHandle, connection.targetHandle),
+    );
     set({ edges: addEdge({ ...connection, type: 'link' }, cleared) });
   },
 
@@ -267,7 +295,10 @@ export const useGraph = create<GraphStore>((set, get) => ({
    */
   reconnectLink: (oldEdge, connection) => {
     const kept = get().edges.filter(
-      (edge) => edge.id === oldEdge.id || edge.target !== connection.target,
+      (edge) =>
+        edge.id === oldEdge.id ||
+        edge.target !== connection.target ||
+        !samePort(edge.targetHandle, connection.targetHandle),
     );
     set({ edges: reconnectEdge(oldEdge, connection, kept) });
   },
@@ -283,6 +314,18 @@ export const useGraph = create<GraphStore>((set, get) => ({
       // does not stack into one unreadable pile.
       position: position ?? { x: 280, y: 100 + (get().nodes.length % 6) * 40 },
       data: { effectId, params: defaultParams(def) },
+    };
+    set({ nodes: [...get().nodes, node] });
+  },
+
+  addModulatorNode: (modulatorId, position) => {
+    const def = getModulator(modulatorId);
+    if (!def) return;
+    const node: AppNode = {
+      id: nextId(modulatorId),
+      type: 'modulator',
+      position: position ?? { x: 40, y: 380 + (get().nodes.length % 6) * 40 },
+      data: { modulatorId, params: defaultModulatorParams(def) },
     };
     set({ nodes: [...get().nodes, node] });
   },
@@ -310,8 +353,8 @@ export const useGraph = create<GraphStore>((set, get) => ({
   setParam: (nodeId, key, value) => {
     set({
       nodes: get().nodes.map((node) => {
-        if (node.id !== nodeId || node.type !== 'effect') return node;
-        return { ...node, data: { ...node.data, params: { ...node.data.params, [key]: value } } };
+        if (node.id !== nodeId || (node.type !== 'effect' && node.type !== 'modulator')) return node;
+        return { ...node, data: { ...node.data, params: { ...node.data.params, [key]: value } } } as AppNode;
       }),
     });
   },
@@ -388,7 +431,7 @@ export const useGraph = create<GraphStore>((set, get) => ({
     // on the originals as-is: exactly the wiring `copySubgraph` gives a copy.
     const carried = edges
       .filter((edge) => pairs.has(edge.target))
-      .map((edge): Edge => ({ id: nextId('edge'), source: edge.source, target: edge.target, type: 'link' }));
+      .map((edge) => rewire(edge, edge.source, edge.target));
 
     altDuplicate = pairs;
     set({ nodes: [...nodes, ...standIns], edges: [...rewired, ...carried] });

@@ -9,7 +9,49 @@ import {
 } from '../state/graph';
 import { Pipeline } from '../engine/pipeline';
 import { createContext } from '../engine/gl';
-import { getImage } from '../engine/imageStore';
+import { getImage, type LoadedImage } from '../engine/imageStore';
+import type { RenderPlan } from '../engine/pipeline';
+
+/**
+ * Every image a plan reads, or null if one has gone since it was resolved
+ * -- the chain is held in a ref between renders, and an image node can be
+ * deleted in that gap.
+ */
+const imagesFor = (plan: RenderPlan): Map<string, LoadedImage> | null => {
+  const images = new Map<string, LoadedImage>();
+  for (const step of plan.steps) {
+    if (step.kind !== 'image') continue;
+    const image = getImage(step.nodeId);
+    if (!image) return null;
+    images.set(step.nodeId, image);
+  }
+  return images;
+};
+
+/**
+ * What the picture depends on, as a string that changes when it does.
+ *
+ * Built by hand rather than by stringifying the plan: a pass carries its
+ * whole effect definition, shader source included, and serializing that on
+ * every render of every viewer would be the slowest thing on the canvas.
+ * Image versions are in it so that loading a new picture into the same
+ * node redraws.
+ */
+const signatureOf = (plan: RenderPlan): string =>
+  JSON.stringify([
+    plan.output,
+    plan.steps.map((step) =>
+      step.kind === 'image'
+        ? [step.nodeId, getImage(step.nodeId)?.version]
+        : [
+            step.pass.def.id,
+            step.pass.params,
+            step.input,
+            step.extras,
+            Object.entries(step.pass.modulation).map(([key, m]) => [key, m.def.id, m.params, m.seed]),
+          ],
+    ),
+  ]);
 
 /** Retina is worth it; beyond 2x is pixels nobody can see. */
 const MAX_DPR = 2;
@@ -107,9 +149,7 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
   chainRef.current = chain;
 
   // Redraw only when something the picture depends on actually moved.
-  const signature = chain
-    ? JSON.stringify([chain.sourceNodeId, chain.passes.map((pass) => [pass.def.id, pass.params])])
-    : 'empty';
+  const signature = chain ? signatureOf(chain.plan) : 'empty';
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -117,8 +157,8 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
     if (!canvas || !pipeline) return;
 
     const current = chainRef.current;
-    const image = current ? getImage(current.sourceNodeId) : undefined;
-    if (!current || !image) {
+    const images = current ? imagesFor(current.plan) : null;
+    if (!current || !images) {
       pipeline.clear(canvas.width, canvas.height);
       return;
     }
@@ -140,9 +180,9 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
     }
 
     pipeline.render({
-      nodeId: current.sourceNodeId,
-      image,
-      passes: current.passes,
+      plan: current.plan,
+      images,
+      primaryNodeId: current.sourceNodeId,
       time: ((now - startRef.current) / 1000) % TIME_WRAP,
       delta,
       frame: frameRef.current,
