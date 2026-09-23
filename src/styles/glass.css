@@ -1323,6 +1323,106 @@ textarea,
 }
 
 /* --------------------------------------------------------------------------
+   Quick add (Shift+A)
+
+   The catalog under the pointer: a short column of folders, each opening a
+   side menu level with its row. Fixed to the window rather than the graph,
+   so it stays put while the view does not matter.
+   -------------------------------------------------------------------------- */
+
+.quick-add {
+  position: fixed;
+  z-index: 30;
+}
+
+.quick-add-panel {
+  display: flex;
+  flex-direction: column;
+  width: 188px;
+  padding: 6px;
+  border-radius: var(--radius-md);
+}
+
+.quick-add-sub {
+  position: absolute;
+  left: calc(100% + 4px);
+  width: 210px;
+  max-height: calc(100vh - var(--gutter) * 2);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(23, 23, 26, 0.22) transparent;
+}
+
+.quick-add-sub.is-flipped {
+  left: auto;
+  right: calc(100% + 4px);
+}
+
+.quick-add-search {
+  margin-bottom: 4px;
+  padding: 7px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.6);
+  color: var(--text-primary);
+  font: inherit;
+  outline: none;
+}
+
+.quick-add-search:focus {
+  border-color: rgba(23, 23, 26, 0.24);
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.quick-add-search::-webkit-search-cancel-button {
+  display: none;
+}
+
+.quick-add-list {
+  max-height: 320px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.quick-add-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 11px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  outline: none;
+}
+
+.quick-add-item:hover,
+.quick-add-item:focus-visible,
+.quick-add-folder.is-open {
+  background: rgba(255, 255, 255, 0.85);
+}
+
+.quick-add-folder svg {
+  color: var(--text-dim);
+}
+
+.quick-add-hint {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.quick-add-empty {
+  padding: 8px 11px;
+  color: var(--text-dim);
+}
+
+/* --------------------------------------------------------------------------
    React Flow overrides
 
    The library paints its own background and edge colors; these strip that

@@ -138,6 +138,60 @@ export const setSnapping = (on: boolean): void => {
 /** Original id to the stand-in left behind, while an Alt-drag is in progress. */
 let altDuplicate: Map<string, string> | null = null;
 
+/**
+ * What a node drag is doing to the graph, besides moving nodes: nothing,
+ * lifting them out of their chain (Ctrl), or leaving copies behind (Alt).
+ */
+export type DragMode = 'move' | 'detach' | 'duplicate';
+
+/*
+ * The drag under way: which nodes, the wiring as it was when it began, and
+ * the mode in force. The wiring is kept so a mode can be let go of mid-drag
+ * and leave the graph exactly as it found it.
+ */
+let drag: { ids: string[]; edges: Edge[]; mode: DragMode } | null = null;
+
+export const dragMode = (): DragMode => drag?.mode ?? 'move';
+
+/** Take the stand-ins of an Alt-drag away again, as if it had never started. */
+const cancelAltDuplicate = (): void => {
+  const pairs = altDuplicate;
+  altDuplicate = null;
+  if (!pairs) return;
+  const standIns = new Set(pairs.values());
+  for (const standIn of standIns) {
+    identityAliases.delete(standIn);
+    dropImage(standIn);
+  }
+  useGraph.setState({ nodes: useGraph.getState().nodes.filter((node) => !standIns.has(node.id)) });
+};
+
+/**
+ * Ctrl and Alt, as the canvas sees them. Read on every key and pointer
+ * event, like Shift, so either can be pressed or let go at any point in a
+ * drag and the graph follows: Alt wins over Ctrl, and letting go of both
+ * puts the wiring back as it was.
+ */
+export const setDragModifiers = (keys: { ctrl: boolean; alt: boolean }): void => {
+  if (!drag) return;
+  const mode: DragMode = keys.alt ? 'duplicate' : keys.ctrl ? 'detach' : 'move';
+  if (mode === drag.mode) return;
+
+  // Back to plain moving first, then into the new mode from there.
+  if (drag.mode === 'duplicate') cancelAltDuplicate();
+  if (drag.mode !== 'move') useGraph.setState({ edges: drag.edges });
+  drag.mode = mode;
+
+  const store = useGraph.getState();
+  if (mode === 'duplicate') store.beginAltDuplicate(drag.ids);
+  if (mode === 'detach') {
+    store.detachFromChain(drag.ids);
+    // Lifting out and splicing in are opposites; the highlight goes now,
+    // not on the next pointer move.
+    store.setInsertTarget(null);
+  }
+};
+
 const initialNodes = (): AppNode[] => [
   {
     id: nextId('image'),
@@ -164,6 +218,7 @@ type GraphStore = {
   snapGuides: SnapGuide[];
   setInsertTarget: (edgeId: string | null) => void;
   insertNodeOnEdge: (nodeId: string, edgeId: string) => void;
+  detachFromChain: (ids: string[]) => void;
   onNodesChange: (changes: NodeChange<AppNode>[]) => void;
   onEdgesChange: (changes: EdgeChange[]) => void;
   onConnect: (connection: Connection) => void;
@@ -232,6 +287,57 @@ export const useGraph = create<GraphStore>((set, get) => ({
       ],
       insertTargetEdgeId: null,
     });
+  },
+
+  /**
+   * Lift modules out of the flow and close the gap behind them: A -> node
+   * -> B becomes A -> B, with the node left unwired on the way in and out.
+   * Ctrl-drag does this, and so does deleting a module or cutting it.
+   *
+   * Only effects qualify, the one kind that sits in a chain rather than at
+   * an end of it. Several dragged together come out as a group: wires among
+   * them stay, and only the ones crossing into or out of the group are
+   * bridged. Extra inputs and modulation wires stay, as they do on an
+   * insert, since they are how the node is set up, not where it sits.
+   */
+  detachFromChain: (ids) => {
+    const { nodes, edges } = get();
+    const lifted = new Set(
+      nodes.filter((node) => ids.includes(node.id) && node.type === 'effect').map((node) => node.id),
+    );
+    if (lifted.size === 0) return;
+
+    const mainInput = (nodeId: string): Edge | undefined =>
+      edges.find((edge) => edge.target === nodeId && samePort(edge.targetHandle, null));
+
+    // Walk back up the main inputs through the group to the first wire that
+    // comes from outside it: that is what the gap gets closed with.
+    const feedOf = (nodeId: string): Edge | undefined => {
+      const seen = new Set<string>();
+      let edge = mainInput(nodeId);
+      while (edge && lifted.has(edge.source) && !seen.has(edge.source)) {
+        seen.add(edge.source);
+        edge = mainInput(edge.source);
+      }
+      return edge && !lifted.has(edge.source) ? edge : undefined;
+    };
+
+    const bridges: Edge[] = [];
+    const kept = edges.filter((edge) => {
+      const out = lifted.has(edge.source) && !lifted.has(edge.target) && !isModulationEdge(edge);
+      const into =
+        lifted.has(edge.target) && !lifted.has(edge.source) && samePort(edge.targetHandle, null);
+      if (out) {
+        const feed = feedOf(edge.source);
+        if (feed) {
+          bridges.push({ ...rewire(edge, feed.source, edge.target), sourceHandle: feed.sourceHandle ?? null });
+        }
+      }
+      return !out && !into;
+    });
+
+    if (kept.length === edges.length) return;
+    set({ edges: [...kept, ...bridges] });
   },
 
   onNodesChange: (changes) => {
@@ -386,10 +492,12 @@ export const useGraph = create<GraphStore>((set, get) => ({
 
   beginDrag: (dragged) => {
     dragOrigins = new Map(dragged.map((node) => [node.id, { ...node.position }]));
+    drag = { ids: dragged.map((node) => node.id), edges: get().edges, mode: 'move' };
   },
 
   endDrag: () => {
     dragOrigins = null;
+    drag = null;
     if (get().snapGuides.length > 0) set({ snapGuides: [] });
   },
 
@@ -417,6 +525,8 @@ export const useGraph = create<GraphStore>((set, get) => ({
       return {
         ...node,
         id,
+        // Where the original started: Alt may be pressed well into a drag.
+        position: dragOrigins?.get(node.id) ?? node.position,
         data: structuredClone(node.data),
         selected: false,
         dragging: false,
@@ -520,6 +630,9 @@ export const useGraph = create<GraphStore>((set, get) => ({
   },
 
   removeNodes: (ids) => {
+    // A module taken out of a chain closes the gap behind it rather than
+    // leaving the chain broken.
+    get().detachFromChain(ids);
     const gone = new Set(ids);
     for (const id of gone) dropImage(id);
     set({

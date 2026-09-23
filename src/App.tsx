@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Background,
   BackgroundVariant,
@@ -17,6 +17,8 @@ import {
   decodePaletteItem,
   paletteDropOffset,
 } from './components/paletteDrag';
+import { addPaletteItem } from './components/paletteCatalog';
+import { QuickAdd } from './components/QuickAdd';
 import { MOD_OUTPUT, isModulationEdge, isParamPort, type AppNode } from './state/graph';
 import { ImageNode } from './components/ImageNode';
 import { EffectNode } from './components/EffectNode';
@@ -26,7 +28,7 @@ import { SnapGuides } from './components/SnapGuides';
 import { Toolbar } from './components/Toolbar';
 import { Transport } from './components/Transport';
 import { useCanvasShortcuts } from './components/useCanvasShortcuts';
-import { setVisibleAreaSource, useGraph } from './state/store';
+import { dragMode, setDragModifiers, setVisibleAreaSource, useGraph } from './state/store';
 import '@xyflow/react/dist/style.css';
 import './styles/glass.css';
 
@@ -89,7 +91,9 @@ const Editor: React.FC = () => {
    */
   const handleNodeDrag: OnNodeDrag<AppNode> = useCallback((_event, node) => {
     const { edges: current, setInsertTarget } = useGraph.getState();
-    if (node.type !== 'effect') {
+    // A Ctrl-drag lifts modules out of the flow, the opposite of splicing
+    // one in, so it never offers to.
+    if (node.type !== 'effect' || dragMode() === 'detach') {
       setInsertTarget(null);
       return;
     }
@@ -108,7 +112,9 @@ const Editor: React.FC = () => {
   const handleNodeDragStart: OnNodeDrag<AppNode> = useCallback((event, _node, dragged) => {
     const store = useGraph.getState();
     store.beginDrag(dragged);
-    if (event.altKey) store.beginAltDuplicate(dragged.map((node) => node.id));
+    // Held from the start, or pressed later -- useCanvasShortcuts keeps
+    // reporting them for as long as the drag lasts.
+    setDragModifiers({ ctrl: event.ctrlKey, alt: event.altKey });
   }, []);
 
   const handleNodeDragStop: OnNodeDrag<AppNode> = useCallback((_event, node) => {
@@ -122,7 +128,10 @@ const Editor: React.FC = () => {
   }, []);
 
   const { screenToFlowPosition } = useReactFlow();
-  useCanvasShortcuts(0.2);
+  // Shift+A: where the add menu is open, in screen pixels, or null.
+  const [quickAdd, setQuickAdd] = useState<{ x: number; y: number } | null>(null);
+  const closeQuickAdd = useCallback(() => setQuickAdd(null), []);
+  useCanvasShortcuts(0.2, setQuickAdd);
 
   // Snapping only considers modules on screen; this is how it finds out
   // where the screen is, read fresh each time rather than kept in sync.
@@ -162,13 +171,8 @@ const Editor: React.FC = () => {
       // The pointer is in screen pixels; the graph has its own pan and zoom.
       const point = screenToFlowPosition({ x: event.clientX, y: event.clientY });
       const offset = paletteDropOffset(item);
-      const position = { x: point.x - offset.x, y: point.y - offset.y };
 
-      const store = useGraph.getState();
-      if (item.kind === 'effect') store.addEffectNode(item.effectId, position);
-      else if (item.kind === 'modulator') store.addModulatorNode(item.modulatorId, position);
-      else if (item.kind === 'image') store.addImageNode(position);
-      else store.addOutputNode(position);
+      addPaletteItem(item, { x: point.x - offset.x, y: point.y - offset.y });
     },
     [screenToFlowPosition],
   );
@@ -197,6 +201,16 @@ const Editor: React.FC = () => {
     if (!reconnected.current) useGraph.getState().removeEdge(edge.id);
   }, []);
 
+  /*
+   * Delete or Backspace on a module in a chain joins the modules either side
+   * of it, rather than leaving a gap. The bridging wires go in first; React
+   * Flow then removes the module and whatever wires it had left.
+   */
+  const handleBeforeDelete = useCallback(async ({ nodes: doomed }: { nodes: AppNode[] }) => {
+    if (doomed.length > 0) useGraph.getState().detachFromChain(doomed.map((node) => node.id));
+    return true;
+  }, []);
+
   const edgesForFlow = useMemo(() => {
     if (!insertTargetEdgeId) return edges;
     return edges.map((edge) =>
@@ -205,43 +219,49 @@ const Editor: React.FC = () => {
   }, [edges, insertTargetEdgeId]);
 
   return (
-    <ReactFlow
-      nodes={nodes}
-      edges={edgesForFlow}
-      nodeTypes={nodeTypes}
-      edgeTypes={edgeTypes}
-      defaultEdgeOptions={defaultEdgeOptions}
-      onNodesChange={onNodesChange}
-      onEdgesChange={onEdgesChange}
-      onConnect={onConnect}
-      isValidConnection={isValidConnection}
-      onNodeDragStart={handleNodeDragStart}
-      onNodeDrag={handleNodeDrag}
-      onNodeDragStop={handleNodeDragStop}
-      onDragOver={handleDragOver}
-      onDrop={handleDrop}
-      onReconnect={handleReconnect}
-      onReconnectStart={handleReconnectStart}
-      onReconnectEnd={handleReconnectEnd}
-      edgesReconnectable
-      // Generous, because the grab target is a wire end rather than a port.
-      reconnectRadius={26}
-      // Delete is what most people reach for; Backspace is the library's own.
-      deleteKeyCode={['Backspace', 'Delete']}
-      // Shift-click adds to the selection, as it does in most editors; the
-      // library's default is Ctrl (Cmd on a Mac) alone, which still works.
-      multiSelectionKeyCode={['Shift', 'Meta', 'Control']}
-      // Space is play/pause. Holding it to pan is React Flow's default, and
-      // a redundant one here: dragging the empty canvas already pans.
-      panActivationKeyCode={null}
-      minZoom={0.3}
-      maxZoom={2}
-      fitView
-      fitViewOptions={fitViewOptions}
-    >
-      <SnapGuides />
-      <Background variant={BackgroundVariant.Dots} gap={26} size={1.4} color="rgba(23,23,26,0.16)" />
-    </ReactFlow>
+    <>
+      <ReactFlow
+        nodes={nodes}
+        edges={edgesForFlow}
+        nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
+        defaultEdgeOptions={defaultEdgeOptions}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
+        onConnect={onConnect}
+        isValidConnection={isValidConnection}
+        onNodeDragStart={handleNodeDragStart}
+        onNodeDrag={handleNodeDrag}
+        onNodeDragStop={handleNodeDragStop}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
+        onReconnect={handleReconnect}
+        onReconnectStart={handleReconnectStart}
+        onReconnectEnd={handleReconnectEnd}
+        onBeforeDelete={handleBeforeDelete}
+        edgesReconnectable
+        // Generous, because the grab target is a wire end rather than a port.
+        reconnectRadius={26}
+        // Delete is what most people reach for; Backspace is the library's own.
+        deleteKeyCode={['Backspace', 'Delete']}
+        // Shift-click adds to the selection, as it does in most editors, and
+        // Cmd on a Mac. Not Ctrl, the library's default: Ctrl-drag lifts a
+        // module out of its chain, and as a selection key it would drag
+        // every other selected module out with it.
+        multiSelectionKeyCode={['Shift', 'Meta']}
+        // Space is play/pause. Holding it to pan is React Flow's default, and
+        // a redundant one here: dragging the empty canvas already pans.
+        panActivationKeyCode={null}
+        minZoom={0.3}
+        maxZoom={2}
+        fitView
+        fitViewOptions={fitViewOptions}
+      >
+        <SnapGuides />
+        <Background variant={BackgroundVariant.Dots} gap={26} size={1.4} color="rgba(23,23,26,0.16)" />
+      </ReactFlow>
+      {quickAdd && <QuickAdd at={quickAdd} onClose={closeQuickAdd} />}
+    </>
   );
 };
 

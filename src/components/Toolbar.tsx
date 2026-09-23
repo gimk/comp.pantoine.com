@@ -1,20 +1,15 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Import, MonitorPlay, Plus } from 'lucide-react';
-import { registry } from '../engine/registry';
-import { modulatorRegistry, type ModulatorDef } from '../engine/modulators';
-import { CATEGORY_LABELS, CATEGORY_ORDER, type Category, type EffectDef } from '../engine/effects';
-import {
-  PALETTE_DRAG_MIME,
-  encodePaletteItem,
-  type PaletteItem as PaletteItemPayload,
-} from './paletteDrag';
-import { useGraph } from '../state/store';
+import { PALETTE_DRAG_MIME, encodePaletteItem } from './paletteDrag';
+import { addPaletteItem, catalog, type CatalogEntry, type CatalogFolder } from './paletteCatalog';
 
-type MenuId = 'input' | 'module' | 'output';
+type MenuId = CatalogFolder['id'];
 
-/** Sources make a signal from nothing; operators need one wired in. */
-const sources = modulatorRegistry.filter((def) => def.role === 'source');
-const operators = modulatorRegistry.filter((def) => def.role === 'operator');
+const ICONS: Record<MenuId, React.ReactNode> = {
+  input: <Import size={14} />,
+  module: <Plus size={14} />,
+  output: <MonitorPlay size={14} />,
+};
 
 /**
  * One entry in a palette menu.
@@ -23,66 +18,36 @@ const operators = modulatorRegistry.filter((def) => def.role === 'operator');
  * canvas, which is the fallback for touch and for the keyboard, where there
  * is no drag at all.
  */
-const PaletteItem: React.FC<{
-  label: string;
-  payload: PaletteItemPayload;
-  tag?: string;
-  onPick: () => void;
-  onDone: () => void;
-}> = ({ label, payload, tag, onPick, onDone }) => (
+const PaletteItem: React.FC<{ entry: CatalogEntry; onDone: () => void }> = ({ entry, onDone }) => (
   <button
     className="toolbar-menu-item"
     draggable
     onDragStart={(event) => {
-      event.dataTransfer.setData(PALETTE_DRAG_MIME, encodePaletteItem(payload));
+      event.dataTransfer.setData(PALETTE_DRAG_MIME, encodePaletteItem(entry.payload));
       event.dataTransfer.effectAllowed = 'copy';
     }}
     // Left open during the drag: removing the element being dragged
     // mid-gesture cancels it in some browsers.
     onDragEnd={onDone}
     onClick={() => {
-      onPick();
+      addPaletteItem(entry.payload);
       onDone();
     }}
   >
-    <span>{label}</span>
-    {tag && <span className="tag">{tag}</span>}
+    <span>{entry.label}</span>
+    {entry.tag && <span className="tag">{entry.tag}</span>}
   </button>
 );
 
 /**
- * Floating glass pill holding everything that can go on the canvas.
- *
- * Split the way the graph is: what comes in, what happens in the middle,
- * what comes out. Modulation sources count as inputs: like an image, they
- * have an output and nothing going in. Operators, which take signals in,
- * sit with the modules. The module menu is built from the effect
- * registry, so a new effect shows up the moment it is registered, and it is
- * grouped by category because a flat list of two dozen is not a menu
- * anyone reads.
+ * Floating glass pill holding everything that can go on the canvas, one
+ * menu per folder of the catalog (see paletteCatalog). Each menu is grouped
+ * under headings, because a flat list of two dozen is not a menu anyone
+ * reads. Shift+A on the canvas opens the same catalog under the pointer.
  */
 export const Toolbar: React.FC = () => {
-  const addImageNode = useGraph((state) => state.addImageNode);
-  const addEffectNode = useGraph((state) => state.addEffectNode);
-  const addModulatorNode = useGraph((state) => state.addModulatorNode);
-  const addOutputNode = useGraph((state) => state.addOutputNode);
   const [openMenu, setOpenMenu] = useState<MenuId | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
-
-  // Empty categories are dropped, so the menu never shows a heading with
-  // nothing under it while the module set is still filling out.
-  const groups = useMemo(() => {
-    const byCategory = new Map<Category, EffectDef[]>();
-    for (const def of registry) {
-      const existing = byCategory.get(def.category);
-      if (existing) existing.push(def);
-      else byCategory.set(def.category, [def]);
-    }
-    return CATEGORY_ORDER.flatMap((category) => {
-      const defs = byCategory.get(category);
-      return defs ? [{ category, defs }] : [];
-    });
-  }, []);
 
   // Dismiss on any click that lands outside the menu.
   useEffect(() => {
@@ -96,92 +61,43 @@ export const Toolbar: React.FC = () => {
 
   const close = () => setOpenMenu(null);
   const toggle = (menu: MenuId) => setOpenMenu((open) => (open === menu ? null : menu));
-
-  const modulatorItem = (def: ModulatorDef) => (
-    <PaletteItem
-      key={def.id}
-      label={def.label}
-      payload={{ kind: 'modulator', modulatorId: def.id }}
-      onPick={() => addModulatorNode(def.id)}
-      onDone={close}
-    />
-  );
-
-  const button = (menu: MenuId, icon: React.ReactNode, label: string) => (
-    <button
-      className={'toolbar-button' + (openMenu === menu ? ' is-active' : '')}
-      onClick={() => toggle(menu)}
-    >
-      {icon}
-      <span>{label}</span>
-    </button>
-  );
+  const folder = catalog.find((f) => f.id === openMenu);
 
   return (
     <div className="toolbar" ref={rootRef}>
       <div className="glass toolbar-pill">
         <span className="brand">COMP</span>
         <span className="toolbar-sep" />
-        {button('input', <Import size={14} />, 'Input')}
-        {button('module', <Plus size={14} />, 'Module')}
-        {button('output', <MonitorPlay size={14} />, 'Output')}
+        {catalog.map((f) => (
+          <button
+            key={f.id}
+            className={'toolbar-button' + (openMenu === f.id ? ' is-active' : '')}
+            onClick={() => toggle(f.id)}
+          >
+            {ICONS[f.id]}
+            <span>{f.label}</span>
+          </button>
+        ))}
       </div>
 
-      {openMenu === 'input' && (
+      {folder && (
         <div className="glass toolbar-menu">
-          {/* Sources, both kinds: nodes with an output and nothing going in.
-              Headed by what they produce, since that is what decides where
-              their wire can go. */}
-          <div className="toolbar-menu-group">
-            <span className="toolbar-menu-heading">Picture</span>
-            <PaletteItem
-              label="Image"
-              payload={{ kind: 'image' }}
-              onPick={() => addImageNode()}
-              onDone={close}
-            />
-          </div>
-          <div className="toolbar-menu-group">
-            <span className="toolbar-menu-heading">Modulation</span>
-            {sources.map(modulatorItem)}
-          </div>
-        </div>
-      )}
-
-      {openMenu === 'output' && (
-        <div className="glass toolbar-menu">
-          <PaletteItem
-            label="Viewer"
-            payload={{ kind: 'output' }}
-            onPick={() => addOutputNode()}
-            onDone={close}
-          />
-        </div>
-      )}
-
-      {openMenu === 'module' && (
-        <div className="glass toolbar-menu">
-          {groups.map(({ category, defs }) => (
-            <div className="toolbar-menu-group" key={category}>
-              <span className="toolbar-menu-heading">{CATEGORY_LABELS[category]}</span>
-              {defs.map((def) => (
-                <PaletteItem
-                  key={def.id}
-                  label={def.label}
-                  payload={{ kind: 'effect', effectId: def.id }}
-                  /* A function means "animated at some settings" -- the tag
-                     marks what can move, not what happens to be moving. */
-                  tag={def.animated !== false ? 'animated' : undefined}
-                  onPick={() => addEffectNode(def.id)}
-                  onDone={close}
-                />
-              ))}
-            </div>
-          ))}
-          <div className="toolbar-menu-group">
-            <span className="toolbar-menu-heading">Math</span>
-            {operators.map(modulatorItem)}
-          </div>
+          {folder.groups.map((group, i) =>
+            group.heading ? (
+              <div className="toolbar-menu-group" key={group.heading}>
+                <span className="toolbar-menu-heading">{group.heading}</span>
+                {group.entries.map((entry) => (
+                  <PaletteItem key={entry.key} entry={entry} onDone={close} />
+                ))}
+              </div>
+            ) : (
+              <React.Fragment key={i}>
+                {group.entries.map((entry) => (
+                  <PaletteItem key={entry.key} entry={entry} onDone={close} />
+                ))}
+              </React.Fragment>
+            ),
+          )}
         </div>
       )}
     </div>

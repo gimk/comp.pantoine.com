@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useReactFlow } from '@xyflow/react';
 import { redo, undo } from '../state/history';
-import { setSnapping, useGraph } from '../state/store';
+import { isDragging, setDragModifiers, setSnapping, useGraph } from '../state/store';
 import { resetClock, togglePlaying } from '../engine/clock';
 
 /** How far a Ctrl+D copy lands from its original, in graph units. */
@@ -43,26 +43,51 @@ const spaceBelongsTo = (target: EventTarget | null): boolean => {
  *   Escape               clear the selection
  *   F                    frame the selection, or the whole graph
  *   Space                play / pause
- *   Home                 back to time 0
+ *   R (or Home)          back to time 0
+ *   Shift + A            the add menu, under the pointer
  *   Shift (while dragging) snap to other modules' centres
+ *   Ctrl (while dragging)  lift the module out of its chain
+ *   Alt (while dragging)   leave a copy behind
  *
- * Alt-drag duplication and Shift-click selection are pointer gestures and
- * live on the ReactFlow props instead.
+ * The three drag modifiers can be pressed or let go at any point in a drag.
+ * Shift-click selection is a pointer gesture and lives on the ReactFlow
+ * props instead.
  */
-export const useCanvasShortcuts = (fitPadding: number): void => {
+export const useCanvasShortcuts = (
+  fitPadding: number,
+  onQuickAdd: (at: { x: number; y: number }) => void,
+): void => {
   const { fitView, screenToFlowPosition } = useReactFlow();
   const pointer = useRef<{ x: number; y: number } | null>(null);
+  // Read through a ref, so a new callback each render does not rebind the
+  // window listeners.
+  const quickAdd = useRef(onQuickAdd);
+  quickAdd.current = onQuickAdd;
 
   useEffect(() => {
+    // Shift snaps, Ctrl lifts out of the chain, Alt duplicates: all three
+    // follow the keys for the whole of a drag, not just how it started.
+    const trackModifiers = (event: KeyboardEvent | PointerEvent) => {
+      setSnapping(event.shiftKey);
+      setDragModifiers({ ctrl: event.ctrlKey, alt: event.altKey });
+    };
+
     const onPointerMove = (event: PointerEvent) => {
       pointer.current = { x: event.clientX, y: event.clientY };
-      // Also caught here, so a Shift pressed before the window had focus
+      // Also caught here, so a key pressed before the window had focus
       // still counts once the pointer moves.
-      setSnapping(event.shiftKey);
+      trackModifiers(event);
     };
 
     const onKeyDown = (event: KeyboardEvent) => {
-      setSnapping(event.shiftKey);
+      trackModifiers(event);
+      if (isDragging()) {
+        // Alt on its own, pressed and let go, would otherwise send focus to
+        // the browser's menu bar on Windows. And nothing else is a shortcut
+        // while a drag is under way.
+        if (event.key === 'Alt') event.preventDefault();
+        return;
+      }
       if (isTypingInto(event.target)) return;
 
       const store = useGraph.getState();
@@ -100,9 +125,14 @@ export const useCanvasShortcuts = (fitPadding: number): void => {
         // Or the page scrolls, or a focused transport button clicks too.
         event.preventDefault();
         if (!event.repeat) togglePlaying();
-      } else if (!mod && !event.altKey && key === 'home') {
+      } else if (!mod && !event.altKey && (key === 'home' || (key === 'r' && !event.shiftKey))) {
         event.preventDefault();
         resetClock();
+      } else if (!mod && !event.altKey && event.shiftKey && key === 'a') {
+        event.preventDefault();
+        // A pointer that has not moved since the page loaded has no known
+        // position; the middle of the window is the next best guess.
+        quickAdd.current(pointer.current ?? { x: window.innerWidth / 2, y: window.innerHeight / 2 });
       } else if (!mod && !event.altKey && key === 'f') {
         const selected = store.nodes.filter((node) => node.selected);
         void fitView({
@@ -113,9 +143,15 @@ export const useCanvasShortcuts = (fitPadding: number): void => {
       }
     };
 
-    const onKeyUp = (event: KeyboardEvent) => setSnapping(event.shiftKey);
-    // A Shift released while another window had focus never reports back.
-    const onBlur = () => setSnapping(false);
+    const onKeyUp = (event: KeyboardEvent) => {
+      trackModifiers(event);
+      if (isDragging() && event.key === 'Alt') event.preventDefault();
+    };
+    // A key released while another window had focus never reports back.
+    const onBlur = () => {
+      setSnapping(false);
+      setDragModifiers({ ctrl: false, alt: false });
+    };
 
     window.addEventListener('pointermove', onPointerMove);
     window.addEventListener('keydown', onKeyDown);
