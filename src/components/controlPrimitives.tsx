@@ -89,7 +89,8 @@ export const Slider: React.FC<{
   useLivePaint(
     live,
     (current) => {
-      const t = max > min ? (current - min) / (max - min) : 0;
+      // Held on the track: a value past the slider's end sits at the end.
+      const t = max > min ? clampTo((current - min) / (max - min), 0, 1) : 0;
       if (valueRef.current) valueRef.current.textContent = current.toFixed(decimals);
       if (dotRef.current) dotRef.current.style.left = `calc(${THUMB_HALF}px + (100% - ${THUMB_HALF * 2}px) * ${t})`;
     },
@@ -97,20 +98,34 @@ export const Slider: React.FC<{
   );
 
   return (
-    <label className={'control' + lockClass(live)}>
+    // A div rather than a label: a label forwards any click inside it to
+    // the range input, which would swallow a click meant for the number.
+    <div className={'control' + lockClass(live)}>
       <span className="control-row">
         <span className="control-label">{label}</span>
-        {/* Keyed on whether it is wired: the frame loop writes this text
-            behind React's back, so when the wire comes off the element is
-            replaced rather than left showing the last value it received. */}
-        <span className="control-value" ref={valueRef} key={live ? 'wired' : 'set'}>
-          {value.toFixed(decimals)}
-        </span>
+        {live ? (
+          // Keyed on being wired: the frame loop writes this text behind
+          // React's back, so when the wire comes off the element is
+          // replaced rather than left showing the last value it received.
+          <span className="control-value" ref={valueRef} key="wired" />
+        ) : (
+          <TypedValue
+            value={value}
+            decimals={decimals}
+            label={label}
+            // The slider's maximum is only where the slider stops: a typed
+            // value may go past it. Its minimum still holds, since that is
+            // what keeps an effect out of values that break it. Not snapped
+            // to the step, so a value between notches can be typed too.
+            onCommit={(typed) => onChange(Math.max(step === 1 ? Math.round(typed) : typed, min))}
+          />
+        )}
       </span>
       <span className="control-track">
         <input
           className="control-slider nodrag"
           type="range"
+          aria-label={label}
           min={min}
           max={max}
           step={step}
@@ -121,7 +136,72 @@ export const Slider: React.FC<{
         />
         {live && <span className="control-live-dot" ref={dotRef} aria-hidden="true" />}
       </span>
-    </label>
+    </div>
+  );
+};
+
+const clampTo = (x: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, x));
+
+/**
+ * A slider's number, which turns into a text box when clicked -- for the
+ * exact value a drag is too coarse to land on.
+ *
+ * Enter or clicking away commits; Escape puts it back. Anything that does
+ * not parse as a number is dropped rather than committed as zero.
+ */
+const TypedValue: React.FC<{
+  value: number;
+  decimals: number;
+  label: string;
+  onCommit: (value: number) => void;
+}> = ({ value, decimals, label, onCommit }) => {
+  const [editing, setEditing] = useState(false);
+  // Set by Escape, so the blur that follows closing the box does not
+  // commit what was just abandoned.
+  const cancelled = useRef(false);
+
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        className="control-value control-value-button nodrag"
+        title="Click to type a value"
+        aria-label={`${label}: ${value.toFixed(decimals)}. Click to type a value`}
+        onClick={() => {
+          cancelled.current = false;
+          setEditing(true);
+        }}
+      >
+        {value.toFixed(decimals)}
+      </button>
+    );
+  }
+
+  const finish = (text: string) => {
+    setEditing(false);
+    if (cancelled.current) return;
+    const typed = parseFloat(text);
+    if (Number.isFinite(typed)) onCommit(typed);
+  };
+
+  return (
+    <input
+      className="control-value-edit nodrag"
+      type="text"
+      inputMode="decimal"
+      aria-label={label}
+      defaultValue={value.toFixed(decimals)}
+      autoFocus
+      onFocus={(e) => e.currentTarget.select()}
+      onBlur={(e) => finish(e.currentTarget.value)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') e.currentTarget.blur();
+        if (e.key === 'Escape') {
+          cancelled.current = true;
+          e.currentTarget.blur();
+        }
+      }}
+    />
   );
 };
 
@@ -159,15 +239,28 @@ export const NumberField: React.FC<{
     [],
   );
 
+  const inputRef = useRef<HTMLInputElement>(null);
+  const scrub = useScrub(value, step, onChange, () => inputRef.current?.focus());
+
   return (
-    <label className={'control control-inline' + lockClass(live)}>
-      <span className="control-label">{label}</span>
+    // A div rather than a label: a label would also focus the box at the
+    // end of every scrub, since a drag on it still ends in a click.
+    <div className={'control control-inline' + lockClass(live)}>
+      {live ? (
+        <span className="control-label">{label}</span>
+      ) : (
+        <span className="control-label control-scrub nodrag" title="Drag to change · Shift faster · Alt finer" {...scrub}>
+          {label}
+        </span>
+      )}
       {live ? (
         <span className="control-value control-field-live" ref={valueRef} />
       ) : (
         <input
+          ref={inputRef}
           className="control-field nodrag"
           type="number"
+          aria-label={label}
           step={step}
           value={text}
           onFocus={() => {
@@ -184,8 +277,72 @@ export const NumberField: React.FC<{
           }}
         />
       )}
-    </label>
+    </div>
   );
+};
+
+/** Pointer travel, in pixels, before a press on the label counts as a drag. */
+const SCRUB_THRESHOLD = 2;
+
+/**
+ * Figma's scrubbing: drag a field's label sideways to change its value.
+ *
+ * How far one pixel moves the value follows the value's own size -- a
+ * hundredth of its order of magnitude -- so the same gesture sweeps a line
+ * count through the hundreds and eases a factor through its hundredths,
+ * and never less than the field's step. Shift is ten times faster, Alt ten
+ * times finer. The rate is fixed when the drag starts, so it does not jump
+ * as the value crosses a power of ten under the pointer.
+ *
+ * A press that barely moves is a click, and puts the caret in the box.
+ */
+const useScrub = (
+  value: number,
+  step: number,
+  onChange: (value: number) => void,
+  onClick: () => void,
+): React.HTMLAttributes<HTMLSpanElement> => {
+  const drag = useRef<{ x: number; start: number; rate: number; moved: boolean } | null>(null);
+
+  const perPixel = (from: number): number => {
+    const magnitude = Math.abs(from) > 0 ? 10 ** Math.floor(Math.log10(Math.abs(from))) : 0;
+    return Math.max(step, magnitude / 100);
+  };
+
+  return {
+    onPointerDown: (event) => {
+      if (event.button !== 0) return;
+      // No text selection, no focus change, no node drag underneath.
+      event.preventDefault();
+      event.stopPropagation();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      drag.current = { x: event.clientX, start: value, rate: perPixel(value), moved: false };
+    },
+    onPointerMove: (event) => {
+      const current = drag.current;
+      if (!current) return;
+      const dx = event.clientX - current.x;
+      if (!current.moved && Math.abs(dx) < SCRUB_THRESHOLD) return;
+      current.moved = true;
+      const speed = event.shiftKey ? 10 : event.altKey ? 0.1 : 1;
+      const increment = current.rate * speed;
+      // Rounded to the increment's own precision, so a drag lands on clean
+      // figures instead of float residue like 0.30000000000000004.
+      const decimals = Math.max(0, -Math.floor(Math.log10(increment)));
+      onChange(Number((current.start + dx * increment).toFixed(decimals)));
+    },
+    onPointerUp: (event) => {
+      const current = drag.current;
+      drag.current = null;
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+      if (current && !current.moved) onClick();
+    },
+    onPointerCancel: () => {
+      drag.current = null;
+    },
+  };
 };
 
 /** A free number shown to as many places as it needs, up to three. */

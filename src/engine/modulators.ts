@@ -57,6 +57,11 @@ export type ModulatorDef = {
    * applied to params with no wire of their own.
    */
   derive?: (params: Record<string, ParamValue>, inputs: Record<string, Interval | null>) => Record<string, number>;
+  /**
+   * Set false for a node whose numbers should take no wires -- one where a
+   * wire could only pass the signal straight through.
+   */
+  ports?: false;
 };
 
 /** A closed range of numbers, low end first. */
@@ -104,9 +109,12 @@ export const modulatorParamsOf = (def: ModulatorDef): ParamSpec[] => def.params;
 export const isModulatable = (spec: ParamSpec): spec is Extract<ParamSpec, { kind: 'float' | 'int' }> =>
   spec.kind === 'float' || spec.kind === 'int';
 
-/** Every number on a modulator takes a wire, as every socket does in a node editor. */
+/**
+ * Every number on a modulator takes a wire, as every socket does in a node
+ * editor -- unless the node opts out.
+ */
 export const modulatorPortsOf = (def: ModulatorDef): string[] =>
-  def.params.filter(isModulatable).map((spec) => spec.key);
+  def.ports === false ? [] : def.params.filter(isModulatable).map((spec) => spec.key);
 
 export const defaultModulatorParams = (def: ModulatorDef): Record<string, ParamValue> => {
   const params: Record<string, ParamValue> = {};
@@ -169,7 +177,7 @@ export const lfo: ModulatorDef = {
   role: 'source',
   params: [
     { kind: 'enum', key: 'shape', label: 'Shape', options: [...LFO_SHAPES], default: 0 },
-    { kind: 'float', key: 'rate', label: 'Rate (Hz)', min: 0, max: 10, step: 0.01, default: 0.5 },
+    { kind: 'float', key: 'rate', label: 'Rate (Hz)', min: 0, max: 5, step: 0.01, default: 0.5 },
     { kind: 'float', key: 'phase', label: 'Phase', min: 0, max: 1, step: 0.01, default: 0 },
     ...AMPLITUDE_OFFSET,
   ],
@@ -212,7 +220,7 @@ export const noise: ModulatorDef = {
   label: 'Noise',
   role: 'source',
   params: [
-    { kind: 'float', key: 'rate', label: 'Rate (Hz)', min: 0, max: 10, step: 0.01, default: 0.5 },
+    { kind: 'float', key: 'rate', label: 'Rate (Hz)', min: 0, max: 5, step: 0.01, default: 0.5 },
     { kind: 'int', key: 'octaves', label: 'Octaves', min: 1, max: 6, default: 3 },
     ...AMPLITUDE_OFFSET,
   ],
@@ -249,7 +257,7 @@ export const pulse: ModulatorDef = {
   label: 'Pulse',
   role: 'source',
   params: [
-    { kind: 'float', key: 'rate', label: 'Rate (Hz)', min: 0, max: 20, step: 0.01, default: 2 },
+    { kind: 'float', key: 'rate', label: 'Rate (Hz)', min: 0, max: 5, step: 0.01, default: 2 },
     { kind: 'float', key: 'width', label: 'Width', min: 0, max: 1, step: 0.01, default: 0.5 },
     { kind: 'float', key: 'chance', label: 'Chance', min: 0, max: 1, step: 0.01, default: 1 },
     { kind: 'float', key: 'softness', label: 'Softness', min: 0, max: 0.5, step: 0.01, default: 0 },
@@ -270,11 +278,17 @@ export const pulse: ModulatorDef = {
   bounds: (ranges) => scaledBounds([0, 1], ranges),
 };
 
-/** A number, standing still -- for driving several knobs from one place. */
+/**
+ * A number, standing still -- for driving several knobs from one place.
+ *
+ * No port on its field: a signal wired into it would come straight back
+ * out, so the node would be a length of wire with a card on it.
+ */
 export const value: ModulatorDef = {
   id: 'value',
   label: 'Value',
   role: 'source',
+  ports: false,
   params: [field('value', 'Value', 1)],
   sample: (params) => num(params.value, 0),
   moving: () => false,
@@ -476,10 +490,11 @@ export type Signal = {
 /**
  * The value a wired param takes at `time`: the signal, as it arrives.
  *
- * `range` clamps it to the param's declared limits. An effect's params
- * get that -- shaders are written assuming their knobs stay inside the
- * range their specs declare, and a signal is not a reason to hand one a
- * negative radius. A modulator's free fields do not need it.
+ * `range` holds it at or above the param's declared minimum. A slider's
+ * maximum is only where the slider stops -- a value typed past it is
+ * allowed, and so is one arriving on a wire -- but its minimum guards
+ * against the values that break an effect: no lines, a negative radius,
+ * no persistence. A modulator's free fields have neither.
  *
  * The one place this is decided, so the renderer and the number shown on
  * the card cannot come to different answers.
@@ -491,7 +506,7 @@ export const readPort = (
   range: boolean,
 ): number => {
   const value = evaluateSignal(signal, time);
-  return range ? clamp(value, spec.min, spec.max) : value;
+  return range ? Math.max(value, spec.min) : value;
 };
 
 /**
@@ -545,11 +560,10 @@ export const signalBounds = (signal: Signal): Interval | null => {
     const input = inputs[spec.key];
     if (input) {
       const range = signalBounds(input);
-      // A slider clamps what arrives, so its range narrows to fit; a free
-      // field takes whatever comes.
+      // A slider holds what arrives at or above its minimum, so the range
+      // narrows to fit; a free field takes whatever comes.
       const free = spec.kind === 'float' && spec.field;
-      ranges[spec.key] =
-        range && !free ? [clamp(range[0], spec.min, spec.max), clamp(range[1], spec.min, spec.max)] : range;
+      ranges[spec.key] = range && !free ? [Math.max(range[0], spec.min), Math.max(range[1], spec.min)] : range;
     } else {
       const v = num(params[spec.key], spec.default);
       ranges[spec.key] = [v, v];
@@ -588,7 +602,7 @@ export const signalKey = (signal: Signal): unknown => [
 
 /**
  * The value a param is drawn with at `time`: the signal if one is wired,
- * clamped to the param's range; otherwise the value it is set to.
+ * held at or above the param's minimum; otherwise the value it is set to.
  */
 export const modulatedValue = (
   spec: ParamSpec,

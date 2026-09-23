@@ -145,8 +145,8 @@ export const ParamRow: React.FC<{
   const live = useMemo<LiveReading | undefined>(() => {
     if (!signal && derived !== undefined) return { read: () => derived, moving: false, derived: true };
     if (!signal || !isModulatable(spec)) return undefined;
-    // A slider's range is a promise to the effect behind it, so what
-    // arrives is clamped to it; a free field has no range to keep.
+    // A slider's minimum guards the effect behind it, so what arrives is
+    // held above it; a free field has no range to keep.
     const range = !(spec.kind === 'float' && spec.field);
     return { read: (time) => readPort(spec, signal, time, range), moving: signalIsMoving(signal) };
   }, [signal, spec, derived]);

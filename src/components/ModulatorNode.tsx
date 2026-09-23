@@ -9,6 +9,7 @@ import {
   modulatorParamsOf,
   modulatorPortsOf,
   signalBounds,
+  signalIsMoving,
   signalKey,
   type Signal,
 } from '../engine/modulators';
@@ -17,8 +18,11 @@ import { ParamRow } from './EffectNode';
 
 const SCOPE_WIDTH = 170;
 const SCOPE_HEIGHT = 34;
-/** Seconds of signal the scope shows, so a faster rate packs more cycles in. */
-const SCOPE_SECONDS = 4;
+/**
+ * Seconds of signal the scope shows. Fixed at one, so the trace reads
+ * directly against Rate: 1 Hz is one cycle, 3 Hz is three.
+ */
+const SCOPE_SECONDS = 1;
 const SCOPE_SAMPLES = 160;
 /** Inset from the top and bottom edges, so the trace's stroke is not clipped. */
 const SCOPE_PAD = 3;
@@ -27,14 +31,15 @@ const SCOPE_PAD = 3;
 const formatBound = (value: number): string => String(Math.round(value * 100) / 100);
 
 /**
- * Four seconds of this node's output, drawn from the same function the
+ * One second of this node's output, drawn from the same function the
  * renderer calls -- inputs included -- so the picture of the signal cannot
  * drift from what it does.
  *
  * Scaled to the lowest and highest the signal can reach, which are
  * written at the side: with raw numbers, those two figures are the answer
  * to "what will this do to the knob I plug it into?". A flat signal shows
- * as a line through the middle, with its one value.
+ * as a line through the middle, with its one value -- a Pulse whose Chance
+ * is 0, say.
  *
  * Still rather than scrolling. A moving trace would need a frame loop per
  * card for something that only changes when a knob or a wire does, and
@@ -47,7 +52,7 @@ const Scope: React.FC<{ signal: Signal }> = ({ signal }) => {
     values.push(evaluateSignal(signal, (i / SCOPE_SAMPLES) * SCOPE_SECONDS));
   }
   // The signal's true range where it is known -- a random source may not
-  // reach its extremes in four seconds -- and what was sampled otherwise.
+  // reach its extremes inside the window -- and what was sampled otherwise.
   const known = signalBounds(signal);
   const lo = known ? known[0] : Math.min(...values);
   const hi = known ? known[1] : Math.max(...values);
@@ -65,6 +70,7 @@ const Scope: React.FC<{ signal: Signal }> = ({ signal }) => {
       </svg>
       <span className="mod-scope-bound is-high">{formatBound(hi)}</span>
       {!flat && <span className="mod-scope-bound is-low">{formatBound(lo)}</span>}
+      <span className="mod-scope-window">{SCOPE_SECONDS} s</span>
     </div>
   );
 };
@@ -120,7 +126,10 @@ export const ModulatorNode: React.FC<NodeProps<Node<ModulatorNodeData, 'modulato
       </div>
 
       <div className="node-body">
-        {signal && <Scope signal={signal} />}
+        {/* Only for a signal that moves. One standing still -- a Value, or a
+            Math fed only by Values -- would draw a flat line, and its one
+            number is already on the card. */}
+        {signal && signalIsMoving(signal) && <Scope signal={signal} />}
         {modulatorParamsOf(def).map((spec) => (
           <ParamRow
             key={spec.key}
