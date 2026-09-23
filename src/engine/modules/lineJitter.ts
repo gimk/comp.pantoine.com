@@ -9,6 +9,9 @@ import type { EffectDef } from '../effects';
  * that "only some" -- at 1.0 every line tears, which reads as static rather
  * than as a tape fault.
  *
+ * Lines is how many bands the height is cut into, rather than a band
+ * height in pixels, for the reason Scanlines gives.
+ *
  * Held for whole steps at Rate rather than redrawn per frame, because tape
  * damage is a property of the tape and should persist for a beat, not boil
  * at the monitor's refresh.
@@ -20,12 +23,12 @@ export const lineJitter: EffectDef = {
   animated: (params) => params.rate !== 0,
   params: [
     { kind: 'float', key: 'amount', label: 'Amount', min: 0, max: 0.2, step: 0.001, default: 0.02 },
-    { kind: 'float', key: 'thickness', label: 'Thickness', min: 1, max: 20, step: 0.5, default: 2 },
+    { kind: 'float', key: 'lines', label: 'Lines', min: 10, max: 1080, step: 1, default: 240 },
     { kind: 'float', key: 'density', label: 'Density', min: 0, max: 1, step: 0.01, default: 0.3 },
     { kind: 'float', key: 'rate', label: 'Rate', min: 0, max: 60, step: 1, default: 12 },
     { kind: 'enum', key: 'edge', label: 'Edge', options: ['Clamp', 'Wrap', 'Black', 'Mirror'], default: 0 },
   ],
-  fragment: `  float line = floor(v_uv.y * u_resolution.y / max(u_thickness, 1.0));
+  fragment: `  float line = floor(v_uv.y * max(u_lines, 1.0));
   float tick = floor(u_time * u_rate);
   vec2 key = vec2(line, tick + u_seed * 313.0);
 

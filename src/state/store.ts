@@ -324,7 +324,8 @@ export const useGraph = create<GraphStore>((set, get) => ({
     const node: AppNode = {
       id: nextId(modulatorId),
       type: 'modulator',
-      position: position ?? { x: 40, y: 380 + (get().nodes.length % 6) * 40 },
+      // Sources start in the input column, operators in the module column.
+      position: position ?? { x: def.role === 'source' ? 40 : 280, y: 380 + (get().nodes.length % 6) * 40 },
       data: { modulatorId, params: defaultModulatorParams(def) },
     };
     set({ nodes: [...get().nodes, node] });

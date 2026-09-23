@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Import, MonitorPlay, Plus } from 'lucide-react';
 import { registry } from '../engine/registry';
-import { modulatorRegistry } from '../engine/modulators';
+import { modulatorRegistry, type ModulatorDef } from '../engine/modulators';
 import { CATEGORY_LABELS, CATEGORY_ORDER, type Category, type EffectDef } from '../engine/effects';
 import {
   PALETTE_DRAG_MIME,
@@ -11,6 +11,10 @@ import {
 import { useGraph } from '../state/store';
 
 type MenuId = 'input' | 'module' | 'output';
+
+/** Sources make a signal from nothing; operators need one wired in. */
+const sources = modulatorRegistry.filter((def) => def.role === 'source');
+const operators = modulatorRegistry.filter((def) => def.role === 'operator');
 
 /**
  * One entry in a palette menu.
@@ -50,8 +54,9 @@ const PaletteItem: React.FC<{
  * Floating glass pill holding everything that can go on the canvas.
  *
  * Split the way the graph is: what comes in, what happens in the middle,
- * what comes out. Modulators count as inputs: like an image, they have an
- * output and nothing going in. The module menu is built from the effect
+ * what comes out. Modulation sources count as inputs: like an image, they
+ * have an output and nothing going in. Operators, which take signals in,
+ * sit with the modules. The module menu is built from the effect
  * registry, so a new effect shows up the moment it is registered, and it is
  * grouped by category because a flat list of two dozen is not a menu
  * anyone reads.
@@ -92,6 +97,16 @@ export const Toolbar: React.FC = () => {
   const close = () => setOpenMenu(null);
   const toggle = (menu: MenuId) => setOpenMenu((open) => (open === menu ? null : menu));
 
+  const modulatorItem = (def: ModulatorDef) => (
+    <PaletteItem
+      key={def.id}
+      label={def.label}
+      payload={{ kind: 'modulator', modulatorId: def.id }}
+      onPick={() => addModulatorNode(def.id)}
+      onDone={close}
+    />
+  );
+
   const button = (menu: MenuId, icon: React.ReactNode, label: string) => (
     <button
       className={'toolbar-button' + (openMenu === menu ? ' is-active' : '')}
@@ -128,15 +143,7 @@ export const Toolbar: React.FC = () => {
           </div>
           <div className="toolbar-menu-group">
             <span className="toolbar-menu-heading">Modulation</span>
-            {modulatorRegistry.map((def) => (
-              <PaletteItem
-                key={def.id}
-                label={def.label}
-                payload={{ kind: 'modulator', modulatorId: def.id }}
-                onPick={() => addModulatorNode(def.id)}
-                onDone={close}
-              />
-            ))}
+            {sources.map(modulatorItem)}
           </div>
         </div>
       )}
@@ -171,6 +178,10 @@ export const Toolbar: React.FC = () => {
               ))}
             </div>
           ))}
+          <div className="toolbar-menu-group">
+            <span className="toolbar-menu-heading">Math</span>
+            {operators.map(modulatorItem)}
+          </div>
         </div>
       )}
     </div>

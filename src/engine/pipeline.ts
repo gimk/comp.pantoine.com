@@ -3,7 +3,7 @@ import { FIRST_INPUT_UNIT, buildFragmentSource, inputsOf, paramsOf, passesOf, pr
 import { createProgram, drawQuad, uniform, type UniformCache } from './gl';
 import { TargetPool, createTarget, type RenderTarget } from './targets';
 import { reportShaderError } from './shaderErrors';
-import { modulatedValue, type Modulation } from './modulators';
+import { modulatedValue, type Signal } from './modulators';
 import type { LoadedImage } from './imageStore';
 
 /** One effect node, resolved into everything a draw call needs. */
@@ -17,7 +17,7 @@ export type Pass = {
   def: EffectDef;
   params: Record<string, ParamValue>;
   /** Params with a modulator wired in, by key. Re-evaluated every frame. */
-  modulation: Record<string, Modulation>;
+  modulation: Record<string, Signal>;
 };
 
 /**
@@ -283,6 +283,44 @@ export class Pipeline {
     gl.uniform1i(uniform(gl, program, uniforms, 'u_pass'), passIndex);
   }
 
+  /**
+   * The finished frame again, with a full mip chain, for shrinking it into
+   * the viewer. Kept apart from the pool: mip levels on a pool target
+   * would be stale the moment an effect drew into it, and an effect
+   * sampling at a displaced UV could pick one up.
+   */
+  private display: RenderTarget | null = null;
+
+  private displayFor(width: number, height: number): RenderTarget {
+    const gl = this.gl;
+    if (this.display && this.display.width === width && this.display.height === height) return this.display;
+    this.disposeDisplay();
+
+    const texture = gl.createTexture();
+    const framebuffer = gl.createFramebuffer();
+    if (!texture || !framebuffer) throw new Error('Could not create display target');
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    const levels = Math.floor(Math.log2(Math.max(width, height))) + 1;
+    gl.texStorage2D(gl.TEXTURE_2D, levels, gl.RGBA8, width, height);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+    this.display = { framebuffer, texture, width, height };
+    return this.display;
+  }
+
+  private disposeDisplay(): void {
+    if (!this.display) return;
+    this.gl.deleteFramebuffer(this.display.framebuffer);
+    this.gl.deleteTexture(this.display.texture);
+    this.display = null;
+  }
+
   /** Copy a texture into a target, unchanged. */
   private copy(from: WebGLTexture, to: RenderTarget, width: number, height: number, request: RenderRequest): void {
     const gl = this.gl;
@@ -485,6 +523,32 @@ export class Pipeline {
       this.sources.delete(nodeId);
     }
 
+    const fit = Math.min(canvasWidth / primary.width, canvasHeight / primary.height);
+    const fitWidth = Math.round(primary.width * fit);
+    const fitHeight = Math.round(primary.height * fit);
+
+    /*
+     * Shrinking the frame into the viewer, which is the usual case -- a
+     * 2048px working frame into a card a few hundred pixels tall.
+     *
+     * A plain bilinear blit reads four texels per screen pixel and skips
+     * the rest, so any pattern finer than the screen's pixels -- scanlines,
+     * a shadow mask, grain -- comes out as moiré: bands whose size has
+     * nothing to do with the pattern, and which jump about as a knob moves.
+     * Going through a mip chain averages everything a screen pixel covers
+     * instead, so a pattern too fine to show turns into the even tone it
+     * would really average to.
+     */
+    let shown = result;
+    if (fitWidth < workWidth || fitHeight < workHeight) {
+      const display = this.displayFor(workWidth, workHeight);
+      gl.viewport(0, 0, workWidth, workHeight);
+      this.copy(result, display, workWidth, workHeight, request);
+      gl.bindTexture(gl.TEXTURE_2D, display.texture);
+      gl.generateMipmap(gl.TEXTURE_2D);
+      shown = display.texture;
+    }
+
     // Present: clear the whole canvas, then draw the result into the
     // letterboxed rect that preserves the image's aspect ratio.
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -492,16 +556,13 @@ export class Pipeline {
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
 
-    const fit = Math.min(canvasWidth / primary.width, canvasHeight / primary.height);
-    const fitWidth = Math.round(primary.width * fit);
-    const fitHeight = Math.round(primary.height * fit);
     gl.viewport(
       Math.round((canvasWidth - fitWidth) / 2),
       Math.round((canvasHeight - fitHeight) / 2),
       fitWidth,
       fitHeight,
     );
-    this.bindShared(this.present, result, result, result, workWidth, workHeight, request, 0, 0);
+    this.bindShared(this.present, shown, shown, shown, workWidth, workHeight, request, 0, 0);
     drawQuad(gl);
 
     this.pool.releaseAll();
@@ -520,6 +581,7 @@ export class Pipeline {
     const gl = this.gl;
     this.pool.dispose();
     this.disposeHistory();
+    this.disposeDisplay();
     for (const compiled of this.programs.values()) gl.deleteProgram(compiled.program);
     this.programs.clear();
     for (const source of this.sources.values()) gl.deleteTexture(source.texture);

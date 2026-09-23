@@ -21,7 +21,15 @@ type BaseSpec = { key: string; label: string };
 
 /** A single tweakable knob, rendered as the control its kind implies. */
 export type ParamSpec =
-  | (BaseSpec & { kind: 'float'; min: number; max: number; step: number; default: number })
+  | (BaseSpec & {
+      kind: 'float';
+      min: number;
+      max: number;
+      step: number;
+      default: number;
+      /** Typed as a number field rather than dragged on a slider. */
+      field?: boolean;
+    })
   | (BaseSpec & { kind: 'int'; min: number; max: number; default: number })
   | (BaseSpec & { kind: 'bool'; default: boolean })
   | (BaseSpec & { kind: 'enum'; options: string[]; default: number })
@@ -136,7 +144,7 @@ export type EffectDef = {
  * Boilerplate prepended to every effect body.
  *
  * `u_src` is the previous stage's output, `u_resolution` the working
- * resolution in pixels. `u_time` is seconds, wrapped (see OutputNode) so it
+ * resolution in pixels. `u_time` is seconds, wrapped (see clock.ts) so it
  * stays precise. `u_seed` is stable per node, so two grain modules in one
  * chain do not produce the identical dirt.
  */

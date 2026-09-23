@@ -1,7 +1,13 @@
 import type { Edge, Node } from '@xyflow/react';
 import { getEffect } from '../engine/registry';
 import { inputsOf, isAnimated, paramsOf, type ParamValue } from '../engine/effects';
-import { getModulator, isModulatable, type Modulation } from '../engine/modulators';
+import {
+  getModulator,
+  isModulatable,
+  modulatorPortsOf,
+  signalIsMoving,
+  type Signal,
+} from '../engine/modulators';
 import { getImage } from '../engine/imageStore';
 import type { Pass, RenderPlan, Step } from '../engine/pipeline';
 
@@ -73,6 +79,10 @@ export const samePort = (a: string | null | undefined, b: string | null | undefi
  */
 export const hasTargetPort = (node: AppNode, handle: string | null | undefined): boolean => {
   if (node.type === 'renderOutput') return !handle;
+  if (node.type === 'modulator') {
+    const def = getModulator(node.data.modulatorId);
+    return !!def && isParamPort(handle) && modulatorPortsOf(def).includes(handle.slice(PARAM_PORT_PREFIX.length));
+  }
   if (node.type !== 'effect') return false;
   if (!handle) return true;
   const def = getEffect(node.data.effectId);
@@ -113,6 +123,55 @@ export const identityAliases = new Map<string, string>();
 
 const identityOf = (id: string): string => identityAliases.get(id) ?? id;
 
+/** Each port takes a single wire, so a port names exactly one source. */
+type PortIndex = (nodeId: string, handle: string | null) => string | undefined;
+
+const indexPorts = (edges: Edge[]): PortIndex => {
+  const incoming = new Map<string, Map<string | null, string>>();
+  for (const edge of edges) {
+    let ports = incoming.get(edge.target);
+    if (!ports) incoming.set(edge.target, (ports = new Map()));
+    ports.set(edge.targetHandle ?? null, edge.source);
+  }
+  return (nodeId, handle) => incoming.get(nodeId)?.get(handle);
+};
+
+/**
+ * The signal a modulator node puts out, with everything wired into its
+ * ports resolved behind it.
+ *
+ * A loop among modulators -- two Maths feeding each other -- is cut where
+ * it closes: the port that would complete it is treated as unwired. Unlike
+ * a loop in the picture path, there is still a sensible answer without it,
+ * so there is no reason to blank the viewer.
+ */
+const signalFrom = (
+  byId: Map<string, AppNode>,
+  sourceOf: PortIndex,
+  nodeId: string | undefined,
+  visiting: Set<string>,
+): Signal | null => {
+  if (nodeId === undefined || visiting.has(nodeId)) return null;
+  const node = byId.get(nodeId);
+  if (!node || node.type !== 'modulator') return null;
+  const def = getModulator(node.data.modulatorId);
+  if (!def) return null;
+
+  visiting.add(nodeId);
+  const inputs: Record<string, Signal> = {};
+  for (const key of modulatorPortsOf(def)) {
+    const input = signalFrom(byId, sourceOf, sourceOf(nodeId, paramPort(key)), visiting);
+    if (input) inputs[key] = input;
+  }
+  visiting.delete(nodeId);
+
+  return { def, params: node.data.params, seed: seedFor(identityOf(node.id)), inputs };
+};
+
+/** What one modulator node puts out, for its card to draw. */
+export const resolveSignal = (nodes: AppNode[], edges: Edge[], nodeId: string): Signal | null =>
+  signalFrom(new Map(nodes.map((node) => [node.id, node])), indexPorts(edges), nodeId, new Set());
+
 export type ResolvedChain = {
   /** The image at the head of the main input path; it sets the frame. */
   sourceNodeId: string;
@@ -147,15 +206,7 @@ export const resolveChain = (
 ): ResolvedChain | null => {
   const byId = new Map(nodes.map((node) => [node.id, node]));
 
-  // Each port takes a single wire, so a port names exactly one source.
-  const incoming = new Map<string, Map<string | null, string>>();
-  for (const edge of edges) {
-    let ports = incoming.get(edge.target);
-    if (!ports) incoming.set(edge.target, (ports = new Map()));
-    ports.set(edge.targetHandle ?? null, edge.source);
-  }
-  const sourceOf = (nodeId: string, handle: string | null): string | undefined =>
-    incoming.get(nodeId)?.get(handle);
+  const sourceOf = indexPorts(edges);
 
   // Resolved for one named viewer rather than "the" viewer: there can be
   // several, each watching a different branch of the graph.
@@ -166,17 +217,12 @@ export const resolveChain = (
   const done = new Map<string, number | null>();
   const visiting = new Set<string>();
 
-  const modulationFor = (nodeId: string, specs: ReturnType<typeof paramsOf>): Record<string, Modulation> => {
-    const modulation: Record<string, Modulation> = {};
+  const modulationFor = (nodeId: string, specs: ReturnType<typeof paramsOf>): Record<string, Signal> => {
+    const modulation: Record<string, Signal> = {};
     for (const spec of specs) {
       if (!isModulatable(spec)) continue;
-      const sourceId = sourceOf(nodeId, paramPort(spec.key));
-      const source = sourceId === undefined ? undefined : byId.get(sourceId);
-      if (!source || source.type !== 'modulator') continue;
-      const def = getModulator(source.data.modulatorId);
-      if (!def) continue;
-      const identity = identityOf(source.id);
-      modulation[spec.key] = { def, params: source.data.params, seed: seedFor(identity) };
+      const signal = signalFrom(byId, sourceOf, sourceOf(nodeId, paramPort(spec.key)), new Set());
+      if (signal) modulation[spec.key] = signal;
     }
     return modulation;
   };
@@ -245,5 +291,5 @@ export const chainIsAnimated = (chain: ResolvedChain | null): boolean =>
   chain.passes.some(
     (pass) =>
       isAnimated(pass.def, pass.params) ||
-      Object.values(pass.modulation).some((modulation) => modulation.def.moving(modulation.params)),
+      Object.values(pass.modulation).some(signalIsMoving),
   );

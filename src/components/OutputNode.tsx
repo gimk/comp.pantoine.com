@@ -9,8 +9,10 @@ import {
 } from '../state/graph';
 import { Pipeline } from '../engine/pipeline';
 import { createContext } from '../engine/gl';
+import { clockSeconds } from '../engine/clock';
 import { getImage, type LoadedImage } from '../engine/imageStore';
 import type { RenderPlan } from '../engine/pipeline';
+import { signalKey } from '../engine/modulators';
 
 /**
  * Every image a plan reads, or null if one has gone since it was resolved
@@ -48,7 +50,7 @@ const signatureOf = (plan: RenderPlan): string =>
             step.pass.params,
             step.input,
             step.extras,
-            Object.entries(step.pass.modulation).map(([key, m]) => [key, m.def.id, m.params, m.seed]),
+            Object.entries(step.pass.modulation).map(([key, signal]) => [key, signalKey(signal)]),
           ],
     ),
   ]);
@@ -67,16 +69,6 @@ const DEFAULT_RATIO = 16 / 9;
  * buffers only; the source image is untouched.
  */
 const MAX_WORKING_SIZE = 2048;
-
-/**
- * Seconds before `u_time` wraps.
- *
- * `highp float` carries about seven significant digits, so an app left open
- * for hours would quantise `sin(u_time * rate)` into visible steps. Wrapping
- * trades that for one discontinuity every ~17 minutes, which is the better
- * of the two artefacts by a wide margin.
- */
-const TIME_WRAP = 1000;
 
 /** Longest delta handed to a shader, so a backgrounded tab does not
  *  resume with a single multi-second step. */
@@ -131,7 +123,6 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const pipelineRef = useRef<Pipeline | null>(null);
-  const startRef = useRef(performance.now());
   const lastFrameRef = useRef(performance.now());
   const frameRef = useRef(0);
   const [unsupported, setUnsupported] = useState(false);
@@ -183,7 +174,7 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
       plan: current.plan,
       images,
       primaryNodeId: current.sourceNodeId,
-      time: ((now - startRef.current) / 1000) % TIME_WRAP,
+      time: clockSeconds(now),
       delta,
       frame: frameRef.current,
       canvasWidth: canvas.width,

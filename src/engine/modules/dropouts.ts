@@ -8,6 +8,10 @@ import type { EffectDef } from '../effects';
  * that shape is the whole difference between tape damage and grain.
  *
  * Held for whole steps at Rate, since a physical flaw persists for a beat.
+ *
+ * Sized against the picture, not in pixels: Lines is how many rows the
+ * height is cut into and Length is a fraction of the width, so a dash is
+ * the same shape on any photo and in any viewer.
  */
 export const dropouts: EffectDef = {
   id: 'dropouts',
@@ -16,14 +20,14 @@ export const dropouts: EffectDef = {
   animated: (params) => params.rate !== 0,
   params: [
     { kind: 'float', key: 'density', label: 'Density', min: 0, max: 1, step: 0.005, default: 0.04 },
-    { kind: 'float', key: 'length', label: 'Length', min: 2, max: 200, step: 1, default: 40 },
-    { kind: 'float', key: 'thickness', label: 'Thickness', min: 1, max: 20, step: 0.5, default: 2 },
+    { kind: 'float', key: 'dash', label: 'Length', min: 0.002, max: 0.25, step: 0.001, default: 0.02 },
+    { kind: 'float', key: 'lines', label: 'Lines', min: 20, max: 1080, step: 1, default: 360 },
     { kind: 'float', key: 'rate', label: 'Rate', min: 0, max: 60, step: 1, default: 8 },
     { kind: 'color', key: 'color', label: 'Color', default: [1, 1, 1] },
   ],
   fragment: `  vec4 src = texture(u_src, v_uv);
-  float line = floor(v_uv.y * u_resolution.y / max(u_thickness, 1.0));
-  float seg = floor(v_uv.x * u_resolution.x / max(u_length, 1.0));
+  float line = floor(v_uv.y * max(u_lines, 1.0));
+  float seg = floor(v_uv.x / max(u_dash, 0.001));
   float tick = floor(u_time * u_rate);
 
   // The 91 spreads consecutive lines apart in the hash's input, so

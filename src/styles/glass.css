@@ -63,6 +63,9 @@
   --font-ui: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
 
   --gutter: 18px;
+
+  /* Height of the label line above a slider. */
+  --control-line: 14px;
 }
 
 * {
@@ -570,17 +573,35 @@ textarea,
 /* Modulator node */
 
 .mod-scope {
-  display: block;
-  width: 100%;
+  position: relative;
   height: 34px;
   border-radius: var(--radius-sm);
   background: rgba(23, 23, 26, 0.04);
 }
 
-.mod-scope-axis {
-  stroke: var(--hairline);
-  stroke-width: 1;
-  vector-effect: non-scaling-stroke;
+.mod-scope svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* The signal's highest and lowest values, in the corners they belong to. */
+.mod-scope-bound {
+  position: absolute;
+  right: 5px;
+  color: var(--text-dim);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.mod-scope-bound.is-high {
+  top: 3px;
+}
+
+.mod-scope-bound.is-low {
+  bottom: 3px;
 }
 
 .mod-scope-trace {
@@ -731,13 +752,21 @@ textarea,
 /*
  * A modulation port: amber like the output it takes, and also smaller and
  * hollow, so the two kinds of input still read apart for anyone who does
- * not see the colours distinctly. Level with the slider's label rather
- * than centred on the whole control.
+ * not see the colours distinctly.
+ *
+ * Level with the line that names the param. On a slider that is the label
+ * line above the track, whose height is fixed below rather than left to
+ * the font's metrics, so half of it is an exact figure. A typed field is a
+ * single line, so the port simply centres on the row.
  */
 .react-flow__handle.port-param {
-  top: 7px;
+  top: calc(var(--control-line) / 2);
   width: 11px;
   height: 11px;
+}
+
+.param-row.is-field > .react-flow__handle.port-param {
+  top: 50%;
 }
 
 .react-flow__handle.port-param::after {
@@ -757,11 +786,66 @@ textarea,
   inset: -6px;
 }
 
-/* A modulated slider is marked on its label; the slider keeps its own value. */
-.param-row.is-modulated .control-label::after {
-  content: ' ~';
-  color: var(--text-primary);
+/*
+ * A param with a signal wired in takes the signal's value, so its control
+ * is locked, as a connected socket is. The number shows what is arriving,
+ * in the signal's amber; on a slider, a dot on the track shows where it
+ * sits, and the thumb fades back to show where the slider was left.
+ */
+.control-track {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.control-live-dot {
+  position: absolute;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--port-mod);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.control.is-wired .control-value {
+  color: var(--port-mod);
   font-weight: 600;
+}
+
+/* Worked out by the node itself -- Map Range's From range under Auto
+   range. Locked like a wired field, but grey: nothing is plugged in. */
+.control.is-derived .control-value {
+  color: var(--text-dim);
+}
+
+/* Wired, the slider's own position means nothing until the wire comes
+   out, so the thumb goes and the dot is the only mark on the track. */
+.control.is-wired .control-slider {
+  cursor: default;
+}
+
+.control.is-wired .control-slider::-webkit-slider-thumb {
+  visibility: hidden;
+}
+
+.control.is-wired .control-slider::-moz-range-thumb {
+  visibility: hidden;
+}
+
+/* The value keeps one line and the label gives way, shortening to an
+   ellipsis if it must. */
+.control-row .control-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.control-row .control-value {
+  flex: none;
+  white-space: nowrap;
 }
 
 /* --------------------------------------------------------------------------
@@ -779,6 +863,9 @@ textarea,
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  /* Fixed, so a modulation port can line up with it by arithmetic. */
+  height: var(--control-line);
+  line-height: var(--control-line);
 }
 
 .control-label {
@@ -853,27 +940,39 @@ textarea,
   gap: 8px;
 }
 
+/*
+ * On/off switch. Every dimension is set outright and the knob placed by
+ * position rather than by the button's padding and border, whose sum with
+ * box-sizing is exactly what used to push the knob off the end of the
+ * track. The geometry: a 30x18 track, a 14px knob inset 2px, so the knob
+ * travels 30 - 14 - 2 * 2 = 12px. The outline is an inset shadow, not a
+ * border, so it takes no room either.
+ */
 .control-toggle {
+  position: relative;
   flex: 0 0 auto;
-  width: 28px;
-  height: 16px;
-  padding: 2px;
-  border: 1px solid var(--hairline);
+  width: 30px;
+  height: 18px;
+  padding: 0;
+  border: 0;
   border-radius: 999px;
-  background: rgba(23, 23, 26, 0.08);
+  background: rgba(23, 23, 26, 0.12);
+  box-shadow: inset 0 0 0 1px var(--hairline);
   cursor: pointer;
   transition: background 0.15s ease;
 }
 
 .control-toggle.is-on {
   background: var(--accent);
-  border-color: transparent;
+  box-shadow: none;
 }
 
 .control-toggle-knob {
-  display: block;
-  width: 12px;
-  height: 12px;
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
   border-radius: 50%;
   background: #ffffff;
   box-shadow: 0 1px 2px rgba(23, 23, 26, 0.3);
@@ -882,6 +981,11 @@ textarea,
 
 .control-toggle.is-on .control-toggle-knob {
   transform: translateX(12px);
+}
+
+.control-toggle:focus-visible {
+  outline: 2px solid var(--accent-soft);
+  outline-offset: 2px;
 }
 
 .control-select {
@@ -895,6 +999,33 @@ textarea,
   font: inherit;
   font-size: 11px;
   cursor: pointer;
+}
+
+/* A free number, typed. Right-aligned like every other value on a card. */
+.control-field {
+  width: 72px;
+  padding: 3px 6px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.7);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+/* The spinner arrows are too small to hit at card size and crowd the digits. */
+.control-field::-webkit-inner-spin-button,
+.control-field::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.control-field-live {
+  padding: 3px 7px;
 }
 
 /* The native colour input cannot be styled, so it is sized to fill a
