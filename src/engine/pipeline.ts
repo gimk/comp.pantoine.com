@@ -568,6 +568,14 @@ export class Pipeline {
     this.pool.releaseAll();
   }
 
+  /**
+   * Forget every feedback node's stored frame, so trails and echoes start
+   * from nothing -- what a reset of the clock to zero should look like.
+   */
+  resetFeedback(): void {
+    this.disposeHistory();
+  }
+
   /** Clear the canvas to transparent, for when nothing is wired up. */
   clear(canvasWidth: number, canvasHeight: number): void {
     const gl = this.gl;

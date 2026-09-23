@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useReactFlow } from '@xyflow/react';
 import { redo, undo } from '../state/history';
 import { setSnapping, useGraph } from '../state/store';
+import { resetClock, togglePlaying } from '../engine/clock';
 
 /** How far a Ctrl+D copy lands from its original, in graph units. */
 const DUPLICATE_OFFSET = { x: 32, y: 32 };
@@ -19,6 +20,18 @@ const isTypingInto = (target: EventTarget | null): boolean => {
   return target instanceof HTMLInputElement && TEXT_INPUT_TYPES.has(target.type);
 };
 
+/*
+ * Space means something to a focused button, switch or menu -- press it,
+ * flip it, open it -- and that meaning wins. Except on the transport's own
+ * buttons, where it would be the same action as the shortcut and the two
+ * together would toggle twice.
+ */
+const spaceBelongsTo = (target: EventTarget | null): boolean => {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.closest('[data-transport]')) return false;
+  return target.closest('button, select, a[href], [role="switch"]') !== null;
+};
+
 /**
  * The canvas keyboard, bound to the window.
  *
@@ -29,6 +42,8 @@ const isTypingInto = (target: EventTarget | null): boolean => {
  *   Ctrl/Cmd + A         select everything
  *   Escape               clear the selection
  *   F                    frame the selection, or the whole graph
+ *   Space                play / pause
+ *   Home                 back to time 0
  *   Shift (while dragging) snap to other modules' centres
  *
  * Alt-drag duplication and Shift-click selection are pointer gestures and
@@ -80,6 +95,14 @@ export const useCanvasShortcuts = (fitPadding: number): void => {
         store.setAllSelected(true);
       } else if (!mod && !event.altKey && key === 'escape') {
         store.setAllSelected(false);
+      } else if (!mod && !event.altKey && event.code === 'Space') {
+        if (spaceBelongsTo(event.target)) return;
+        // Or the page scrolls, or a focused transport button clicks too.
+        event.preventDefault();
+        if (!event.repeat) togglePlaying();
+      } else if (!mod && !event.altKey && key === 'home') {
+        event.preventDefault();
+        resetClock();
       } else if (!mod && !event.altKey && key === 'f') {
         const selected = store.nodes.filter((node) => node.selected);
         void fitView({

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Handle, Position, useReactFlow, type Node, type NodeProps } from '@xyflow/react';
 import { useGraph } from '../state/store';
 import {
@@ -9,7 +9,7 @@ import {
 } from '../state/graph';
 import { Pipeline } from '../engine/pipeline';
 import { createContext } from '../engine/gl';
-import { clockSeconds } from '../engine/clock';
+import { clockSeconds, isPlaying, resetCount, subscribeClock } from '../engine/clock';
 import { getImage, type LoadedImage } from '../engine/imageStore';
 import type { RenderPlan } from '../engine/pipeline';
 import { signalKey } from '../engine/modulators';
@@ -133,6 +133,11 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
 
   const chain = resolveChain(nodes, edges, id);
   const animated = chainIsAnimated(chain);
+  const playing = useSyncExternalStore(subscribeClock, isPlaying);
+  const resets = useSyncExternalStore(subscribeClock, resetCount);
+  // The frame loop runs only for a chain that moves, and only while the
+  // transport is playing.
+  const looping = animated && playing;
 
   // Held in a ref so the draw callback can stay stable across node drags,
   // which change the nodes array without changing what gets rendered.
@@ -155,7 +160,9 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
     }
 
     const now = performance.now();
-    const delta = Math.min((now - lastFrameRef.current) / 1000, MAX_DELTA);
+    // Paused, no time passes: feedback effects hold their picture instead
+    // of carrying on fading every time a knob change redraws the frame.
+    const delta = isPlaying() ? Math.min((now - lastFrameRef.current) / 1000, MAX_DELTA) : 0;
     lastFrameRef.current = now;
     frameRef.current += 1;
 
@@ -232,9 +239,26 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
     draw();
   }, [draw, signature]);
 
+  // Back to zero: trails and echoes start again from nothing, as they did
+  // the first time, rather than carrying on over the reset.
   useEffect(() => {
-    animatedRef.current = animated;
-    if (!animated) {
+    if (resets === 0) return;
+    pipelineRef.current?.resetFeedback();
+    frameRef.current = 0;
+    lastFrameRef.current = performance.now();
+    drawRef.current();
+  }, [resets]);
+
+  // Paused or resumed: one draw either way, so the frame shown is the one
+  // at the paused moment rather than whichever the loop last reached.
+  useEffect(() => {
+    lastFrameRef.current = performance.now();
+    drawRef.current();
+  }, [playing]);
+
+  useEffect(() => {
+    animatedRef.current = looping;
+    if (!looping) {
       // Clear it rather than leaving the last figure frozen on screen,
       // which would read as a live measurement of a stopped renderer.
       setFps(null);
@@ -249,7 +273,7 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
     };
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
-  }, [animated]);
+  }, [looping]);
 
   const image = chain ? getImage(chain.sourceNodeId) : undefined;
   const ratio = image ? image.width / image.height : DEFAULT_RATIO;
@@ -318,8 +342,8 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
 
       <div className="render-foot">
         <span className={'render-dot' + (chain ? ' is-live' : '')} />
-        <span>{chain ? (animated ? 'Playing' : 'Live') : 'Idle'}</span>
-        {animated && fps !== null && <span className="render-fps">{Math.round(fps)} fps</span>}
+        <span>{chain ? (animated ? (playing ? 'Playing' : 'Paused') : 'Live') : 'Idle'}</span>
+        {looping && fps !== null && <span className="render-fps">{Math.round(fps)} fps</span>}
         {chain && (
           <span className="render-chain">
             {chain.passes.length} effect{chain.passes.length === 1 ? '' : 's'}

@@ -24,6 +24,7 @@ import { ModulatorNode } from './components/ModulatorNode';
 import { OutputNode } from './components/OutputNode';
 import { SnapGuides } from './components/SnapGuides';
 import { Toolbar } from './components/Toolbar';
+import { Transport } from './components/Transport';
 import { useCanvasShortcuts } from './components/useCanvasShortcuts';
 import { setVisibleAreaSource, useGraph } from './state/store';
 import '@xyflow/react/dist/style.css';
@@ -230,6 +231,9 @@ const Editor: React.FC = () => {
       // Shift-click adds to the selection, as it does in most editors; the
       // library's default is Ctrl (Cmd on a Mac) alone, which still works.
       multiSelectionKeyCode={['Shift', 'Meta', 'Control']}
+      // Space is play/pause. Holding it to pan is React Flow's default, and
+      // a redundant one here: dragging the empty canvas already pans.
+      panActivationKeyCode={null}
       minZoom={0.3}
       maxZoom={2}
       fitView
@@ -248,6 +252,7 @@ export const App: React.FC = () => (
         <Editor />
       </main>
       <Toolbar />
+      <Transport />
     </ReactFlowProvider>
   </div>
 );
