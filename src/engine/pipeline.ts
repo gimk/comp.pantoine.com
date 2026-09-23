@@ -2,6 +2,7 @@ import type { EffectDef, ParamSpec, ParamValue, Rgb, Vec2 } from './effects';
 import { buildFragmentSource, paramsOf, passesOf, prelude } from './effects';
 import { createProgram, drawQuad, uniform, type UniformCache } from './gl';
 import { PingPong, createTarget, type RenderTarget } from './targets';
+import { reportShaderError } from './shaderErrors';
 import type { LoadedImage } from './imageStore';
 
 /** One effect node, resolved into everything a draw call needs. */
@@ -154,6 +155,9 @@ export class Pipeline {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.failed.set(key, message);
+      // Surfaced on the node as well as logged: a module that silently does
+      // nothing is harder to diagnose than one that says it is broken.
+      reportShaderError(def.id, message);
       console.error('Effect "' + def.id + '" pass ' + passIndex + ' failed to compile:\n' + message);
       return this.present;
     }
@@ -161,11 +165,6 @@ export class Pipeline {
 
   /** Programs that would not compile, and why. Reported once each. */
   private failed = new Map<string, string>();
-
-  /** Which effects are currently falling through, for the UI to surface. */
-  brokenEffectIds(): string[] {
-    return [...new Set([...this.failed.keys()].map((key) => key.split('#')[0]))];
-  }
 
   /**
    * Upload the bitmap once and hold it until the node's image is replaced.

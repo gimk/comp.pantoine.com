@@ -1,10 +1,11 @@
-import React from 'react';
+import React, { useSyncExternalStore } from 'react';
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
 import { Sparkles } from 'lucide-react';
 import type { EffectNodeData } from '../state/graph';
 import { getEffect } from '../engine/registry';
 import { paramsOf, type ParamSpec, type ParamValue, type Rgb, type Vec2 } from '../engine/effects';
 import { useGraph } from '../state/store';
+import { getShaderError, subscribeShaderErrors } from '../engine/shaderErrors';
 import { ColorField, Select, Slider, Toggle, Vec2Field } from './controlPrimitives';
 
 /**
@@ -94,6 +95,13 @@ export const EffectNode: React.FC<NodeProps<Node<EffectNodeData, 'effect'>>> = (
   const setParam = useGraph((state) => state.setParam);
   const def = getEffect(data.effectId);
 
+  // Reported from inside the render loop, which knows nothing about React;
+  // this is the subscription that brings it back across.
+  const shaderError = useSyncExternalStore(
+    subscribeShaderErrors,
+    () => getShaderError(data.effectId),
+  );
+
   if (!def) {
     return (
       <div className="node node-effect">
@@ -113,6 +121,18 @@ export const EffectNode: React.FC<NodeProps<Node<EffectNodeData, 'effect'>>> = (
         <Sparkles size={13} />
         <span>{def.label}</span>
       </div>
+
+      {/*
+        A module whose shader would not compile still renders its controls,
+        because they are what you would reach for to fix it. What it must not
+        do is look like it is working: the pass falls through untouched, so
+        without this the node would sit there doing nothing in silence.
+      */}
+      {shaderError && (
+        <div className="node-body node-warning" title={shaderError}>
+          Shader error — this module is passing through. See the console.
+        </div>
+      )}
 
       <div className="node-body">
         {paramsOf(def).map((spec) => (

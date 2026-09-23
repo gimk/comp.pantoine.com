@@ -155,13 +155,58 @@ export const isAnimated = (def: EffectDef, params: Record<string, ParamValue>): 
   typeof def.animated === 'function' ? def.animated(params) : def.animated;
 
 /**
+ * Param keys that would collide with a uniform the prelude already declares.
+ *
+ * A param keyed `time` becomes `u_time`, which compiles -- as a redeclaration
+ * that quietly shadows the clock for that effect only. The symptom is an
+ * animated module that does not animate, with nothing in the log, so it is
+ * worth refusing outright.
+ */
+const RESERVED_PARAM_KEYS = new Set([
+  'src',
+  'orig',
+  'prev',
+  'resolution',
+  'time',
+  'delta',
+  'frame',
+  'seed',
+  'pass',
+]);
+
+/**
+ * Catch what only shows up as a strange picture.
+ *
+ * Thrown rather than logged, because `programFor` already turns a throw here
+ * into a pass-through plus a visible error on the node -- the same treatment
+ * a shader that will not compile gets, which is what this is.
+ */
+const assertParamsAreSound = (def: EffectDef): void => {
+  const seen = new Set<string>();
+  for (const spec of paramsOf(def)) {
+    if (RESERVED_PARAM_KEYS.has(spec.key)) {
+      throw new Error(
+        `Effect "${def.id}" has a param keyed "${spec.key}", which collides with the ` +
+          `built-in uniform u_${spec.key}. Rename it.`,
+      );
+    }
+    if (seen.has(spec.key)) {
+      throw new Error(`Effect "${def.id}" declares the param "${spec.key}" twice.`);
+    }
+    seen.add(spec.key);
+  }
+};
+
+/**
  * Wrap one effect body, plus its params as uniforms, into a full shader.
  *
  * The Mix crossfade is applied on the last pass only -- blending a
  * multi-pass effect against the source at every intermediate step would
  * fade out the work in progress, not the result.
  */
-export const buildFragmentSource = (def: EffectDef, passIndex: number): string => {
+export const buildFragmentSource =(def: EffectDef, passIndex: number): string => {
+  assertParamsAreSound(def);
+
   const uniforms = paramsOf(def)
     .map((p) => `uniform ${GLSL_TYPE[p.kind]} u_${p.key};`)
     .join('\n');
