@@ -14,7 +14,7 @@ import type { EffectDef } from '../effects';
 export const gradientMap: EffectDef = {
   id: 'gradientMap',
   label: 'Gradient Map',
-  category: 'color',
+  category: 'stylize',
   animated: false,
   mixable: true,
   params: [

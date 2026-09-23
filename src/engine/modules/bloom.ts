@@ -30,7 +30,7 @@ const COMBINE = `  vec4 base = texture(u_orig, v_uv);
 export const bloom: EffectDef = {
   id: 'bloom',
   label: 'Bloom',
-  category: 'blur',
+  category: 'optics',
   animated: false,
   params: [
     { kind: 'float', key: 'threshold', label: 'Threshold', min: 0, max: 1, step: 0.01, default: 0.6 },

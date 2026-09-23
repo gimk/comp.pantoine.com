@@ -15,7 +15,7 @@ const AXIS = `  vec2 dir = (u_pass == 0) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
 export const blur: EffectDef = {
   id: 'blur',
   label: 'Blur',
-  category: 'blur',
+  category: 'optics',
   animated: false,
   mixable: true,
   params: [

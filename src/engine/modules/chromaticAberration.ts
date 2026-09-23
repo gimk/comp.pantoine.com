@@ -15,7 +15,7 @@ import type { EffectDef } from '../effects';
 export const chromaticAberration: EffectDef = {
   id: 'chromaticAberration',
   label: 'Chromatic Aberration',
-  category: 'color',
+  category: 'optics',
   animated: false,
   mixable: true,
   params: [

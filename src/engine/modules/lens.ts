@@ -15,7 +15,7 @@ import type { EffectDef } from '../effects';
 export const lens: EffectDef = {
   id: 'lens',
   label: 'Lens',
-  category: 'geometry',
+  category: 'optics',
   animated: false,
   params: [
     { kind: 'float', key: 'curvature', label: 'Curvature', min: -1, max: 1, step: 0.01, default: 0.2 },

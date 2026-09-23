@@ -36,49 +36,51 @@ import { wobble } from './modules/wobble';
  * alphabetically -- the menu is something to pick from, not to look up in.
  */
 export const registry: EffectDef[] = [
-  // Color
+  // Color & Tone
   levels,
   saturation,
   blackwhite,
+
+  // Stylize
   gradientMap,
   posterize,
   threshold,
-  chromaBleed,
-  chromaticAberration,
 
-  // Composite
-  blend,
-
-  // Blur & Glow
+  // Optics & Blur
   blur,
   directionalBlur,
   bloom,
-
-  // Geometry
   lens,
+  chromaticAberration,
+  vignette,
+
+  // Transform & Warp
   transform,
   wobble,
   displace,
 
-  // Scan
+  // CRT & Display
   scanlines,
   shadowMask,
-  lineJitter,
-  headSwitch,
-  humBar,
   interlace,
   roll,
 
-  // Noise
-  grain,
+  // Tape & Glitch
+  headSwitch,
+  humBar,
+  lineJitter,
   dropouts,
+  chromaBleed,
+
+  // Noise & Grain
+  grain,
 
   // Temporal
   trails,
   echo,
 
-  // Frame
-  vignette,
+  // Composite
+  blend,
 ];
 
 const byId = new Map(registry.map((def) => [def.id, def]));

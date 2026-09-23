@@ -15,7 +15,7 @@ import type { EffectDef } from '../effects';
 export const headSwitch: EffectDef = {
   id: 'headSwitch',
   label: 'Head Switch',
-  category: 'scan',
+  category: 'tape',
   animated: (params) => params.rate !== 0,
   params: [
     { kind: 'float', key: 'height', label: 'Height', min: 0.005, max: 0.3, step: 0.005, default: 0.05 },

@@ -14,7 +14,7 @@ import type { EffectDef } from '../effects';
 export const roll: EffectDef = {
   id: 'roll',
   label: 'Roll',
-  category: 'scan',
+  category: 'crt',
   animated: (params) => params.speed !== 0,
   params: [
     { kind: 'float', key: 'speed', label: 'Speed', min: -2, max: 2, step: 0.005, default: 0.1 },

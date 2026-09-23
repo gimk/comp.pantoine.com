@@ -19,7 +19,7 @@ import type { EffectDef } from '../effects';
 export const lineJitter: EffectDef = {
   id: 'lineJitter',
   label: 'Line Jitter',
-  category: 'scan',
+  category: 'tape',
   animated: (params) => params.rate !== 0,
   params: [
     { kind: 'float', key: 'amount', label: 'Amount', min: 0, max: 0.2, step: 0.001, default: 0.02 },

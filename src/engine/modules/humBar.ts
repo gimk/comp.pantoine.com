@@ -13,7 +13,7 @@ import type { EffectDef } from '../effects';
 export const humBar: EffectDef = {
   id: 'humBar',
   label: 'Hum Bar',
-  category: 'scan',
+  category: 'tape',
   animated: (params) => params.speed !== 0,
   params: [
     { kind: 'float', key: 'width', label: 'Width', min: 0.01, max: 0.5, step: 0.005, default: 0.15 },

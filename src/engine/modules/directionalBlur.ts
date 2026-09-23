@@ -16,7 +16,7 @@ import type { EffectDef } from '../effects';
 export const directionalBlur: EffectDef = {
   id: 'directionalBlur',
   label: 'Directional Blur',
-  category: 'blur',
+  category: 'optics',
   animated: false,
   mixable: true,
   params: [

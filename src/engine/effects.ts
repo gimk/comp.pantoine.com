@@ -53,34 +53,37 @@ const GLSL_TYPE: Record<ParamSpec['kind'], string> = {
  */
 export type Category =
   | 'color'
-  | 'composite'
-  | 'blur'
+  | 'stylize'
+  | 'optics'
   | 'geometry'
-  | 'scan'
+  | 'crt'
+  | 'tape'
   | 'noise'
   | 'temporal'
-  | 'frame';
+  | 'composite';
 
 export const CATEGORY_ORDER: Category[] = [
   'color',
-  'composite',
-  'blur',
+  'stylize',
+  'optics',
   'geometry',
-  'scan',
+  'crt',
+  'tape',
   'noise',
   'temporal',
-  'frame',
+  'composite',
 ];
 
 export const CATEGORY_LABELS: Record<Category, string> = {
-  color: 'Color',
-  composite: 'Composite',
-  blur: 'Blur & Glow',
-  geometry: 'Geometry',
-  scan: 'Scan',
-  noise: 'Noise',
+  color: 'Color & Tone',
+  stylize: 'Stylize',
+  optics: 'Optics & Blur',
+  geometry: 'Transform & Warp',
+  crt: 'CRT & Display',
+  tape: 'Tape & Glitch',
+  noise: 'Noise & Grain',
   temporal: 'Temporal',
-  frame: 'Frame',
+  composite: 'Composite',
 };
 
 /**

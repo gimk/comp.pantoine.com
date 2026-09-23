@@ -11,7 +11,7 @@ import type { EffectDef } from '../effects';
 export const posterize: EffectDef = {
   id: 'posterize',
   label: 'Posterize',
-  category: 'color',
+  category: 'stylize',
   animated: false,
   mixable: true,
   params: [

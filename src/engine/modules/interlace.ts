@@ -18,7 +18,7 @@ import type { EffectDef } from '../effects';
 export const interlace: EffectDef = {
   id: 'interlace',
   label: 'Interlace',
-  category: 'scan',
+  category: 'crt',
   animated: (params) => params.rate !== 0,
   params: [
     { kind: 'float', key: 'lines', label: 'Lines', min: 20, max: 1080, step: 1, default: 240 },

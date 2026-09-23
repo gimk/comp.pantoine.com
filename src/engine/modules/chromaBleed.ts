@@ -17,7 +17,7 @@ import type { EffectDef } from '../effects';
 export const chromaBleed: EffectDef = {
   id: 'chromaBleed',
   label: 'Chroma Bleed',
-  category: 'color',
+  category: 'tape',
   animated: false,
   mixable: true,
   params: [

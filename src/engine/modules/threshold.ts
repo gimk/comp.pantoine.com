@@ -16,7 +16,7 @@ import type { EffectDef } from '../effects';
 export const threshold: EffectDef = {
   id: 'threshold',
   label: 'Threshold',
-  category: 'color',
+  category: 'stylize',
   animated: (params) => params.speed !== 0,
   params: [
     { kind: 'float', key: 'level', label: 'Level', min: 0, max: 1, step: 0.01, default: 0.5 },

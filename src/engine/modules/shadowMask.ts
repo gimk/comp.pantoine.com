@@ -14,7 +14,7 @@ import type { EffectDef } from '../effects';
 export const shadowMask: EffectDef = {
   id: 'shadowMask',
   label: 'Shadow Mask',
-  category: 'scan',
+  category: 'crt',
   animated: false,
   mixable: true,
   params: [

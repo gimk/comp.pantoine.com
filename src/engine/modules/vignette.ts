@@ -11,7 +11,7 @@ import type { EffectDef } from '../effects';
 export const vignette: EffectDef = {
   id: 'vignette',
   label: 'Vignette',
-  category: 'frame',
+  category: 'optics',
   animated: false,
   params: [
     { kind: 'vec2', key: 'center', label: 'Center', min: 0, max: 1, step: 0.01, default: [0.5, 0.5] },

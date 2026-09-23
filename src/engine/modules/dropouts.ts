@@ -16,7 +16,7 @@ import type { EffectDef } from '../effects';
 export const dropouts: EffectDef = {
   id: 'dropouts',
   label: 'Dropouts',
-  category: 'noise',
+  category: 'tape',
   animated: (params) => params.rate !== 0,
   params: [
     { kind: 'float', key: 'density', label: 'Density', min: 0, max: 1, step: 0.005, default: 0.04 },

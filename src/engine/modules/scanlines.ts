@@ -22,7 +22,7 @@ import type { EffectDef } from '../effects';
 export const scanlines: EffectDef = {
   id: 'scanlines',
   label: 'Scanlines',
-  category: 'scan',
+  category: 'crt',
   animated: (params) => params.roll !== 0,
   mixable: true,
   params: [
