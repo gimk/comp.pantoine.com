@@ -5,6 +5,7 @@ import { TargetPool, createTarget, type RenderTarget } from './targets';
 import { reportShaderError } from './shaderErrors';
 import { modulatedValue, type Signal } from './modulators';
 import type { LoadedImage } from './imageStore';
+import { ParticleEngine } from './particleSim';
 
 /** One effect node, resolved into everything a draw call needs. */
 export type Pass = {
@@ -133,6 +134,7 @@ export class Pipeline {
   private programs = new Map<string, CompiledProgram>();
   private present: CompiledProgram;
   private importer: CompiledProgram;
+  private particleEngine: ParticleEngine;
   /** What an unwired extra input samples: one transparent black texel. */
   private blank: WebGLTexture;
   /** One uploaded texture per image node the graph reads. */
@@ -183,6 +185,7 @@ export class Pipeline {
     this.pool = new TargetPool(gl);
     this.present = this.compile('__present__', PRESENT_FRAGMENT);
     this.importer = this.compile('__import__', IMPORT_FRAGMENT);
+    this.particleEngine = new ParticleEngine(gl);
 
     const blank = gl.createTexture();
     if (!blank) throw new Error('Could not create blank texture');
@@ -357,6 +360,7 @@ export class Pipeline {
     request: RenderRequest,
     liveFeedback: Set<string>,
     livePhases: Set<string>,
+    liveParticleSims: Set<string>,
   ): RenderTarget {
     const gl = this.gl;
     const specs = paramsOf(pass.def);
@@ -396,6 +400,28 @@ export class Pipeline {
       }
       return val;
     });
+
+    if (pass.def.id === 'particleFlow') {
+      liveParticleSims.add(pass.nodeId);
+      const resolvedParams: Record<string, ParamValue> = {};
+      specs.forEach((spec, k) => {
+        resolvedParams[spec.key] = values[k];
+      });
+      const target = this.pool.acquire();
+      this.particleEngine.render(
+        pass.nodeId,
+        input,
+        input,
+        width,
+        height,
+        resolvedParams,
+        request.time,
+        request.delta,
+        pass.seed,
+        target,
+      );
+      return target;
+    }
 
     let result = input;
     let current: RenderTarget | null = null;
@@ -468,6 +494,7 @@ export class Pipeline {
     const liveFeedback = new Set<string>();
     const liveSources = new Set<string>();
     const livePhases = new Set<string>();
+    const liveParticleSims = new Set<string>();
 
     this.pool.resize(workWidth, workHeight);
     gl.viewport(0, 0, workWidth, workHeight);
@@ -531,6 +558,7 @@ export class Pipeline {
         request,
         liveFeedback,
         livePhases,
+        liveParticleSims,
       );
       textures[index] = target.texture;
       owned[index] = target;
@@ -558,6 +586,7 @@ export class Pipeline {
         this.nodePhases.delete(nodeId);
       }
     }
+    this.particleEngine.prune(liveParticleSims);
 
     const fit = Math.min(canvasWidth / primary.width, canvasHeight / primary.height);
     const fitWidth = Math.round(primary.width * fit);
@@ -611,6 +640,7 @@ export class Pipeline {
   resetFeedback(): void {
     this.disposeHistory();
     this.nodePhases.clear();
+    this.particleEngine.reset();
   }
 
   /** Clear the canvas to transparent, for when nothing is wired up. */
@@ -628,6 +658,7 @@ export class Pipeline {
     this.disposeHistory();
     this.disposeDisplay();
     this.nodePhases.clear();
+    this.particleEngine.dispose();
     for (const compiled of this.programs.values()) gl.deleteProgram(compiled.program);
     this.programs.clear();
     for (const source of this.sources.values()) gl.deleteTexture(source.texture);

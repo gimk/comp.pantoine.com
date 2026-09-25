@@ -13,7 +13,7 @@
  * data, and it has no interior diagonal where the rasterizer would shade the
  * seam twice.
  */
-const VERTEX_SOURCE = `#version 300 es
+export const VERTEX_SOURCE = `#version 300 es
 out vec2 v_uv;
 
 void main() {
@@ -55,17 +55,19 @@ const compileShader = (gl: WebGL2RenderingContext, type: number, source: string)
   return shader;
 };
 
-/** Link a program from the shared vertex shader and a fragment source. */
-export const createProgram = (gl: WebGL2RenderingContext, fragmentSource: string): WebGLProgram => {
-  const vertex = compileShader(gl, gl.VERTEX_SHADER, VERTEX_SOURCE);
+/** Link a program from explicit vertex and fragment sources. */
+export const createProgramWithShaders = (
+  gl: WebGL2RenderingContext,
+  vertexSource: string,
+  fragmentSource: string,
+): WebGLProgram => {
+  const vertex = compileShader(gl, gl.VERTEX_SHADER, vertexSource);
   const fragment = compileShader(gl, gl.FRAGMENT_SHADER, fragmentSource);
   const program = gl.createProgram();
   if (!program) throw new Error('Could not create program');
   gl.attachShader(program, vertex);
   gl.attachShader(program, fragment);
   gl.linkProgram(program);
-  // The shaders are owned by the program once attached; flagging them for
-  // delete here means they go away with it.
   gl.deleteShader(vertex);
   gl.deleteShader(fragment);
   if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
@@ -75,6 +77,10 @@ export const createProgram = (gl: WebGL2RenderingContext, fragmentSource: string
   }
   return program;
 };
+
+/** Link a program from the shared vertex shader and a fragment source. */
+export const createProgram = (gl: WebGL2RenderingContext, fragmentSource: string): WebGLProgram =>
+  createProgramWithShaders(gl, VERTEX_SOURCE, fragmentSource);
 
 /** Uniform locations, looked up once and reused every frame. */
 export type UniformCache = Map<string, WebGLUniformLocation | null>;
