@@ -41,7 +41,7 @@ describe('graph ports and chain resolution', () => {
     expect(hasTargetPort(viewerNode, RENDER_PORT)).toBe(true); // Purple baked asset
     expect(hasTargetPort(viewerNode, 'param:test')).toBe(false);
 
-    const backgroundNode: AppNode = { id: 'bg1', type: 'backgroundOutput', position: { x: 0, y: 0 }, data: { enabled: true, fit: 'cover', opacity: 1 } };
+    const backgroundNode: AppNode = { id: 'bg1', type: 'backgroundOutput', position: { x: 0, y: 0 }, data: { enabled: true, fit: 'fill', opacity: 1 } };
     expect(hasTargetPort(backgroundNode, null)).toBe(true); // Blue live WebGL
     expect(hasTargetPort(backgroundNode, RENDER_PORT)).toBe(true); // Purple baked asset
     expect(hasTargetPort(backgroundNode, 'param:test')).toBe(false);
@@ -266,7 +266,7 @@ describe('graph ports and chain resolution', () => {
         id: 'bg-1',
         type: 'backgroundOutput',
         position: { x: 200, y: 0 },
-        data: { enabled: true, fit: 'cover', opacity: 1 },
+        data: { enabled: true, fit: 'fill', opacity: 1 },
       },
       {
         id: 'viewer-1',

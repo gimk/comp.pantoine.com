@@ -78,7 +78,7 @@ type SerializedNode =
       type: 'backgroundOutput';
       position: XYPosition;
       enabled?: boolean;
-      fit?: 'cover' | 'contain';
+      fit?: 'fill' | 'fit' | 'cover' | 'contain';
       opacity?: number;
     }
   | { id: string; type: 'renderOutput'; position: XYPosition; width: number };
@@ -335,13 +335,14 @@ export const deserializeGraph = (raw: unknown): { nodes: AppNode[]; edges: Edge[
     }
 
     if (entry.type === 'backgroundOutput') {
+      const fit = entry.fit === 'fit' || entry.fit === 'contain' ? 'fit' : 'fill';
       nodes.push({
         id: entry.id,
         type: 'backgroundOutput',
         position,
         data: {
           enabled: typeof entry.enabled === 'boolean' ? entry.enabled : DEFAULT_BACKGROUND_DATA.enabled,
-          fit: entry.fit === 'contain' ? 'contain' : 'cover',
+          fit,
           opacity: typeof entry.opacity === 'number' && Number.isFinite(entry.opacity) ? entry.opacity : DEFAULT_BACKGROUND_DATA.opacity,
         },
       });

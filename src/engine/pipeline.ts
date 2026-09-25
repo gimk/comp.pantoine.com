@@ -63,8 +63,8 @@ export type RenderRequest = {
   canvasHeight: number;
   /** Longest working-buffer edge; the chain runs scaled down past this. */
   maxWorkingSize: number;
-  /** Fit mode: 'contain' letterboxes (default), 'cover' fills the canvas cropping overflow. */
-  fitMode?: 'contain' | 'cover';
+  /** Fit mode: 'fit' / 'contain' letterboxes (default), 'fill' / 'cover' fills the canvas cropping overflow. */
+  fitMode?: 'fill' | 'fit' | 'cover' | 'contain';
 };
 
 /**
@@ -590,8 +590,8 @@ export class Pipeline {
     }
     this.particleEngine.prune(liveParticleSims);
 
-    const isCover = request.fitMode === 'cover';
-    const fit = isCover
+    const isFill = request.fitMode === 'fill' || request.fitMode === 'cover';
+    const fit = isFill
       ? Math.max(canvasWidth / primary.width, canvasHeight / primary.height)
       : Math.min(canvasWidth / primary.width, canvasHeight / primary.height);
     const fitWidth = Math.round(primary.width * fit);

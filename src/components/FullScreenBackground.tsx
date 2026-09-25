@@ -68,7 +68,7 @@ export const FullScreenBackground: React.FC = () => {
 
   const activeNodeId = activeNode?.id;
   const isEnabled = !!activeNode && activeNode.data.enabled !== false;
-  const fitMode = activeNode?.data.fit ?? 'cover';
+  const fitMode: 'contain' | 'cover' = activeNode?.data.fit === 'fit' || (activeNode?.data.fit as string) === 'contain' ? 'contain' : 'cover';
   const opacity = activeNode?.data.opacity ?? 1;
 
   // Upstream render asset check

@@ -21,7 +21,14 @@ import {
 } from './components/paletteDrag';
 import { addPaletteItem } from './components/paletteCatalog';
 import { QuickAdd } from './components/QuickAdd';
-import { MOD_OUTPUT, findUpstreamRenderNode, isModulationEdge, isParamPort, isRenderPort, type AppNode } from './state/graph';
+import {
+  MOD_OUTPUT,
+  findUpstreamRenderNode,
+  isModulationEdge,
+  isParamPort,
+  isRenderPort,
+  type AppNode,
+} from './state/graph';
 import { ImageNode } from './components/ImageNode';
 import { EffectNode } from './components/EffectNode';
 import { ModulatorNode } from './components/ModulatorNode';

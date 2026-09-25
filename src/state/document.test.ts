@@ -185,7 +185,7 @@ describe('document serialization & deserialization', () => {
         position: { x: 500, y: 150 },
         data: {
           enabled: true,
-          fit: 'cover',
+          fit: 'fill',
           opacity: 0.85,
         },
       },
@@ -197,7 +197,7 @@ describe('document serialization & deserialization', () => {
       type: 'backgroundOutput',
       position: { x: 500, y: 150 },
       enabled: true,
-      fit: 'cover',
+      fit: 'fill',
       opacity: 0.85,
     });
 
@@ -209,9 +209,22 @@ describe('document serialization & deserialization', () => {
       position: { x: 500, y: 150 },
       data: {
         enabled: true,
-        fit: 'cover',
+        fit: 'fill',
         opacity: 0.85,
       },
     });
+
+    // Test legacy 'cover' / 'contain' migration
+    const legacy = {
+      version: 1,
+      nodes: [
+        { id: 'bg-legacy-1', type: 'backgroundOutput', position: { x: 0, y: 0 }, fit: 'cover' },
+        { id: 'bg-legacy-2', type: 'backgroundOutput', position: { x: 0, y: 0 }, fit: 'contain' },
+      ],
+      edges: [],
+    };
+    const migrated = deserializeGraph(legacy);
+    expect((migrated!.nodes[0] as AppNode & { type: 'backgroundOutput' }).data.fit).toBe('fill');
+    expect((migrated!.nodes[1] as AppNode & { type: 'backgroundOutput' }).data.fit).toBe('fit');
   });
 });

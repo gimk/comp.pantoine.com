@@ -81,13 +81,13 @@ export const DEFAULT_EXPORT_DATA: ExportNodeData = {
 
 export type BackgroundNodeData = {
   enabled: boolean;
-  fit: 'cover' | 'contain';
+  fit: 'fill' | 'fit' | 'cover' | 'contain';
   opacity: number;
 };
 
 export const DEFAULT_BACKGROUND_DATA: BackgroundNodeData = {
   enabled: true,
-  fit: 'cover',
+  fit: 'fill',
   opacity: 1,
 };
 

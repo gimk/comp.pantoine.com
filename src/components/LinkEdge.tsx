@@ -55,8 +55,23 @@ export const LinkEdge: React.FC<EdgeProps> = ({
       return false;
     })();
 
+  const isMod = isParamPort(targetHandleId);
+
   return (
     <>
+      {/* High-contrast halo underlay: guarantees crisp visibility over black, dark pictures, and light ground */}
+      <path
+        d={path}
+        className={`link-edge-halo ${
+          isRender
+            ? 'link-edge-halo-render'
+            : isMod
+              ? 'link-edge-halo-mod'
+              : ''
+        }`}
+        aria-hidden="true"
+      />
+
       {/* Purple for rendered media asset, dashed for modulation signal, solid ink for picture */}
       <BaseEdge
         id={id}
@@ -66,7 +81,7 @@ export const LinkEdge: React.FC<EdgeProps> = ({
         className={
           isRender
             ? 'link-edge-render'
-            : isParamPort(targetHandleId)
+            : isMod
               ? 'link-edge-mod'
               : undefined
         }

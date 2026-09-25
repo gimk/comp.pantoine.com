@@ -99,19 +99,19 @@ export const BackgroundNode: React.FC<NodeProps<Node<BackgroundNodeData, 'backgr
           <div className="bg-segmented-control nodrag">
             <button
               type="button"
-              className={`bg-seg-btn ${data.fit === 'cover' ? 'is-active' : ''}`}
-              onClick={() => update({ fit: 'cover' })}
-              title="Scale to cover entire screen"
+              className={`bg-seg-btn ${(data.fit ?? 'fill') === 'fill' ? 'is-active' : ''}`}
+              onClick={() => update({ fit: 'fill' })}
+              title="Scale to fill entire screen"
             >
-              Cover
+              Fill
             </button>
             <button
               type="button"
-              className={`bg-seg-btn ${data.fit === 'contain' ? 'is-active' : ''}`}
-              onClick={() => update({ fit: 'contain' })}
+              className={`bg-seg-btn ${data.fit === 'fit' ? 'is-active' : ''}`}
+              onClick={() => update({ fit: 'fit' })}
               title="Scale to fit within screen"
             >
-              Contain
+              Fit
             </button>
           </div>
         </div>
@@ -154,7 +154,7 @@ export const BackgroundNode: React.FC<NodeProps<Node<BackgroundNodeData, 'backgr
               <span>Full-screen rendered {renderAssetData?.format.toUpperCase()}</span>
             ) : (
               <span>
-                Full-screen {data.fit ?? 'cover'} · {Math.round((data.opacity ?? 1) * 100)}%
+                Full-screen {(data.fit ?? 'fill') === 'fit' ? 'Fit' : 'Fill'} · {Math.round((data.opacity ?? 1) * 100)}%
               </span>
             )}
           </div>
