@@ -30,7 +30,7 @@ export const threshold: EffectDef = {
   ],
   fragment: `  vec4 src = texture(u_src, v_uv);
   vec2 field = v_uv * u_scale + u_seed * 53.0;
-  float n = fbm(field + vec2(u_time * u_speed, 0.0), u_octaves);
+  float n = fbm(field + vec2(u_phase_speed, 0.0), u_octaves);
 
   // Brightness blended towards the noise, so at Noise 0 this is a plain
   // luma key and at 1 it is pure fractal burn-through.

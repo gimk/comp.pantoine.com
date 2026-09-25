@@ -21,7 +21,7 @@ export const humBar: EffectDef = {
     { kind: 'float', key: 'intensity', label: 'Intensity', min: -1, max: 1, step: 0.01, default: 0.2 },
   ],
   fragment: `  vec4 src = texture(u_src, v_uv);
-  float phase = fract(v_uv.y - u_time * u_speed);
+  float phase = fract(v_uv.y - u_phase_speed);
 
   // Distance to the band centre, measured the short way round the wrap so
   // the band does not tear in half as it crosses the edge.

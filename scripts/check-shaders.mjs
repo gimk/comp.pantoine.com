@@ -102,6 +102,12 @@ try {
         console.error(`FAIL  ${label}  uses the reserved word "${reserved[1]}"`);
       }
 
+      const mainIndex = body.indexOf('void main()');
+      if (mainIndex !== -1 && /\buniform\s+/.test(body.slice(mainIndex))) {
+        failures += 1;
+        console.error(`FAIL  ${label}  declares a uniform inside function body (uniforms must be global)`);
+      }
+
       try {
         // The parser handles the language, not the preprocessor.
         parser.parse(body.replace(/^#version.*$/m, ''));

@@ -28,7 +28,7 @@ export const displace: EffectDef = {
     { kind: 'enum', key: 'edge', label: 'Edge', options: ['Clamp', 'Wrap', 'Black', 'Mirror'], default: 0 },
   ],
   fragment: `  vec2 field = v_uv * u_scale + u_seed * 97.0;
-  float t = u_time * u_speed;
+  float t = u_phase_speed;
 
   // fbm lands in roughly 0..1, so the halves are what centre the push on
   // zero -- without them the whole image would also drift bodily.

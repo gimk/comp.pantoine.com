@@ -25,7 +25,7 @@ export const headSwitch: EffectDef = {
   ],
   fragment: `  // 1 at the very bottom, falling to 0 at the top of the band.
   float band = 1.0 - smoothstep(0.0, max(u_height, 0.001), v_uv.y);
-  float tick = floor(u_time * u_rate);
+  float tick = floor(u_phase_rate);
 
   float n = valueNoise(vec2(v_uv.y * 220.0, tick + u_seed * 71.0));
   float shift = (n - 0.5) * u_amount * band;

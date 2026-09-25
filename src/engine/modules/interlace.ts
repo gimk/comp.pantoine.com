@@ -29,7 +29,7 @@ export const interlace: EffectDef = {
   fragment: `  float lines = max(u_lines, 1.0);
   float row = floor(v_uv.y * lines);
   float odd = mod(row, 2.0);
-  float field = mod(floor(u_time * u_rate), 2.0);
+  float field = mod(floor(u_phase_rate), 2.0);
   // "active" is a reserved word in GLSL ES -- do not name anything that.
   bool lit = (odd == field);
 

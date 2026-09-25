@@ -1,5 +1,5 @@
 import type { EffectDef, ParamSpec, ParamValue, Rgb, Vec2 } from './effects';
-import { FIRST_INPUT_UNIT, buildFragmentSource, inputsOf, paramsOf, passesOf, prelude } from './effects';
+import { FIRST_INPUT_UNIT, buildFragmentSource, inputsOf, isPhasedParam, paramsOf, passesOf, prelude } from './effects';
 import { createProgram, drawQuad, uniform, type UniformCache } from './gl';
 import { TargetPool, createTarget, type RenderTarget } from './targets';
 import { reportShaderError } from './shaderErrors';
@@ -150,6 +150,14 @@ export class Pipeline {
   private history = new Map<string, RenderTarget>();
   private historyWidth = 0;
   private historyHeight = 0;
+  /**
+   * Accumulated phase per node and parameter key (e.g. speed/rate/roll).
+   *
+   * Integrated over dt each frame so modulating speed with an LFO speeds up
+   * or slows down the movement smoothly, rather than oscillating wildly
+   * against absolute elapsed time.
+   */
+  private nodePhases = new Map<string, Map<string, number>>();
 
   private historyFor(nodeId: string, width: number, height: number): RenderTarget {
     let target = this.history.get(nodeId);
@@ -348,6 +356,7 @@ export class Pipeline {
     height: number,
     request: RenderRequest,
     liveFeedback: Set<string>,
+    livePhases: Set<string>,
   ): RenderTarget {
     const gl = this.gl;
     const specs = paramsOf(pass.def);
@@ -364,12 +373,28 @@ export class Pipeline {
       liveFeedback.add(pass.nodeId);
     }
 
+    livePhases.add(pass.nodeId);
+    let phases = this.nodePhases.get(pass.nodeId);
+    if (!phases) {
+      phases = new Map();
+      this.nodePhases.set(pass.nodeId, phases);
+    }
+
     // Evaluated once per node per frame, so every sub-pass of a multi-pass
     // effect sees the same modulated value.
     const values = specs.map((spec) => {
       const modulation = pass.modulation[spec.key];
       const base = pass.params[spec.key];
-      return modulation ? modulatedValue(spec, base, modulation, request.time) : base;
+      const val = modulation ? modulatedValue(spec, base, modulation, request.time) : base;
+
+      if (isPhasedParam(spec) && typeof val === 'number') {
+        // Integrate speed/rate over time delta: phase = (phase + dt * val) % 1000.
+        // Wrapping periodically keeps highp precision intact.
+        let cur = phases!.get(spec.key) ?? 0;
+        cur = (cur + request.delta * val) % 1000;
+        phases!.set(spec.key, cur);
+      }
+      return val;
     });
 
     let result = input;
@@ -393,6 +418,10 @@ export class Pipeline {
       specs.forEach((spec, k) => {
         const location = uniform(gl, compiled.program, compiled.uniforms, 'u_' + spec.key);
         setParamUniform(gl, location, spec, values[k]);
+      });
+      phases.forEach((phaseVal, phaseKey) => {
+        const loc = uniform(gl, compiled.program, compiled.uniforms, 'u_phase_' + phaseKey);
+        if (loc !== null) gl.uniform1f(loc, phaseVal);
       });
       drawQuad(gl);
 
@@ -438,6 +467,7 @@ export class Pipeline {
     }
     const liveFeedback = new Set<string>();
     const liveSources = new Set<string>();
+    const livePhases = new Set<string>();
 
     this.pool.resize(workWidth, workHeight);
     gl.viewport(0, 0, workWidth, workHeight);
@@ -500,6 +530,7 @@ export class Pipeline {
         workHeight,
         request,
         liveFeedback,
+        livePhases,
       );
       textures[index] = target.texture;
       owned[index] = target;
@@ -521,6 +552,11 @@ export class Pipeline {
       if (liveSources.has(nodeId)) continue;
       gl.deleteTexture(source.texture);
       this.sources.delete(nodeId);
+    }
+    for (const nodeId of this.nodePhases.keys()) {
+      if (!livePhases.has(nodeId)) {
+        this.nodePhases.delete(nodeId);
+      }
     }
 
     const fit = Math.min(canvasWidth / primary.width, canvasHeight / primary.height);
@@ -574,6 +610,7 @@ export class Pipeline {
    */
   resetFeedback(): void {
     this.disposeHistory();
+    this.nodePhases.clear();
   }
 
   /** Clear the canvas to transparent, for when nothing is wired up. */
@@ -590,6 +627,7 @@ export class Pipeline {
     this.pool.dispose();
     this.disposeHistory();
     this.disposeDisplay();
+    this.nodePhases.clear();
     for (const compiled of this.programs.values()) gl.deleteProgram(compiled.program);
     this.programs.clear();
     for (const source of this.sources.values()) gl.deleteTexture(source.texture);

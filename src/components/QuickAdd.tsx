@@ -2,7 +2,7 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 're
 import { useReactFlow } from '@xyflow/react';
 import { ChevronRight } from 'lucide-react';
 import { paletteDropOffset } from './paletteDrag';
-import { addPaletteItem, catalog, type CatalogEntry, type CatalogFolder } from './paletteCatalog';
+import { addPaletteItem, catalog, type CatalogEntry, type CatalogGroup } from './paletteCatalog';
 
 /** How far up and left of the pointer the menu opens, so the pointer lands inside it. */
 const ANCHOR_INSET = 14;
@@ -19,6 +19,41 @@ const everything: Found[] = catalog.flatMap((folder) =>
   ),
 );
 
+type QuickAddCategory = {
+  id: string;
+  label: string;
+  groups: CatalogGroup[];
+};
+
+const moduleFolder = catalog.find((f) => f.id === 'module');
+const inputFolder = catalog.find((f) => f.id === 'input');
+const outputFolder = catalog.find((f) => f.id === 'output');
+
+/**
+ * Top-level categories shown in Shift+A.
+ *
+ * Each module sub-category (Color & Tone, Stylize, Optics, CRT, etc.)
+ * is presented directly alongside Input and Output so the user can jump straight
+ * into the category without intermediate section headings.
+ */
+const quickAddCategories: QuickAddCategory[] = [
+  {
+    id: 'input',
+    label: 'Input',
+    groups: inputFolder?.groups ?? [],
+  },
+  ...(moduleFolder?.groups.map((group, index) => ({
+    id: `module:${group.heading ?? index}`,
+    label: group.heading ?? 'Module',
+    groups: [{ entries: group.entries }],
+  })) ?? []),
+  {
+    id: 'output',
+    label: 'Output',
+    groups: outputFolder?.groups ?? [],
+  },
+];
+
 const itemsIn = (column: Element | null): HTMLElement[] =>
   column ? Array.from(column.querySelectorAll<HTMLElement>('[data-qa-item]')) : [];
 
@@ -26,9 +61,8 @@ const itemsIn = (column: Element | null): HTMLElement[] =>
  * Blender's Shift+A: the whole catalog in a menu under the pointer, and
  * whatever is picked lands where the pointer was.
  *
- * Folders -- Input, Module, Output -- open to the side on hover, focus or
- * the right arrow. Typing searches every folder at once, and Enter takes the
- * first match, so Shift+A, "blo", Enter adds a Blend without the mouse.
+ * Categories open to the side on hover, focus or the right arrow. Typing searches
+ * every folder at once, and Enter takes the first match.
  * Escape, or a click or scroll anywhere else, closes it.
  */
 export const QuickAdd: React.FC<{ at: { x: number; y: number }; onClose: () => void }> = ({ at, onClose }) => {
@@ -37,7 +71,7 @@ export const QuickAdd: React.FC<{ at: { x: number; y: number }; onClose: () => v
   const subRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState('');
-  const [openId, setOpenId] = useState<CatalogFolder['id'] | null>(null);
+  const [openId, setOpenId] = useState<string | null>(null);
   const [place, setPlace] = useState({ left: at.x - ANCHOR_INSET, top: at.y - ANCHOR_INSET });
 
   const results = useMemo(() => {
@@ -48,7 +82,7 @@ export const QuickAdd: React.FC<{ at: { x: number; y: number }; onClose: () => v
     );
   }, [query]);
 
-  const folder = results ? undefined : catalog.find((f) => f.id === openId);
+  const folder = results ? undefined : quickAddCategories.find((f) => f.id === openId);
 
   // Kept inside the window: opened near an edge, it moves in rather than
   // hanging off it.
@@ -133,7 +167,7 @@ export const QuickAdd: React.FC<{ at: { x: number; y: number }; onClose: () => v
       else items[(next + items.length) % items.length]?.focus();
     } else if (event.key === 'ArrowRight' && active?.dataset.qaFolder) {
       event.preventDefault();
-      setOpenId(active.dataset.qaFolder as CatalogFolder['id']);
+      setOpenId(active.dataset.qaFolder);
       focusSub();
     } else if (event.key === 'ArrowLeft' && column === subRef.current) {
       event.preventDefault();
@@ -148,6 +182,7 @@ export const QuickAdd: React.FC<{ at: { x: number; y: number }; onClose: () => v
     <button key={entry.key} type="button" className="quick-add-item" data-qa-item onClick={() => pick(entry)}>
       <span>{entry.label}</span>
       {hint && <span className="quick-add-hint">{hint}</span>}
+      {entry.tag && <span className="tag">{entry.tag}</span>}
     </button>
   );
 
@@ -180,26 +215,28 @@ export const QuickAdd: React.FC<{ at: { x: number; y: number }; onClose: () => v
             <span className="quick-add-empty">Nothing matches</span>
           )
         ) : (
-          catalog.map((f) => (
-            <button
-              key={f.id}
-              type="button"
-              className={'quick-add-item quick-add-folder' + (openId === f.id ? ' is-open' : '')}
-              data-qa-item
-              data-qa-folder={f.id}
-              aria-haspopup="menu"
-              aria-expanded={openId === f.id}
-              onPointerEnter={() => setOpenId(f.id)}
-              onFocus={() => setOpenId(f.id)}
-              onClick={() => {
-                setOpenId(f.id);
-                focusSub();
-              }}
-            >
-              <span>{f.label}</span>
-              <ChevronRight size={13} />
-            </button>
-          ))
+          <div className="quick-add-folders">
+            {quickAddCategories.map((f) => (
+              <button
+                key={f.id}
+                type="button"
+                className={'quick-add-item quick-add-folder' + (openId === f.id ? ' is-open' : '')}
+                data-qa-item
+                data-qa-folder={f.id}
+                aria-haspopup="menu"
+                aria-expanded={openId === f.id}
+                onPointerEnter={() => setOpenId(f.id)}
+                onFocus={() => setOpenId(f.id)}
+                onClick={() => {
+                  setOpenId(f.id);
+                  focusSub();
+                }}
+              >
+                <span>{f.label}</span>
+                <ChevronRight size={13} />
+              </button>
+            ))}
+          </div>
         )}
       </div>
 

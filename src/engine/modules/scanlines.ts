@@ -32,7 +32,7 @@ export const scanlines: EffectDef = {
     { kind: 'float', key: 'roll', label: 'Roll', min: -5, max: 5, step: 0.05, default: 0 },
   ],
   fragment: `  vec4 src = texture(u_src, v_uv);
-  float phase = v_uv.y * max(u_lines, 1.0) + u_time * u_roll;
+  float phase = v_uv.y * max(u_lines, 1.0) + u_phase_roll;
   // pow() on the raised sine shapes the duty cycle: >1 thins the bright
   // band towards a fine line, <1 fattens it towards a soft ripple.
   float s = pow(sin(phase * TAU) * 0.5 + 0.5, max(u_thickness, 0.01));

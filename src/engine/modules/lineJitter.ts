@@ -29,7 +29,7 @@ export const lineJitter: EffectDef = {
     { kind: 'enum', key: 'edge', label: 'Edge', options: ['Clamp', 'Wrap', 'Black', 'Mirror'], default: 0 },
   ],
   fragment: `  float line = floor(v_uv.y * max(u_lines, 1.0));
-  float tick = floor(u_time * u_rate);
+  float tick = floor(u_phase_rate);
   vec2 key = vec2(line, tick + u_seed * 313.0);
 
   // Two independent draws off the same line: one decides whether this line

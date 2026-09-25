@@ -6,6 +6,8 @@ import {
   ReactFlowProvider,
   useReactFlow,
   useStoreApi,
+  PanOnScrollMode,
+  SelectionMode,
   type Connection,
   type Edge,
   type OnNodeDrag,
@@ -29,6 +31,7 @@ import { ExportNode } from './components/ExportNode';
 import { SnapGuides } from './components/SnapGuides';
 import { Toolbar } from './components/Toolbar';
 import { Transport } from './components/Transport';
+import { AboutModal } from './components/AboutModal';
 import { useCanvasShortcuts } from './components/useCanvasShortcuts';
 import { dragMode, setDragModifiers, setVisibleAreaSource, useGraph } from './state/store';
 import { commitNow } from './state/history';
@@ -116,6 +119,17 @@ const defaultEdgeOptions = {
 const fitViewOptions = {
   padding: { top: '72px', right: '40px', bottom: '40px', left: '40px' },
 } as const;
+
+/**
+ * Figma-style hybrid navigation:
+ * - Panning: middle click (1) or right click (2) drags to move around.
+ * - Selection: left click (0) drag draws a selection box (selectionOnDrag).
+ * - Zoom: Cmd or Ctrl + scroll wheel zooms in and out.
+ * - Trackpad: two-finger scroll moves around freely (panOnScroll), pinch zooms.
+ */
+const panOnDrag = [1, 2];
+const zoomActivationKeyCode = ['Meta', 'Control'];
+const proOptions = { hideAttribution: true };
 
 const Editor: React.FC = () => {
   const nodes = useGraph((state) => state.nodes);
@@ -294,10 +308,18 @@ const Editor: React.FC = () => {
         // Space is play/pause. Holding it to pan is React Flow's default, and
         // a redundant one here: dragging the empty canvas already pans.
         panActivationKeyCode={null}
+        panOnScroll
+        panOnScrollMode={PanOnScrollMode.Free}
+        panOnScrollSpeed={1}
+        panOnDrag={panOnDrag}
+        selectionOnDrag
+        selectionMode={SelectionMode.Partial}
+        zoomActivationKeyCode={zoomActivationKeyCode}
         minZoom={0.3}
         maxZoom={2}
         fitView
         fitViewOptions={fitViewOptions}
+        proOptions={proOptions}
       >
         <SnapGuides />
         <Background variant={BackgroundVariant.Dots} gap={26} size={1.4} color="rgba(23,23,26,0.16)" />
@@ -307,14 +329,27 @@ const Editor: React.FC = () => {
   );
 };
 
+const handleCanvasContextMenu = (event: React.MouseEvent) => {
+  if (
+    event.target instanceof HTMLElement &&
+    (event.target.tagName === 'INPUT' ||
+      event.target.tagName === 'TEXTAREA' ||
+      event.target.isContentEditable)
+  ) {
+    return;
+  }
+  event.preventDefault();
+};
+
 export const App: React.FC = () => (
   <div className="app">
     <ReactFlowProvider>
-      <main className="canvas-area">
+      <main className="canvas-area" onContextMenu={handleCanvasContextMenu}>
         <Editor />
       </main>
       <Toolbar />
       <Transport />
+      <AboutModal />
     </ReactFlowProvider>
   </div>
 );

@@ -26,7 +26,7 @@ export const wobble: EffectDef = {
     { kind: 'enum', key: 'axis', label: 'Axis', options: ['Horizontal', 'Vertical', 'Both'], default: 0 },
     { kind: 'enum', key: 'edge', label: 'Edge', options: ['Clamp', 'Wrap', 'Black', 'Mirror'], default: 0 },
   ],
-  fragment: `  float t = u_time * u_rate + u_phase;
+  fragment: `  float t = u_phase_rate + u_phase;
   vec2 uv = v_uv;
 
   // The wave runs along the axis it is not displacing, which is what makes

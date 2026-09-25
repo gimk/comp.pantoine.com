@@ -28,7 +28,7 @@ export const dropouts: EffectDef = {
   fragment: `  vec4 src = texture(u_src, v_uv);
   float line = floor(v_uv.y * max(u_lines, 1.0));
   float seg = floor(v_uv.x / max(u_dash, 0.001));
-  float tick = floor(u_time * u_rate);
+  float tick = floor(u_phase_rate);
 
   // The 91 spreads consecutive lines apart in the hash's input, so
   // neighbouring rows do not draw near-identical values.

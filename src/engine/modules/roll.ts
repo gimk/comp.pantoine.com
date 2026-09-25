@@ -22,7 +22,7 @@ export const roll: EffectDef = {
     { kind: 'float', key: 'seam', label: 'Seam Width', min: 0, max: 0.2, step: 0.002, default: 0.02 },
     { kind: 'float', key: 'darkness', label: 'Seam Darkness', min: 0, max: 1, step: 0.01, default: 0.8 },
   ],
-  fragment: `  float y = fract(v_uv.y + u_time * u_speed + u_offset);
+  fragment: `  float y = fract(v_uv.y + u_phase_speed + u_offset);
   vec4 c = texture(u_src, vec2(v_uv.x, y));
 
   // The seam sits where the wrap happens, so it travels with the picture.

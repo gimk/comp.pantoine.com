@@ -24,7 +24,7 @@ export const grain: EffectDef = {
   ],
   fragment: `  vec4 src = texture(u_src, v_uv);
   vec2 cell = floor(v_uv * u_resolution / max(u_size, 1.0));
-  float tick = floor(u_time * u_rate);
+  float tick = floor(u_phase_rate);
   vec2 s = cell + vec2(tick * 37.0, u_seed * 991.0);
   vec3 n;
   if (u_mono) {

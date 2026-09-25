@@ -242,6 +242,11 @@ const assertParamsAreSound = (def: EffectDef): void => {
   }
 };
 
+export const PHASED_PARAM_KEYS = new Set(['speed', 'rate', 'roll']);
+
+export const isPhasedParam = (spec: ParamSpec): boolean =>
+  spec.kind === 'float' && PHASED_PARAM_KEYS.has(spec.key);
+
 /**
  * Wrap one effect body, plus its params as uniforms, into a full shader.
  *
@@ -252,9 +257,14 @@ const assertParamsAreSound = (def: EffectDef): void => {
 export const buildFragmentSource = (def: EffectDef, passIndex: number): string => {
   assertParamsAreSound(def);
 
+  const phaseUniforms = paramsOf(def)
+    .filter(isPhasedParam)
+    .map((p) => `uniform float u_phase_${p.key};`);
+
   const uniforms = [
     ...inputsOf(def).map((input) => `uniform sampler2D u_${input.key};`),
     ...paramsOf(def).map((p) => `uniform ${GLSL_TYPE[p.kind]} u_${p.key};`),
+    ...phaseUniforms,
   ].join('\n');
 
   const bodies = passesOf(def);
