@@ -41,6 +41,11 @@ describe('graph ports and chain resolution', () => {
     expect(hasTargetPort(viewerNode, RENDER_PORT)).toBe(true); // Purple baked asset
     expect(hasTargetPort(viewerNode, 'param:test')).toBe(false);
 
+    const backgroundNode: AppNode = { id: 'bg1', type: 'backgroundOutput', position: { x: 0, y: 0 }, data: { enabled: true, fit: 'cover', opacity: 1 } };
+    expect(hasTargetPort(backgroundNode, null)).toBe(true); // Blue live WebGL
+    expect(hasTargetPort(backgroundNode, RENDER_PORT)).toBe(true); // Purple baked asset
+    expect(hasTargetPort(backgroundNode, 'param:test')).toBe(false);
+
     const renderNode: AppNode = { id: 'r1', type: 'render', position: { x: 0, y: 0 }, data: { format: 'mp4', quality: 0.9, scale: 1, time: 0, duration: 3, fps: 30 } };
     expect(hasTargetPort(renderNode, null)).toBe(true); // Blue live picture input
     expect(hasTargetPort(renderNode, RENDER_PORT)).toBe(false);
@@ -247,5 +252,36 @@ describe('graph ports and chain resolution', () => {
 
     expect(findUpstreamRenderNode(nodes, edges, 'viewer-1')?.id).toBe('render-1');
     expect(findUpstreamRenderNode(nodes, edges, 'export-1')?.id).toBe('render-1');
+  });
+
+  it('walks backwards through backgroundOutput pass-through nodes to find upstream render node', () => {
+    const nodes: AppNode[] = [
+      {
+        id: 'render-1',
+        type: 'render',
+        position: { x: 0, y: 0 },
+        data: { format: 'mp4', quality: 0.9, scale: 1, time: 0, duration: 3, fps: 30 },
+      },
+      {
+        id: 'bg-1',
+        type: 'backgroundOutput',
+        position: { x: 200, y: 0 },
+        data: { enabled: true, fit: 'cover', opacity: 1 },
+      },
+      {
+        id: 'viewer-1',
+        type: 'renderOutput',
+        position: { x: 400, y: 0 },
+        data: { width: 360 },
+      },
+    ];
+
+    const edges: Edge[] = [
+      { id: 'e1', source: 'render-1', sourceHandle: RENDER_PORT, target: 'bg-1', targetHandle: RENDER_PORT, type: 'link' },
+      { id: 'e2', source: 'bg-1', sourceHandle: RENDER_PORT, target: 'viewer-1', targetHandle: RENDER_PORT, type: 'link' },
+    ];
+
+    expect(findUpstreamRenderNode(nodes, edges, 'bg-1')?.id).toBe('render-1');
+    expect(findUpstreamRenderNode(nodes, edges, 'viewer-1')?.id).toBe('render-1');
   });
 });

@@ -27,7 +27,7 @@ export const particleFlow: EffectDef = {
     },
     { kind: 'float', key: 'angle', label: 'Direction Angle', min: 0, max: 360, step: 1, default: 270 },
     { kind: 'vec2', key: 'origin', label: 'Emitter Origin', min: 0, max: 1, step: 0.01, default: [0.5, 0.5] },
-    { kind: 'float', key: 'spread', label: 'Cone Spread', min: 5, max: 360, step: 2, default: 30 },
+    { kind: 'float', key: 'spread', label: 'Cone Spread', min: 0, max: 360, step: 2, default: 0 },
     {
       kind: 'enum',
       key: 'driver',

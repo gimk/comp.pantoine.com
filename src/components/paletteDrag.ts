@@ -15,6 +15,7 @@ export type PaletteItem =
   | { kind: 'modulator'; modulatorId: string }
   | { kind: 'image' }
   | { kind: 'output' }
+  | { kind: 'background' }
   | { kind: 'render' }
   | { kind: 'formatter' }
   | { kind: 'export' };
@@ -38,6 +39,7 @@ export const decodePaletteItem = (raw: string): PaletteItem | null => {
     if (
       item.kind === 'image' ||
       item.kind === 'output' ||
+      item.kind === 'background' ||
       item.kind === 'render' ||
       item.kind === 'formatter' ||
       item.kind === 'export'
@@ -67,8 +69,8 @@ export const paletteDropOffset = (item: PaletteItem): { x: number; y: number } =
   x:
     item.kind === 'output'
       ? DEFAULT_PREVIEW_WIDTH / 2
-      : item.kind === 'formatter' || item.kind === 'export'
-        ? 120
+      : item.kind === 'formatter' || item.kind === 'export' || item.kind === 'background'
+        ? 110
         : 98,
   y: 18,
 });

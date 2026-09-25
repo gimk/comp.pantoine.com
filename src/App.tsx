@@ -26,6 +26,8 @@ import { ImageNode } from './components/ImageNode';
 import { EffectNode } from './components/EffectNode';
 import { ModulatorNode } from './components/ModulatorNode';
 import { OutputNode } from './components/OutputNode';
+import { BackgroundNode } from './components/BackgroundNode';
+import { FullScreenBackground } from './components/FullScreenBackground';
 import { RenderNode } from './components/RenderNode';
 import { ExportNode } from './components/ExportNode';
 import { SnapGuides } from './components/SnapGuides';
@@ -50,6 +52,7 @@ const nodeTypes = {
   effect: EffectNode,
   modulator: ModulatorNode,
   renderOutput: OutputNode,
+  backgroundOutput: BackgroundNode,
   render: RenderNode,
   formatter: RenderNode,
   export: ExportNode,
@@ -83,13 +86,13 @@ const isValidConnection = (connection: Connection | Edge): boolean => {
   if (!isSourceRender && sourceNode) {
     if (sourceNode.type === 'render' || sourceNode.type === 'formatter') {
       isSourceRender = true;
-    } else if (sourceNode.type === 'renderOutput') {
+    } else if (sourceNode.type === 'renderOutput' || sourceNode.type === 'backgroundOutput') {
       isSourceRender = !!findUpstreamRenderNode(nodes, edges, sourceNode.id);
     }
   }
 
-  // If target is Viewer (renderOutput), it accepts BOTH live picture and rendered asset
-  if (targetNode?.type === 'renderOutput') {
+  // If target is Viewer (renderOutput) or Background (backgroundOutput), it accepts BOTH live picture and rendered asset
+  if (targetNode?.type === 'renderOutput' || targetNode?.type === 'backgroundOutput') {
     return true;
   }
 
@@ -276,6 +279,7 @@ const Editor: React.FC = () => {
 
   return (
     <>
+      <FullScreenBackground />
       <ReactFlow
         nodes={nodes}
         edges={edgesForFlow}

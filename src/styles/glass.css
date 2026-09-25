@@ -1572,7 +1572,7 @@ textarea,
 }
 
 /* --------------------------------------------------------------------------
-   Render & Export Nodes
+   Render, Export & Background Nodes
    -------------------------------------------------------------------------- */
 
 .node-render,
@@ -1580,8 +1580,107 @@ textarea,
   width: 240px;
 }
 
-.node-export {
+.node-export,
+.node-background {
   width: 220px;
+}
+
+/* --------------------------------------------------------------------------
+   Full Screen Background Output
+   -------------------------------------------------------------------------- */
+
+.fullscreen-background {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+  transition: opacity 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.fullscreen-background-canvas,
+.fullscreen-background-media {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
+}
+
+/* Background node controls */
+.bg-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.6);
+  color: var(--text-muted);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.bg-toggle-btn:hover {
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--text-primary);
+  border-color: rgba(23, 23, 26, 0.2);
+}
+
+.bg-toggle-btn.is-active {
+  background: var(--accent);
+  color: #ffffff;
+  border-color: transparent;
+}
+
+.bg-toggle-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  transition: background 0.15s ease;
+}
+
+.bg-toggle-btn.is-active .bg-toggle-dot {
+  background: #22c55e;
+}
+
+.bg-segmented-control {
+  display: inline-flex;
+  padding: 2px;
+  background: rgba(23, 23, 26, 0.06);
+  border-radius: var(--radius-sm);
+  gap: 2px;
+}
+
+.bg-seg-btn {
+  padding: 3px 8px;
+  border: none;
+  border-radius: calc(var(--radius-sm) - 2px);
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-ui);
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.bg-seg-btn:hover {
+  color: var(--text-primary);
+}
+
+.bg-seg-btn.is-active {
+  background: #ffffff;
+  color: var(--text-primary);
+  box-shadow: 0 1px 3px rgba(23, 23, 26, 0.1);
 }
 
 .export-recipe-card {

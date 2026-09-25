@@ -17,6 +17,7 @@ import { paramsOf, type ParamSpec, type ParamValue } from '../engine/effects';
 import { getEffect } from '../engine/registry';
 import { getModulator, modulatorParamsOf } from '../engine/modulators';
 import {
+  DEFAULT_BACKGROUND_DATA,
   DEFAULT_PREVIEW_WIDTH,
   DEFAULT_RENDER_DATA,
   hasTargetPort,
@@ -71,6 +72,14 @@ type SerializedNode =
       type: 'export';
       position: XYPosition;
       filenamePrefix?: string;
+    }
+  | {
+      id: string;
+      type: 'backgroundOutput';
+      position: XYPosition;
+      enabled?: boolean;
+      fit?: 'cover' | 'contain';
+      opacity?: number;
     }
   | { id: string; type: 'renderOutput'; position: XYPosition; width: number };
 
@@ -141,6 +150,16 @@ export const serializeGraph = (nodes: AppNode[], edges: Edge[]): SerializedGraph
         type: 'export',
         position,
         filenamePrefix: node.data.filenamePrefix,
+      };
+    }
+    if (node.type === 'backgroundOutput') {
+      return {
+        id: node.id,
+        type: 'backgroundOutput',
+        position,
+        enabled: node.data.enabled,
+        fit: node.data.fit,
+        opacity: node.data.opacity,
       };
     }
     return { id: node.id, type: 'renderOutput', position, width: node.data.width };
@@ -310,6 +329,20 @@ export const deserializeGraph = (raw: unknown): { nodes: AppNode[]; edges: Edge[
         position,
         data: {
           filenamePrefix: typeof entry.filenamePrefix === 'string' ? entry.filenamePrefix : '',
+        },
+      });
+      continue;
+    }
+
+    if (entry.type === 'backgroundOutput') {
+      nodes.push({
+        id: entry.id,
+        type: 'backgroundOutput',
+        position,
+        data: {
+          enabled: typeof entry.enabled === 'boolean' ? entry.enabled : DEFAULT_BACKGROUND_DATA.enabled,
+          fit: entry.fit === 'contain' ? 'contain' : 'cover',
+          opacity: typeof entry.opacity === 'number' && Number.isFinite(entry.opacity) ? entry.opacity : DEFAULT_BACKGROUND_DATA.opacity,
         },
       });
       continue;

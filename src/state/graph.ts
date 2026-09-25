@@ -79,11 +79,24 @@ export const DEFAULT_EXPORT_DATA: ExportNodeData = {
   filenamePrefix: '',
 };
 
+export type BackgroundNodeData = {
+  enabled: boolean;
+  fit: 'cover' | 'contain';
+  opacity: number;
+};
+
+export const DEFAULT_BACKGROUND_DATA: BackgroundNodeData = {
+  enabled: true,
+  fit: 'cover',
+  opacity: 1,
+};
+
 export type AppNode =
   | Node<ImageNodeData, 'image'>
   | Node<EffectNodeData, 'effect'>
   | Node<ModulatorNodeData, 'modulator'>
   | Node<OutputNodeData, 'renderOutput'>
+  | Node<BackgroundNodeData, 'backgroundOutput'>
   | Node<RenderNodeData, 'render'>
   | Node<FormatterNodeData, 'formatter'>
   | Node<ExportNodeData, 'export'>;
@@ -142,7 +155,7 @@ export const findUpstreamRenderNode = (
       if (isRenderPort(e.targetHandle) || isRenderPort(e.sourceHandle)) return true;
       const src = nodes.find((n) => n.id === e.source);
       if (src?.type === 'render' || src?.type === 'formatter') return true;
-      if (src?.type === 'renderOutput') {
+      if (src?.type === 'renderOutput' || src?.type === 'backgroundOutput') {
         return !!findUpstreamRenderNode(nodes, edges, src.id);
       }
       return false;
@@ -154,7 +167,7 @@ export const findUpstreamRenderNode = (
     if (srcNode.type === 'render' || srcNode.type === 'formatter') {
       return srcNode as Node<RenderNodeData, 'render'>;
     }
-    if (srcNode.type === 'renderOutput') {
+    if (srcNode.type === 'renderOutput' || srcNode.type === 'backgroundOutput') {
       currentId = srcNode.id;
       continue;
     }
@@ -173,7 +186,7 @@ export const samePort = (a: string | null | undefined, b: string | null | undefi
  * pointing at nothing.
  */
 export const hasTargetPort = (node: AppNode, handle: string | null | undefined): boolean => {
-  if (node.type === 'renderOutput') {
+  if (node.type === 'renderOutput' || node.type === 'backgroundOutput') {
     return !handle || isRenderPort(handle);
   }
   if (node.type === 'export') {
@@ -319,6 +332,7 @@ export const resolveChain = (
   if (
     !output ||
     (output.type !== 'renderOutput' &&
+      output.type !== 'backgroundOutput' &&
       output.type !== 'export' &&
       output.type !== 'render' &&
       output.type !== 'formatter')
@@ -359,6 +373,7 @@ export const resolveChain = (
       if (getImage(node.id)) index = steps.push({ kind: 'image', nodeId: node.id }) - 1;
     } else if (
       node?.type === 'renderOutput' ||
+      node?.type === 'backgroundOutput' ||
       node?.type === 'export' ||
       node?.type === 'render' ||
       node?.type === 'formatter'

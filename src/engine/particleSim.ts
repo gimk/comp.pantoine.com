@@ -45,27 +45,44 @@ void main() {
   float dirAngle = p.z;
   float speedVar = (p.w > 0.01) ? p.w : 1.0;
 
-  bool outOfBounds = (pos.x < -0.06 || pos.x > 1.06 || pos.y < -0.06 || pos.y > 1.06);
+  float rad = radians(u_angle);
+  vec2 dirVec = vec2(cos(rad), sin(rad));
+  if (length(dirVec) < 0.001) dirVec = vec2(0.0, -1.0);
+
+  // If emitter is Edge, ALL particles move in the exact same direction rad
+  if (u_emitter == 0) {
+    dirAngle = rad;
+  }
+
+  // Check if particle has left the frame
+  bool outOfBounds = (pos.x < -0.02 || pos.x > 1.02 || pos.y < -0.02 || pos.y > 1.02);
 
   if (outOfBounds) {
     vec4 rnd = hash42(uvCoord * 231.7 + vec2(u_time * 19.1 + float(coord.x), u_seed * 43.1 + float(coord.y)));
     speedVar = 0.8 + 0.4 * rnd.w;
 
-    if (u_emitter == 0) {
-      // Edge (Directional Sweep)
-      float rad = radians(u_angle);
-      dirAngle = rad;
-      vec2 dirVec = vec2(cos(rad), sin(rad));
-      if (length(dirVec) < 0.001) dirVec = vec2(0.0, -1.0);
-      vec2 dirPerp = vec2(-dirVec.y, dirVec.x);
+    vec2 effDir = (u_speed >= 0.0) ? dirVec : -dirVec;
 
-      vec2 spawnCenter = vec2(0.5, 0.5) - dirVec * 0.72;
-      pos = spawnCenter + dirPerp * ((rnd.x - 0.5) * 1.5) + dirVec * (rnd.y * 0.08);
+    if (u_emitter == 0) {
+      // Edge (Directional Sweep): All particles enter from upstream boundary in exact same direction
+      dirAngle = rad;
+      vec2 dirPerp = vec2(-effDir.y, effDir.x);
+
+      float absDx = abs(effDir.x);
+      float absDy = abs(effDir.y);
+      float distToEdge = 1e5;
+      if (absDx > 0.0001) distToEdge = min(distToEdge, 0.5 / absDx);
+      if (absDy > 0.0001) distToEdge = min(distToEdge, 0.5 / absDy);
+
+      vec2 edgeCenter = vec2(0.5, 0.5) - effDir * distToEdge;
+      vec2 spawnPos = edgeCenter + dirPerp * ((rnd.x - 0.5) * 1.4);
+      spawnPos = clamp(spawnPos, vec2(0.0), vec2(1.0));
+      pos = spawnPos + effDir * 0.005;
     } else if (u_emitter == 1) {
       // Point (Directional Cone)
-      pos = u_origin;
-      float spreadRad = radians(max(u_spread, 2.0));
-      dirAngle = radians(u_angle) + (rnd.x - 0.5) * spreadRad;
+      pos = u_origin + effDir * 0.005;
+      float spreadRad = radians(max(u_spread, 0.0));
+      dirAngle = rad + (rnd.x - 0.5) * spreadRad;
     } else if (u_emitter == 2) {
       // Point (Radial 360°)
       pos = u_origin;
@@ -73,7 +90,7 @@ void main() {
     } else {
       // Fullscreen Drift
       pos = rnd.xy;
-      dirAngle = radians(u_angle) + (rnd.z - 0.5) * radians(max(u_spread, 2.0));
+      dirAngle = rad;
     }
   } else {
     // Active simulation step
@@ -105,12 +122,12 @@ void main() {
       drv = (d > 0.001) ? fract(((mx == srcCol.r) ? (srcCol.g - srcCol.b) / d : (mx == srcCol.g) ? (srcCol.b - srcCol.r) / d + 2.0 : (srcCol.r - srcCol.g) / d + 4.0) / 6.0) : 0.0;
     }
 
-    vec2 dirVec = vec2(cos(dirAngle), sin(dirAngle));
+    vec2 curDir = (u_emitter == 0) ? dirVec : vec2(cos(dirAngle), sin(dirAngle));
     float baseSpeed = u_speed * 0.35 * speedVar;
     float speedFactor = 1.0 / (1.0 + u_slowdown * 4.0 * drv);
     float dt = clamp(u_delta, 0.0005, 0.06);
 
-    pos += dirVec * (baseSpeed * speedFactor) * dt;
+    pos += curDir * (baseSpeed * speedFactor) * dt;
   }
 
   fragColor = vec4(pos, dirAngle, speedVar);
@@ -136,6 +153,12 @@ void main() {
   vec2 pos = p.xy;
   v_pos = pos;
   v_srcCol = texture(u_src, clamp(pos, 0.0, 1.0));
+
+  if (pos.x < 0.0 || pos.x > 1.0 || pos.y < 0.0 || pos.y > 1.0) {
+    gl_Position = vec4(-10.0, -10.0, 0.0, 1.0);
+    gl_PointSize = 0.0;
+    return;
+  }
 
   // Snap to integer pixels on display target
   vec2 px = floor(pos * u_resolution) + 0.5;
@@ -302,18 +325,17 @@ export class ParticleEngine {
     return { texture, framebuffer };
   }
 
-  private initParticleData(texture: WebGLTexture, angleDeg: number, spreadDeg: number): void {
+  private initParticleData(texture: WebGLTexture, angleDeg: number): void {
     const gl = this.gl;
     const count = MAX_PARTICLES;
     const data = new Float32Array(count * 4);
     const rad = (angleDeg * Math.PI) / 180;
-    const spreadRad = (Math.max(spreadDeg, 2) * Math.PI) / 180;
 
     for (let i = 0; i < count; i++) {
       const idx = i * 4;
       data[idx] = Math.random();
       data[idx + 1] = Math.random();
-      data[idx + 2] = rad + (Math.random() - 0.5) * spreadRad;
+      data[idx + 2] = rad;
       data[idx + 3] = 0.8 + Math.random() * 0.4;
     }
 
@@ -321,15 +343,15 @@ export class ParticleEngine {
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, PARTICLE_SIM_SIZE, PARTICLE_SIM_SIZE, gl.RGBA, gl.FLOAT, data);
   }
 
-  private getNodeState(nodeId: string, width: number, height: number, angleDeg: number, spreadDeg: number): NodeSimState {
+  private getNodeState(nodeId: string, width: number, height: number, angleDeg: number): NodeSimState {
     const gl = this.gl;
     let state = this.nodes.get(nodeId);
 
     if (!state) {
       const targetA = this.createFloatState(PARTICLE_SIM_SIZE);
       const targetB = this.createFloatState(PARTICLE_SIM_SIZE);
-      this.initParticleData(targetA.texture, angleDeg, spreadDeg);
-      this.initParticleData(targetB.texture, angleDeg, spreadDeg);
+      this.initParticleData(targetA.texture, angleDeg);
+      this.initParticleData(targetB.texture, angleDeg);
 
       const decayA = createTarget(gl, width, height);
       const decayB = createTarget(gl, width, height);
@@ -359,8 +381,8 @@ export class ParticleEngine {
     }
 
     if (!state.initialized) {
-      this.initParticleData(state.stateTexA, angleDeg, spreadDeg);
-      this.initParticleData(state.stateTexB, angleDeg, spreadDeg);
+      this.initParticleData(state.stateTexA, angleDeg);
+      this.initParticleData(state.stateTexB, angleDeg);
       gl.bindFramebuffer(gl.FRAMEBUFFER, state.decayTargetA.framebuffer);
       gl.clearColor(0, 0, 0, 0);
       gl.clear(gl.COLOR_BUFFER_BIT);
@@ -408,8 +430,8 @@ export class ParticleEngine {
   ): void {
     const gl = this.gl;
     const angle = (params.angle as number) ?? 270;
-    const spread = (params.spread as number) ?? 30;
-    const state = this.getNodeState(nodeId, width, height, angle, spread);
+    const spread = (params.spread as number) ?? 0;
+    const state = this.getNodeState(nodeId, width, height, angle);
 
     const emitter = (params.emitter as number) ?? 0;
     const origin = (params.origin as [number, number]) ?? [0.5, 0.5];

@@ -82,6 +82,7 @@ export const catalog: CatalogFolder[] = [
       {
         entries: [
           { key: 'output', label: 'Viewer', payload: { kind: 'output' } },
+          { key: 'background', label: 'Background', payload: { kind: 'background' } },
           { key: 'render', label: 'Render', payload: { kind: 'render' } },
           { key: 'export', label: 'Exporter', payload: { kind: 'export' } },
         ],
@@ -99,5 +100,6 @@ export const addPaletteItem = (item: PaletteItem, position?: XYPosition): void =
   else if (item.kind === 'render') store.addRenderNode(position);
   else if (item.kind === 'formatter') store.addFormatterNode(position);
   else if (item.kind === 'export') store.addExportNode(position);
+  else if (item.kind === 'background') store.addBackgroundNode(position);
   else store.addOutputNode(position);
 };

@@ -176,4 +176,42 @@ describe('document serialization & deserialization', () => {
       expect(migratedNode.data.format).toBe('mp4');
     }
   });
+
+  it('serializes and deserializes backgroundOutput nodes correctly', () => {
+    const nodes: AppNode[] = [
+      {
+        id: 'bg-1',
+        type: 'backgroundOutput',
+        position: { x: 500, y: 150 },
+        data: {
+          enabled: true,
+          fit: 'cover',
+          opacity: 0.85,
+        },
+      },
+    ];
+
+    const serialized = serializeGraph(nodes, []);
+    expect(serialized.nodes[0]).toEqual({
+      id: 'bg-1',
+      type: 'backgroundOutput',
+      position: { x: 500, y: 150 },
+      enabled: true,
+      fit: 'cover',
+      opacity: 0.85,
+    });
+
+    const deserialized = deserializeGraph(serialized);
+    expect(deserialized).not.toBeNull();
+    expect(deserialized!.nodes[0]).toEqual({
+      id: 'bg-1',
+      type: 'backgroundOutput',
+      position: { x: 500, y: 150 },
+      data: {
+        enabled: true,
+        fit: 'cover',
+        opacity: 0.85,
+      },
+    });
+  });
 });
