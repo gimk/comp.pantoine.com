@@ -9,6 +9,7 @@ import {
   isRenderPort,
   paramPort,
   resolveChain,
+  chainIsAnimated,
   samePort,
   type AppNode,
 } from './graph';
@@ -283,5 +284,66 @@ describe('graph ports and chain resolution', () => {
 
     expect(findUpstreamRenderNode(nodes, edges, 'bg-1')?.id).toBe('render-1');
     expect(findUpstreamRenderNode(nodes, edges, 'viewer-1')?.id).toBe('render-1');
+  });
+
+  it('correctly reports chainIsAnimated when an effect has modulated parameters', () => {
+    // When particleFlow has speed: 0, but a math node modulates speed to 2.0
+    const effectDef = {
+      id: 'particleFlow',
+      label: 'Particle Flow',
+      category: 'crt' as const,
+      animated: (params: Record<string, unknown>) => (params.speed as number) !== 0,
+      params: [{ kind: 'float' as const, key: 'speed', label: 'Speed', min: -4, max: 4, step: 0.1, default: 1 }],
+      fragment: '',
+    };
+
+    const mathDef = {
+      id: 'math',
+      label: 'Math',
+      role: 'operator' as const,
+      params: [
+        { kind: 'enum' as const, key: 'op', label: 'Operation', options: ['Add'], default: 0 },
+        { kind: 'float' as const, key: 'a', label: 'A', min: -100, max: 100, step: 1, default: 0, field: true },
+        { kind: 'float' as const, key: 'b', label: 'B', min: -100, max: 100, step: 1, default: 0, field: true },
+      ],
+      sample: () => 2.0,
+      moving: () => false,
+      bounds: () => null,
+    };
+
+    const mathSignal = {
+      def: mathDef,
+      params: { op: 0, a: 1, b: 1 },
+      seed: 0,
+      inputs: {},
+    };
+
+    const chain = {
+      sourceNodeId: 'img-1',
+      plan: { steps: [], output: 0 },
+      passes: [
+        {
+          nodeId: 'pf-1',
+          seed: 123,
+          def: effectDef,
+          params: { speed: 0 },
+          modulation: { speed: mathSignal },
+        },
+      ],
+    };
+
+    // Even though base speed is 0 and math signal is not moving, the modulated value is 2.0 != 0
+    expect(chainIsAnimated(chain)).toBe(true);
+
+    // If modulated speed is 0, then not animated
+    const zeroMathSignal = {
+      ...mathSignal,
+      def: { ...mathDef, sample: () => 0 },
+    };
+    const zeroChain = {
+      ...chain,
+      passes: [{ ...chain.passes[0], modulation: { speed: zeroMathSignal } }],
+    };
+    expect(chainIsAnimated(zeroChain)).toBe(false);
   });
 });

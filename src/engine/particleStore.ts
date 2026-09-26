@@ -1,8 +1,11 @@
 import type { LoadedImage } from './imageStore';
-import { isPlaying, resetCount } from './clock';
+import { isPlaying, resetCount, clockSeconds } from './clock';
 import { useGraph } from '../state/store';
 import { getImage } from './imageStore';
-import type { ParamValue } from './effects';
+import { paramsOf, type ParamValue } from './effects';
+import { getEffect } from './registry';
+import { isModulatable, modulatedValue } from './modulators';
+import { paramPort, resolveSignal, type AppNode } from '../state/graph';
 
 export const PARTICLE_SIM_SIZE = 256;
 export const MAX_PARTICLES = PARTICLE_SIM_SIZE * PARTICLE_SIM_SIZE; // 65,536
@@ -392,11 +395,36 @@ class ParticleSimulationManager {
     const activeNodeIds = new Set(nodes.map((n) => n.id));
     this.prune(activeNodeIds);
 
+    const time = clockSeconds();
+    const def = getEffect('particleFlow');
+    const specs = def ? paramsOf(def) : [];
+
+    // Map of incoming edges: targetNodeId -> Map(targetHandle -> sourceNodeId)
+    const incoming = new Map<string, Map<string | null, string>>();
+    for (const edge of edges) {
+      let ports = incoming.get(edge.target);
+      if (!ports) incoming.set(edge.target, (ports = new Map()));
+      ports.set(edge.targetHandle ?? null, edge.source);
+    }
+
     for (const node of nodes) {
       if (node.type !== 'effect' || node.data.effectId !== 'particleFlow') continue;
 
       const sim = this.getSimulation(node.id);
-      sim.setParams(node.data.params);
+      const nodePorts = incoming.get(node.id);
+
+      const resolvedParams: Record<string, ParamValue> = { ...node.data.params };
+      for (const spec of specs) {
+        if (!isModulatable(spec)) continue;
+        const port = paramPort(spec.key);
+        const sourceId = nodePorts?.get(port);
+        if (!sourceId) continue;
+        const signal = resolveSignal(nodes, edges, sourceId);
+        if (!signal) continue;
+        resolvedParams[spec.key] = modulatedValue(spec, node.data.params[spec.key], signal, time);
+      }
+
+      sim.setParams(resolvedParams);
 
       // Find source image for luminance sampling
       let currentId: string | undefined = node.id;
@@ -405,9 +433,9 @@ class ParticleSimulationManager {
 
       while (currentId && !visited.has(currentId)) {
         visited.add(currentId);
-        const inEdge = edges.find((e) => e.target === currentId && !e.targetHandle);
-        if (!inEdge) break;
-        const upstream = nodes.find((n) => n.id === inEdge.source);
+        const inEdgeSource: string | undefined = incoming.get(currentId)?.get(null);
+        if (!inEdgeSource) break;
+        const upstream: AppNode | undefined = nodes.find((n) => n.id === inEdgeSource);
         if (!upstream) break;
         if (upstream.type === 'image') {
           sourceImageId = upstream.id;

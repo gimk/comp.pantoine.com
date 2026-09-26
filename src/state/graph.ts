@@ -5,6 +5,7 @@ import {
   getModulator,
   isModulatable,
   modulatorPortsOf,
+  modulatedValue,
   signalIsMoving,
   type Signal,
 } from '../engine/modulators';
@@ -432,8 +433,13 @@ export const resolveChain = (
 /** Whether anything in the chain needs a continuous frame loop. */
 export const chainIsAnimated = (chain: ResolvedChain | null): boolean =>
   chain !== null &&
-  chain.passes.some(
-    (pass) =>
-      isAnimated(pass.def, pass.params) ||
-      Object.values(pass.modulation).some(signalIsMoving),
-  );
+  chain.passes.some((pass) => {
+    const params = { ...pass.params };
+    for (const [key, signal] of Object.entries(pass.modulation)) {
+      const spec = paramsOf(pass.def).find((p) => p.key === key);
+      if (spec) {
+        params[key] = modulatedValue(spec, pass.params[key], signal, 0);
+      }
+    }
+    return isAnimated(pass.def, params) || Object.values(pass.modulation).some(signalIsMoving);
+  });

@@ -5,8 +5,7 @@ import type { EffectDef } from '../effects';
  *
  * Emulates the iconic 1970s analog scan-processor (Steve Rutt & Bill Etra),
  * converting video into horizontal electron-beam scanlines deflected vertically
- * by luminance, modulated by a high-frequency carrier wave ripple, and
- * crowned with radiating aura beams fanning out from a focal origin.
+ * by luminance and modulated by a high-frequency carrier wave ripple.
  */
 export const ruttEtra: EffectDef = {
   id: 'ruttEtra',
@@ -22,9 +21,6 @@ export const ruttEtra: EffectDef = {
     { kind: 'float', key: 'frequency', label: 'Frequency', min: 5, max: 150, step: 1, default: 45 },
     { kind: 'float', key: 'speed', label: 'Speed', min: -4, max: 4, step: 0.05, default: 1.0 },
     { kind: 'float', key: 'spread', label: 'Spread', min: 0, max: 1, step: 0.01, default: 0.25 },
-    { kind: 'float', key: 'rays', label: 'Rays', min: 0, max: 1, step: 0.01, default: 0.35 },
-    { kind: 'float', key: 'rayCount', label: 'Ray Count', min: 4, max: 36, step: 1, default: 14 },
-    { kind: 'vec2', key: 'origin', label: 'Ray Origin', min: 0, max: 1, step: 0.01, default: [0.5, 0.5] },
     { kind: 'float', key: 'brightness', label: 'Brightness', min: 0.5, max: 3.0, step: 0.05, default: 1.4 },
     { kind: 'float', key: 'baseBrightness', label: 'Shadow Lines', min: 0, max: 0.4, step: 0.01, default: 0.06 },
     {
@@ -54,23 +50,13 @@ export const ruttEtra: EffectDef = {
     vec4 srcSample = sampleEdge(u_src, vec2(v_uv.x, yk), 0);
     float lumaVal = luma(srcSample.rgb);
 
-    // Radiating aura rays fanning out above origin
-    vec2 rayDelta = vec2(v_uv.x - u_origin.x, yk - u_origin.y);
-    rayDelta.x *= u_resolution.x / max(u_resolution.y, 1.0);
-    float rayDist = length(rayDelta);
-    float rayAngle = atan(rayDelta.y, rayDelta.x);
-    float rayUpward = smoothstep(-0.05, 0.15, yk - u_origin.y);
-    float raySpoke = pow(clamp(sin(rayAngle * u_rayCount) * 0.5 + 0.5, 0.0, 1.0), 3.0);
-    float rayFalloff = exp(-rayDist * 2.5);
-    float rayEnergy = u_rays * raySpoke * rayFalloff * rayUpward;
-
     // Carrier wave ripple modulated by local signal
-    float signal = clamp(lumaVal + rayEnergy * 0.75, 0.0, 1.5);
+    float signal = lumaVal;
     float carrierPhase = v_uv.x * u_frequency + u_phase_speed + float(k) * (u_spread * TAU);
     float ripple = sin(carrierPhase) * u_ripple * signal;
 
     // Total vertical deflection
-    float totalDeflect = lumaVal * u_deflection + rayEnergy * 0.14 + ripple;
+    float totalDeflect = lumaVal * u_deflection + ripple;
     float Yk = yk + totalDeflect;
 
     // Distance to deflected beam
