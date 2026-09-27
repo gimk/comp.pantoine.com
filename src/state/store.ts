@@ -11,6 +11,7 @@ import {
   type XYPosition,
 } from '@xyflow/react';
 import { getEffect } from '../engine/registry';
+import { getGenerator } from '../engine/generators';
 import { defaultParams, type ParamValue } from '../engine/effects';
 import { defaultModulatorParams, getModulator } from '../engine/modulators';
 import { decodeImage, dropImage, putImage, shareImage, swapImages } from '../engine/imageStore';
@@ -58,6 +59,7 @@ const nextId = (prefix: string): string => {
 /** What a fresh id for a copy of this node should be prefixed with. */
 const idPrefixFor = (node: AppNode): string => {
   if (node.type === 'effect') return node.data.effectId;
+  if (node.type === 'generator') return node.data.generatorId;
   if (node.type === 'modulator') return node.data.modulatorId;
   if (node.type === 'render' || node.type === 'formatter') return 'render';
   if (node.type === 'export') return 'export';
@@ -251,6 +253,7 @@ type GraphStore = {
   removeEdge: (edgeId: string) => void;
   reconnectLink: (oldEdge: Edge, connection: Connection) => void;
   addEffectNode: (effectId: string, position?: XYPosition) => void;
+  addGeneratorNode: (generatorId: string, position?: XYPosition) => void;
   addModulatorNode: (modulatorId: string, position?: XYPosition) => void;
   addImageNode: (position?: XYPosition) => void;
   addVideoNode: (position?: XYPosition) => void;
@@ -260,6 +263,7 @@ type GraphStore = {
   addExportNode: (position?: XYPosition) => void;
   addBackgroundNode: (position?: XYPosition) => void;
   setParam: (nodeId: string, key: string, value: ParamValue) => void;
+  setGeneratorResolution: (nodeId: string, width: number, height: number) => void;
   setPreviewWidth: (nodeId: string, width: number) => void;
   setBackgroundData: (nodeId: string, patch: Partial<BackgroundNodeData>) => void;
   backgroundFps: number | null;
@@ -486,6 +490,24 @@ export const useGraph = create<GraphStore>((set, get) => ({
     set({ nodes: [...get().nodes, node] });
   },
 
+  addGeneratorNode: (generatorId, position) => {
+    const def = getGenerator(generatorId) ?? getEffect(generatorId);
+    const params = def ? defaultParams(def) : {};
+    const fallback = defaultNodePosition(get().nodes.length, 196, 220);
+    const node: AppNode = {
+      id: nextId(generatorId),
+      type: 'generator',
+      position: position ?? fallback,
+      data: {
+        generatorId,
+        width: 1280,
+        height: 720,
+        params,
+      },
+    };
+    set({ nodes: [...get().nodes, node] });
+  },
+
   addModulatorNode: (modulatorId, position) => {
     const def = getModulator(modulatorId);
     if (!def) return;
@@ -610,8 +632,17 @@ export const useGraph = create<GraphStore>((set, get) => ({
   setParam: (nodeId, key, value) => {
     set({
       nodes: get().nodes.map((node) => {
-        if (node.id !== nodeId || (node.type !== 'effect' && node.type !== 'modulator')) return node;
+        if (node.id !== nodeId || (node.type !== 'effect' && node.type !== 'modulator' && node.type !== 'generator')) return node;
         return { ...node, data: { ...node.data, params: { ...node.data.params, [key]: value } } } as AppNode;
+      }),
+    });
+  },
+
+  setGeneratorResolution: (nodeId, width, height) => {
+    set({
+      nodes: get().nodes.map((node) => {
+        if (node.id !== nodeId || node.type !== 'generator') return node;
+        return { ...node, data: { ...node.data, width, height } };
       }),
     });
   },

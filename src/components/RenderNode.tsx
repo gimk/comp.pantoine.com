@@ -4,6 +4,7 @@ import { CheckCircle2, Film, Loader2, X } from 'lucide-react';
 import { useGraph } from '../state/store';
 import {
   RENDER_PORT,
+  generatorsForPlan,
   resolveChain,
   type ExportFormat,
   type RenderNodeData,
@@ -42,7 +43,8 @@ export const RenderNode: React.FC<NodeProps<Node<RenderNodeData, 'render'>>> = (
 
   const chain = resolveChain(nodes, edges, id);
   const primaryVideo = chain ? getVideo(chain.sourceNodeId) : undefined;
-  const primarySource = chain ? getImage(chain.sourceNodeId) ?? primaryVideo : undefined;
+  const primaryGenerator = chain ? generatorsForPlan(chain.plan).get(chain.sourceNodeId) : undefined;
+  const primarySource = chain ? getImage(chain.sourceNodeId) ?? primaryVideo ?? primaryGenerator : undefined;
 
   const abortControllerRef = useRef<AbortController | null>(null);
 

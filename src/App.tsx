@@ -32,6 +32,7 @@ import {
 } from './state/graph';
 import { ImageNode } from './components/ImageNode';
 import { VideoNode } from './components/VideoNode';
+import { GeneratorNode } from './components/GeneratorNode';
 import { EffectNode } from './components/EffectNode';
 import { ModulatorNode } from './components/ModulatorNode';
 import { OutputNode } from './components/OutputNode';
@@ -59,6 +60,7 @@ import './styles/glass.css';
 const nodeTypes = {
   image: ImageNode,
   video: VideoNode,
+  generator: GeneratorNode,
   effect: EffectNode,
   modulator: ModulatorNode,
   renderOutput: OutputNode,

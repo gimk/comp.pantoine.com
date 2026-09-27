@@ -20,11 +20,12 @@ const modulatorEntry = (def: ModulatorDef): CatalogEntry => ({
 const effectGroups = (): CatalogGroup[] => {
   const byCategory = new Map<Category, EffectDef[]>();
   for (const def of registry) {
+    if (def.category === 'generator') continue;
     const existing = byCategory.get(def.category);
     if (existing) existing.push(def);
     else byCategory.set(def.category, [def]);
   }
-  return CATEGORY_ORDER.flatMap((category) => {
+  return CATEGORY_ORDER.filter((category) => category !== 'generator').flatMap((category) => {
     const defs = byCategory.get(category);
     if (!defs) return [];
     return [
@@ -65,6 +66,13 @@ export const catalog: CatalogFolder[] = [
         ],
       },
       {
+        heading: 'Generated Media',
+        entries: [
+          { key: 'generator:ramp', label: 'Ramp', payload: { kind: 'generator', generatorId: 'ramp' } },
+          { key: 'generator:noise', label: 'Noise', payload: { kind: 'generator', generatorId: 'noise' }, tag: 'animated' },
+        ],
+      },
+      {
         heading: 'Modulation',
         entries: modulatorRegistry.filter((def) => def.role === 'source').map(modulatorEntry),
       },
@@ -101,6 +109,7 @@ export const catalog: CatalogFolder[] = [
 export const addPaletteItem = (item: PaletteItem, position?: XYPosition): void => {
   const store = useGraph.getState();
   if (item.kind === 'effect') store.addEffectNode(item.effectId, position);
+  else if (item.kind === 'generator') store.addGeneratorNode(item.generatorId, position);
   else if (item.kind === 'modulator') store.addModulatorNode(item.modulatorId, position);
   else if (item.kind === 'image') store.addImageNode(position);
   else if (item.kind === 'video') store.addVideoNode(position);

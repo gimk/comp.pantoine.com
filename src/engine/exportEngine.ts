@@ -1,5 +1,5 @@
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
-import type { ExportFormat, RenderNodeData, ResolvedChain } from '../state/graph';
+import { generatorsForPlan, type ExportFormat, type RenderNodeData, type ResolvedChain } from '../state/graph';
 import { Pipeline, type RenderPlan } from './pipeline';
 import { createContext } from './gl';
 import { getImage, type LoadedImage } from './imageStore';
@@ -134,7 +134,8 @@ export const exportStill = async (options: {
   data: RenderNodeData;
 }): Promise<{ blob: Blob; extension: string }> => {
   const { chain, data } = options;
-  const primary = getImage(chain.sourceNodeId) ?? getVideo(chain.sourceNodeId);
+  const generators = generatorsForPlan(chain.plan);
+  const primary = getImage(chain.sourceNodeId) ?? getVideo(chain.sourceNodeId) ?? generators.get(chain.sourceNodeId);
   if (!primary) throw new Error('Source media not loaded');
 
   const images = imagesForPlan(chain.plan);
@@ -159,6 +160,7 @@ export const exportStill = async (options: {
       plan: chain.plan,
       images,
       videos,
+      generators,
       primaryNodeId: chain.sourceNodeId,
       time: data.time,
       delta: 0.016,
@@ -198,7 +200,8 @@ export const exportGif = async (options: {
   signal?: AbortSignal;
 }): Promise<{ blob: Blob; extension: string }> => {
   const { chain, data, onProgress, signal } = options;
-  const primary = getImage(chain.sourceNodeId) ?? getVideo(chain.sourceNodeId);
+  const generators = generatorsForPlan(chain.plan);
+  const primary = getImage(chain.sourceNodeId) ?? getVideo(chain.sourceNodeId) ?? generators.get(chain.sourceNodeId);
   if (!primary) throw new Error('Source media not loaded');
 
   const images = imagesForPlan(chain.plan);
@@ -236,6 +239,7 @@ export const exportGif = async (options: {
         plan: chain.plan,
         images,
         videos,
+        generators,
         primaryNodeId: chain.sourceNodeId,
         time: currentTime,
         delta: dt,
@@ -291,7 +295,8 @@ export const exportVideo = async (options: {
   signal?: AbortSignal;
 }): Promise<{ blob: Blob; extension: string }> => {
   const { chain, data, onProgress, signal } = options;
-  const primary = getImage(chain.sourceNodeId) ?? getVideo(chain.sourceNodeId);
+  const generators = generatorsForPlan(chain.plan);
+  const primary = getImage(chain.sourceNodeId) ?? getVideo(chain.sourceNodeId) ?? generators.get(chain.sourceNodeId);
   if (!primary) throw new Error('Source media not loaded');
 
   const images = imagesForPlan(chain.plan);
@@ -359,6 +364,7 @@ export const exportVideo = async (options: {
         plan: chain.plan,
         images,
         videos,
+        generators,
         primaryNodeId: chain.sourceNodeId,
         time: currentTime,
         delta: dt,

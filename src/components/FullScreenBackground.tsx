@@ -4,6 +4,7 @@ import { useGraph } from '../state/store';
 import {
   chainIsAnimated,
   findUpstreamRenderNode,
+  generatorsForPlan,
   resolveChain,
   type BackgroundNodeData,
 } from '../state/graph';
@@ -55,13 +56,22 @@ const signatureOf = (plan: RenderPlan, videoModulation?: Map<string, Record<stri
                 ? Object.entries(videoModulation.get(step.nodeId)!).map(([k, s]) => [k, signalKey(s)])
                 : null,
             ]
-          : [
-              step.pass.def.id,
-              step.pass.params,
-              step.input,
-              step.extras,
-              Object.entries(step.pass.modulation).map(([key, signal]) => [key, signalKey(signal)]),
-            ],
+          : step.kind === 'generator'
+            ? [
+                step.nodeId,
+                step.pass.def.id,
+                step.pass.params,
+                step.width,
+                step.height,
+                Object.entries(step.pass.modulation).map(([key, signal]) => [key, signalKey(signal)]),
+              ]
+            : [
+                step.pass.def.id,
+                step.pass.params,
+                step.input,
+                step.extras,
+                Object.entries(step.pass.modulation).map(([key, signal]) => [key, signalKey(signal)]),
+              ],
     ),
   ]);
 
@@ -172,7 +182,9 @@ export const FullScreenBackground: React.FC = () => {
       }
     }
 
-    const primarySource = getImage(current.sourceNodeId) ?? getVideo(current.sourceNodeId);
+    const generators = generatorsForPlan(current.plan);
+    const primarySource =
+      getImage(current.sourceNodeId) ?? getVideo(current.sourceNodeId) ?? generators.get(current.sourceNodeId);
     const maxDim = primarySource ? Math.max(primarySource.width, primarySource.height) : 2048;
     const targetWorkingSize = current.formatter
       ? Math.max(16, Math.round(maxDim * current.formatter.scale))
@@ -219,6 +231,7 @@ export const FullScreenBackground: React.FC = () => {
       plan: current.plan,
       images,
       videos,
+      generators,
       primaryNodeId: current.sourceNodeId,
       time,
       delta,

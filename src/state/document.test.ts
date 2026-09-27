@@ -265,4 +265,67 @@ describe('document serialization & deserialization', () => {
     expect((migrated!.nodes[0] as AppNode & { type: 'backgroundOutput' }).data.fit).toBe('fill');
     expect((migrated!.nodes[1] as AppNode & { type: 'backgroundOutput' }).data.fit).toBe('fit');
   });
+
+  it('round-trips generator nodes (Ramp and Noise) with parameters and resolution', () => {
+    const nodes: AppNode[] = [
+      {
+        id: 'ramp-1',
+        type: 'generator',
+        position: { x: 100, y: 100 },
+        data: {
+          generatorId: 'ramp',
+          width: 1920,
+          height: 1080,
+          params: { type: 2, angle: 90, stopCount: 4 },
+        },
+      },
+      {
+        id: 'noise-2',
+        type: 'generator',
+        position: { x: 350, y: 100 },
+        data: {
+          generatorId: 'noise',
+          width: 1280,
+          height: 720,
+          params: { noiseType: 0, harmonics: 4, speed: 0.5 },
+        },
+      },
+      {
+        id: 'out-1',
+        type: 'renderOutput',
+        position: { x: 600, y: 100 },
+        data: { width: 360 },
+      },
+    ];
+
+    const edges: Edge[] = [
+      { id: 'e1', source: 'ramp-1', target: 'out-1', type: 'link' },
+    ];
+
+    const serialized = serializeGraph(nodes, edges);
+    expect(serialized.nodes).toHaveLength(3);
+    const serializedRamp = serialized.nodes.find((n) => n.id === 'ramp-1');
+    expect(serializedRamp?.type).toBe('generator');
+
+    const deserialized = deserializeGraph(serialized);
+    expect(deserialized).not.toBeNull();
+    const restoredRamp = deserialized!.nodes.find((n) => n.id === 'ramp-1');
+    expect(restoredRamp?.type).toBe('generator');
+    if (restoredRamp?.type === 'generator') {
+      expect(restoredRamp.data.generatorId).toBe('ramp');
+      expect(restoredRamp.data.width).toBe(1920);
+      expect(restoredRamp.data.height).toBe(1080);
+      expect(restoredRamp.data.params.type).toBe(2);
+      expect(restoredRamp.data.params.angle).toBe(90);
+      expect(restoredRamp.data.params.stopCount).toBe(4);
+    }
+    const restoredNoise = deserialized!.nodes.find((n) => n.id === 'noise-2');
+    expect(restoredNoise?.type).toBe('generator');
+    if (restoredNoise?.type === 'generator') {
+      expect(restoredNoise.data.generatorId).toBe('noise');
+      expect(restoredNoise.data.width).toBe(1280);
+      expect(restoredNoise.data.height).toBe(720);
+      expect(restoredNoise.data.params.harmonics).toBe(4);
+    }
+  });
 });

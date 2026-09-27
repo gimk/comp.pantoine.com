@@ -44,6 +44,11 @@ import { transform } from './modules/transform';
 import { velocityMod } from './modules/velocityMod';
 import { vignette } from './modules/vignette';
 import { wobble } from './modules/wobble';
+import { ramp } from './modules/ramp';
+import { noiseGenerator } from './modules/noiseGenerator';
+import { signalRot } from './modules/signalRot';
+import { iridescentMetal } from './modules/iridescentMetal';
+import { glitchMachine } from './modules/glitchMachine';
 
 /**
  * Every effect the app knows about. Add one here and it appears in the UI,
@@ -64,6 +69,7 @@ export const registry: EffectDef[] = [
   edgeDetect,
   halftone,
   gradientMap,
+  iridescentMetal,
   posterize,
   threshold,
 
@@ -97,6 +103,8 @@ export const registry: EffectDef[] = [
 
   // Tape & Glitch
   blockGlitch,
+  glitchMachine,
+  signalRot,
   headSwitch,
   humBar,
   lineJitter,
@@ -115,6 +123,10 @@ export const registry: EffectDef[] = [
   blend,
   mask,
   chromaKey,
+
+  // Generators
+  ramp,
+  noiseGenerator,
 ];
 
 const byId = new Map(registry.map((def) => [def.id, def]));

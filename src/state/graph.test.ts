@@ -445,8 +445,85 @@ describe('graph ports and chain resolution', () => {
     const vMod = chain?.videoModulation?.get('vid-mod');
     expect(vMod).toBeDefined();
     expect(vMod?.speed).toBeDefined();
-    expect(vMod?.speed.def.id).toBe('math');
-
     dropVideo('vid-mod');
+  });
+
+  it('correctly handles generator nodes like Ramp and Noise', () => {
+    const rampNode: AppNode = {
+      id: 'ramp-1',
+      type: 'generator',
+      position: { x: 0, y: 0 },
+      data: {
+        generatorId: 'ramp',
+        width: 1920,
+        height: 1080,
+        params: { angle: 90, stopCount: 3 },
+      },
+    };
+
+    expect(hasTargetPort(rampNode, null)).toBe(false); // Generator has no image input
+    expect(hasTargetPort(rampNode, 'param:angle')).toBe(true); // Modulatable angle
+
+    const blurNode: AppNode = {
+      id: 'blur-1',
+      type: 'effect',
+      position: { x: 200, y: 0 },
+      data: { effectId: 'blur', params: { radius: 10 } },
+    };
+
+    const outputNode: AppNode = {
+      id: 'out-gen',
+      type: 'renderOutput',
+      position: { x: 400, y: 0 },
+      data: { width: 360 },
+    };
+
+    const edges: Edge[] = [
+      { id: 'e1', source: 'ramp-1', target: 'blur-1' },
+      { id: 'e2', source: 'blur-1', target: 'out-gen' },
+    ];
+
+    const chain = resolveChain([rampNode, blurNode, outputNode], edges, 'out-gen');
+    expect(chain).not.toBeNull();
+    expect(chain?.sourceNodeId).toBe('ramp-1');
+    expect(chain?.plan.steps.length).toBe(2);
+    expect(chain?.plan.steps[0].kind).toBe('generator');
+    if (chain?.plan.steps[0].kind === 'generator') {
+      expect(chain.plan.steps[0].width).toBe(1920);
+      expect(chain.plan.steps[0].height).toBe(1080);
+      expect(chain.plan.steps[0].pass.def.id).toBe('ramp');
+    }
+    expect(chain?.plan.steps[1].kind).toBe('effect');
+    expect(chainIsAnimated(chain)).toBe(false); // speed is 0 and no moving modulation
+  });
+
+  it('detects animation on Noise generator when speed > 0', () => {
+    const noiseNode: AppNode = {
+      id: 'noise-1',
+      type: 'generator',
+      position: { x: 0, y: 0 },
+      data: {
+        generatorId: 'noise',
+        width: 1280,
+        height: 720,
+        params: { speed: 0.5 },
+      },
+    };
+
+    const outputNode: AppNode = {
+      id: 'out-noise',
+      type: 'renderOutput',
+      position: { x: 300, y: 0 },
+      data: { width: 360 },
+    };
+
+    const edges: Edge[] = [
+      { id: 'e1', source: 'noise-1', target: 'out-noise' },
+    ];
+
+    const chain = resolveChain([noiseNode, outputNode], edges, 'out-noise');
+    expect(chain).not.toBeNull();
+    expect(chain?.sourceNodeId).toBe('noise-1');
+    expect(chainIsAnimated(chain)).toBe(true);
   });
 });

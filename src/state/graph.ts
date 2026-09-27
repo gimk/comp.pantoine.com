@@ -1,5 +1,6 @@
 import type { Edge, Node } from '@xyflow/react';
 import { getEffect } from '../engine/registry';
+import { getGenerator } from '../engine/generators';
 import { inputsOf, isAnimated, paramsOf, type ParamValue } from '../engine/effects';
 import {
   getModulator,
@@ -36,6 +37,13 @@ export type VideoNodeData = {
   playbackRate?: number;
   /** Error message if decoding or loading failed. */
   error?: string | null;
+};
+
+export type GeneratorNodeData = {
+  generatorId: string;
+  width: number;
+  height: number;
+  params: Record<string, ParamValue>;
 };
 
 export type EffectNodeData = {
@@ -111,6 +119,7 @@ export const DEFAULT_BACKGROUND_DATA: BackgroundNodeData = {
 export type AppNode =
   | Node<ImageNodeData, 'image'>
   | Node<VideoNodeData, 'video'>
+  | Node<GeneratorNodeData, 'generator'>
   | Node<EffectNodeData, 'effect'>
   | Node<ModulatorNodeData, 'modulator'>
   | Node<OutputNodeData, 'renderOutput'>
@@ -221,6 +230,15 @@ export const hasTargetPort = (node: AppNode, handle: string | null | undefined):
     if (isParamPort(handle)) {
       const key = handle.slice(PARAM_PORT_PREFIX.length);
       return key === 'speed';
+    }
+    return false;
+  }
+  if (node.type === 'generator') {
+    const def = getGenerator(node.data.generatorId) ?? getEffect(node.data.generatorId);
+    if (!def) return false;
+    if (isParamPort(handle)) {
+      const key = handle.slice(PARAM_PORT_PREFIX.length);
+      return paramsOf(def).some((spec) => spec.key === key && isModulatable(spec));
     }
     return false;
   }
@@ -409,6 +427,26 @@ export const resolveChain = (
           videoModulation.set(node.id, vMod);
         }
       }
+    } else if (node?.type === 'generator') {
+      const def = getGenerator(node.data.generatorId) ?? getEffect(node.data.generatorId);
+      if (def) {
+        const identity = identityOf(node.id);
+        const pass: Pass = {
+          nodeId: identity,
+          seed: seedFor(identity),
+          def,
+          params: node.data.params,
+          modulation: modulationFor(node.id, paramsOf(def)),
+        };
+        index =
+          steps.push({
+            kind: 'generator',
+            nodeId: node.id,
+            pass,
+            width: node.data.width || 1280,
+            height: node.data.height || 720,
+          }) - 1;
+      }
     } else if (
       node?.type === 'renderOutput' ||
       node?.type === 'backgroundOutput' ||
@@ -454,11 +492,13 @@ export const resolveChain = (
   }
   if (outputIndex === null) return null;
 
-  // Follow main inputs back up to the image or video that sets the frame.
+  // Follow main inputs back up to the image, video, or generator that sets the frame.
   let head = steps[outputIndex];
   while (head.kind === 'effect') head = steps[head.input];
 
-  const passes = steps.flatMap((step) => (step.kind === 'effect' ? [step.pass] : []));
+  const passes = steps.flatMap((step) =>
+    step.kind === 'effect' || step.kind === 'generator' ? [step.pass] : [],
+  );
   return {
     sourceNodeId: head.nodeId,
     plan: { steps, output: outputIndex },
@@ -466,6 +506,17 @@ export const resolveChain = (
     videoModulation,
     formatter: activeFormatter,
   };
+};
+
+/** Collect all generator node dimensions required by the plan. */
+export const generatorsForPlan = (plan: RenderPlan): Map<string, { width: number; height: number }> => {
+  const generators = new Map<string, { width: number; height: number }>();
+  for (const step of plan.steps) {
+    if (step.kind === 'generator') {
+      generators.set(step.nodeId, { width: step.width, height: step.height });
+    }
+  }
+  return generators;
 };
 
 /** Whether anything in the chain needs a continuous frame loop. */

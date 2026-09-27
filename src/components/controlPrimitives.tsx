@@ -395,7 +395,7 @@ export const Select: React.FC<{
  * Colours travel as straight 0..1 RGB because that is what the shader wants;
  * the native picker speaks hex, so it is converted at this boundary only.
  */
-const toHex = (rgb: Rgb): string =>
+export const toHex = (rgb: Rgb): string =>
   '#' +
   rgb
     .map((channel) =>
@@ -405,7 +405,7 @@ const toHex = (rgb: Rgb): string =>
     )
     .join('');
 
-const fromHex = (hex: string): Rgb => [
+export const fromHex = (hex: string): Rgb => [
   parseInt(hex.slice(1, 3), 16) / 255,
   parseInt(hex.slice(3, 5), 16) / 255,
   parseInt(hex.slice(5, 7), 16) / 255,

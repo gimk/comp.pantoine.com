@@ -4,10 +4,12 @@ import { Wallpaper } from 'lucide-react';
 import { useGraph } from '../state/store';
 import {
   findUpstreamRenderNode,
+  generatorsForPlan,
   resolveChain,
   type BackgroundNodeData,
 } from '../state/graph';
 import { getImage } from '../engine/imageStore';
+import { getVideo } from '../engine/videoStore';
 import { isPlaying, subscribeClock } from '../engine/clock';
 import { Slider } from './controlPrimitives';
 
@@ -26,7 +28,9 @@ export const BackgroundNode: React.FC<NodeProps<Node<BackgroundNodeData, 'backgr
   const hasRenderedAsset = !!renderAssetData?.renderedBlob && !!renderAssetData?.renderedUrl;
 
   const chain = resolveChain(nodes, edges, id);
-  const primaryImage = chain ? getImage(chain.sourceNodeId) : undefined;
+  const primarySource = chain
+    ? getImage(chain.sourceNodeId) ?? getVideo(chain.sourceNodeId) ?? generatorsForPlan(chain.plan).get(chain.sourceNodeId)
+    : undefined;
   const isPlayingNow = React.useSyncExternalStore(subscribeClock, isPlaying);
 
   const isConnected = !!chain || (isRenderMode && hasRenderedAsset);
@@ -50,8 +54,8 @@ export const BackgroundNode: React.FC<NodeProps<Node<BackgroundNodeData, 'backgr
       : renderAssetData
         ? renderAssetData.format.toUpperCase()
         : '—'
-    : primaryImage
-      ? `${primaryImage.width} × ${primaryImage.height}`
+    : primarySource
+      ? `${primarySource.width} × ${primarySource.height}`
       : '—';
 
   return (

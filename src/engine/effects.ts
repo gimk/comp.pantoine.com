@@ -60,7 +60,8 @@ export type Category =
   | 'tape'
   | 'noise'
   | 'temporal'
-  | 'composite';
+  | 'composite'
+  | 'generator';
 
 export const CATEGORY_ORDER: Category[] = [
   'color',
@@ -72,6 +73,7 @@ export const CATEGORY_ORDER: Category[] = [
   'noise',
   'temporal',
   'composite',
+  'generator',
 ];
 
 export const CATEGORY_LABELS: Record<Category, string> = {
@@ -84,6 +86,7 @@ export const CATEGORY_LABELS: Record<Category, string> = {
   noise: 'Noise & Grain',
   temporal: 'Temporal',
   composite: 'Composite',
+  generator: 'Generators',
 };
 
 /**

@@ -15,6 +15,7 @@
 import type { Edge, XYPosition } from '@xyflow/react';
 import { paramsOf, type ParamSpec, type ParamValue } from '../engine/effects';
 import { getEffect } from '../engine/registry';
+import { getGenerator } from '../engine/generators';
 import { getModulator, modulatorParamsOf } from '../engine/modulators';
 import {
   DEFAULT_BACKGROUND_DATA,
@@ -53,6 +54,15 @@ type SerializedNode =
       loop?: boolean;
       muted?: boolean;
       playbackRate?: number;
+    }
+  | {
+      id: string;
+      type: 'generator';
+      position: XYPosition;
+      generatorId: string;
+      width: number;
+      height: number;
+      params: Record<string, ParamValue>;
     }
   | {
       id: string;
@@ -138,6 +148,17 @@ export const serializeGraph = (nodes: AppNode[], edges: Edge[]): SerializedGraph
         loop: node.data.loop,
         muted: node.data.muted,
         playbackRate: node.data.playbackRate,
+      };
+    }
+    if (node.type === 'generator') {
+      return {
+        id: node.id,
+        type: 'generator',
+        position,
+        generatorId: node.data.generatorId,
+        width: node.data.width,
+        height: node.data.height,
+        params: node.data.params,
       };
     }
     if (node.type === 'effect') {
@@ -305,6 +326,23 @@ export const deserializeGraph = (raw: unknown): { nodes: AppNode[]; edges: Edge[
           loop: typeof entry.loop === 'boolean' ? entry.loop : true,
           muted: typeof entry.muted === 'boolean' ? entry.muted : true,
           playbackRate: isNumber(entry.playbackRate) ? entry.playbackRate : 1,
+        },
+      });
+      continue;
+    }
+
+    if (entry.type === 'generator') {
+      if (typeof entry.generatorId !== 'string') continue;
+      const def = getGenerator(entry.generatorId) ?? getEffect(entry.generatorId);
+      nodes.push({
+        id: entry.id,
+        type: 'generator',
+        position,
+        data: {
+          generatorId: entry.generatorId,
+          width: isNumber(entry.width) ? entry.width : 1280,
+          height: isNumber(entry.height) ? entry.height : 720,
+          params: def ? reconcileParams(paramsOf(def), entry.params) : ((entry.params as Record<string, ParamValue>) ?? {}),
         },
       });
       continue;

@@ -37,6 +37,7 @@ const CATEGORY_ICONS: Record<Category, React.ComponentType<{ size?: number }>> =
   noise: Waves,
   temporal: History,
   composite: Layers,
+  generator: Sparkles,
 };
 
 /**

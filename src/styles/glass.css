@@ -2360,5 +2360,148 @@ textarea,
   to { opacity: 1; transform: scale(1); }
 }
 
+/* --------------------------------------------------------------------------
+   Gradient Editor & Ramp Node
+   -------------------------------------------------------------------------- */
+
+.node-ramp {
+  width: 220px;
+}
+
+.gradient-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.gradient-track-wrap {
+  position: relative;
+  user-select: none;
+  touch-action: none;
+}
+
+.gradient-track {
+  position: relative;
+  width: 100%;
+  height: 22px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--hairline);
+  box-shadow: inset 0 1px 2px rgba(23, 23, 26, 0.12), 0 1px 2px rgba(23, 23, 26, 0.05);
+  cursor: copy;
+}
+
+.gradient-stops-bar {
+  position: relative;
+  width: 100%;
+  height: 20px;
+  margin-top: 3px;
+  user-select: none;
+}
+
+.gradient-stop-thumb {
+  position: absolute;
+  top: 0;
+  width: 14px;
+  height: 19px;
+  transform: translateX(-50%);
+  cursor: grab;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  z-index: 1;
+  touch-action: none;
+}
+
+.gradient-stop-thumb:active {
+  cursor: grabbing;
+}
+
+.gradient-stop-tip {
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-bottom: 5px solid rgba(255, 255, 255, 0.95);
+  filter: drop-shadow(0 -1px 1px rgba(23, 23, 26, 0.25));
+  transition: border-bottom-color 120ms ease;
+}
+
+.gradient-stop-color {
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  border: 1.5px solid #ffffff;
+  box-shadow: 0 1px 3px rgba(23, 23, 26, 0.28);
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.gradient-stop-thumb.is-selected {
+  z-index: 2;
+}
+
+.gradient-stop-thumb.is-selected .gradient-stop-tip {
+  border-bottom-color: var(--accent);
+}
+
+.gradient-stop-thumb.is-selected .gradient-stop-color {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1.5px var(--accent), 0 2px 5px rgba(23, 23, 26, 0.35);
+}
+
+.gradient-stop-inspector {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background: rgba(23, 23, 26, 0.03);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+}
+
+.gradient-active-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.gradient-btn-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.gradient-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 6px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.7);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 120ms ease, opacity 120ms ease, border-color 120ms ease;
+}
+
+.gradient-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.95);
+  border-color: rgba(23, 23, 26, 0.2);
+}
+
+.gradient-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.gradient-btn-icon {
+  width: 22px;
+  height: 20px;
+  padding: 0;
+}
+
+
 
 

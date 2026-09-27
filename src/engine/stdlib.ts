@@ -15,6 +15,9 @@ export const STDLIB = `
 const float TAU = 6.28318530718;
 
 float sat(float x) { return clamp(x, 0.0, 1.0); }
+vec2 sat(vec2 x) { return clamp(x, 0.0, 1.0); }
+vec3 sat(vec3 x) { return clamp(x, 0.0, 1.0); }
+vec4 sat(vec4 x) { return clamp(x, 0.0, 1.0); }
 
 /** Rec. 709 luma -- perceived brightness, not a flat channel average. */
 float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
@@ -53,6 +56,46 @@ float valueNoise(vec2 p) {
   float c = hash12(i + vec2(0.0, 1.0));
   float d = hash12(i + vec2(1.0, 1.0));
   return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+/** 2D gradient Perlin noise in 0..1 */
+float perlinNoise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+
+  float a = hash12(i);
+  float b = hash12(i + vec2(1.0, 0.0));
+  float c = hash12(i + vec2(0.0, 1.0));
+  float d = hash12(i + vec2(1.0, 1.0));
+
+  vec2 ga = vec2(cos(a * TAU), sin(a * TAU));
+  vec2 gb = vec2(cos(b * TAU), sin(b * TAU));
+  vec2 gc = vec2(cos(c * TAU), sin(c * TAU));
+  vec2 gd = vec2(cos(d * TAU), sin(d * TAU));
+
+  float va = dot(ga, f - vec2(0.0, 0.0));
+  float vb = dot(gb, f - vec2(1.0, 0.0));
+  float vc = dot(gc, f - vec2(0.0, 1.0));
+  float vd = dot(gd, f - vec2(1.0, 1.0));
+
+  return mix(mix(va, vb, u.x), mix(vc, vd, u.x), u.y) * 0.7071 + 0.5;
+}
+
+/** 2D Worley / cellular distance noise in 0..1 */
+float worleyNoise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  float minDist = 1.0;
+  for (int y = -1; y <= 1; y++) {
+    for (int x = -1; x <= 1; x++) {
+      vec2 neighbor = vec2(float(x), float(y));
+      vec2 pt = hash22(i + neighbor);
+      vec2 diff = neighbor + pt - f;
+      minDist = min(minDist, length(diff));
+    }
+  }
+  return clamp(minDist, 0.0, 1.0);
 }
 
 /*

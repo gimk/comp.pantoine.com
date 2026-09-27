@@ -33,6 +33,13 @@ export type Step =
   | { kind: 'image'; nodeId: string }
   | { kind: 'video'; nodeId: string }
   | {
+      kind: 'generator';
+      nodeId: string;
+      pass: Pass;
+      width: number;
+      height: number;
+    }
+  | {
       kind: 'effect';
       pass: Pass;
       /** The step feeding `u_src`. */
@@ -53,8 +60,10 @@ export type RenderRequest = {
   images: Map<string, LoadedImage>;
   /** Every video the plan reads, by node id. */
   videos?: Map<string, LoadedVideo>;
+  /** Every generator the plan reads, by node id. */
+  generators?: Map<string, { width: number; height: number }>;
   /**
-   * The image or video at the head of the main input path. Its size sets the working
+   * The image, video, or generator at the head of the main input path. Its size sets the working
    * resolution and the shape of the frame; any other source is fitted to it.
    */
   primaryNodeId: string;
@@ -533,7 +542,7 @@ export class Pipeline {
     const { plan, images, videos, primaryNodeId, canvasWidth, canvasHeight, maxWorkingSize } = request;
     if (canvasWidth === 0 || canvasHeight === 0) return;
 
-    const primary = images.get(primaryNodeId) ?? videos?.get(primaryNodeId);
+    const primary = images.get(primaryNodeId) ?? videos?.get(primaryNodeId) ?? request.generators?.get(primaryNodeId);
     if (!primary) return;
 
     /*
@@ -632,6 +641,23 @@ export class Pipeline {
         const cover = ratio > frameRatio ? [frameRatio / ratio, 1] : [1, ratio / frameRatio];
         gl.uniform2f(uniform(gl, this.importer.program, this.importer.uniforms, 'u_cover'), cover[0], cover[1]);
         drawQuad(gl);
+        textures[index] = target.texture;
+        owned[index] = target;
+        return;
+      }
+
+      if (step.kind === 'generator') {
+        const target = this.runEffect(
+          step.pass,
+          this.blank,
+          [],
+          workWidth,
+          workHeight,
+          request,
+          liveFeedback,
+          livePhases,
+          liveParticleSims,
+        );
         textures[index] = target.texture;
         owned[index] = target;
         return;
