@@ -262,44 +262,29 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
         const duration = v.element.duration || videoData?.duration || 1;
         const loop = videoData?.loop !== false;
 
-        if (vMod?.time) {
-          if (!v.element.paused) {
-            v.element.pause();
-          }
-          let targetTime = evaluateSignal(vMod.time, time);
-          if (loop && duration > 0) {
-            targetTime = ((targetTime % duration) + duration) % duration;
-          } else {
-            targetTime = Math.min(Math.max(0, targetTime), duration);
-          }
-          if (!v.element.seeking && Math.abs(v.element.currentTime - targetTime) > 0.01) {
-            v.element.currentTime = targetTime;
-          }
+        let targetSpeed = 1;
+        if (vMod?.speed) {
+          targetSpeed = Math.max(0, evaluateSignal(vMod.speed, time));
+        } else if (typeof videoData?.speed === 'number') {
+          targetSpeed = Math.max(0, videoData.speed);
+        } else if (typeof videoData?.playbackRate === 'number') {
+          targetSpeed = Math.max(0, videoData.playbackRate);
+        }
+
+        if (targetSpeed <= 0.001) {
+          if (!v.element.paused) v.element.pause();
         } else {
-          let targetSpeed = 1;
-          if (vMod?.speed) {
-            targetSpeed = Math.max(0, evaluateSignal(vMod.speed, time));
-          } else if (typeof videoData?.speed === 'number') {
-            targetSpeed = Math.max(0, videoData.speed);
-          } else if (typeof videoData?.playbackRate === 'number') {
-            targetSpeed = Math.max(0, videoData.playbackRate);
+          v.element.playbackRate = Math.min(16, Math.max(0.0625, targetSpeed));
+          if (isPlaying() && v.element.paused && !v.element.ended) {
+            void v.element.play().catch(() => {});
           }
+        }
 
-          if (targetSpeed <= 0.001) {
-            if (!v.element.paused) v.element.pause();
-          } else {
-            v.element.playbackRate = Math.min(16, Math.max(0.0625, targetSpeed));
-            if (isPlaying() && v.element.paused && !v.element.ended) {
+        if (v.element.ended || (loop && duration > 0 && v.element.currentTime >= duration - 0.05)) {
+          if (loop) {
+            v.element.currentTime = 0;
+            if (isPlaying()) {
               void v.element.play().catch(() => {});
-            }
-          }
-
-          if (v.element.ended || (loop && duration > 0 && v.element.currentTime >= duration - 0.05)) {
-            if (loop) {
-              v.element.currentTime = 0;
-              if (isPlaying()) {
-                void v.element.play().catch(() => {});
-              }
             }
           }
         }
@@ -397,12 +382,7 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
     if (!chain) return;
     const vids = videosFor(chain.plan);
     if (!vids || vids.size === 0) return;
-    for (const [vId, v] of vids.entries()) {
-      const isTimeModulated = !!chain.videoModulation?.get(vId)?.time;
-      if (isTimeModulated) {
-        if (!v.element.paused) v.element.pause();
-        continue;
-      }
+    for (const [, v] of vids.entries()) {
       if (playing) {
         if (v.element.paused && !v.element.ended) {
           void v.element.play().catch(() => {});

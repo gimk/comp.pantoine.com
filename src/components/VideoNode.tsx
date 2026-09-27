@@ -1,7 +1,7 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
 import { Film, Video as VideoIcon } from 'lucide-react';
-import { paramPort, type VideoNodeData } from '../state/graph';
+import { type VideoNodeData } from '../state/graph';
 import { useGraph } from '../state/store';
 import { type ParamSpec } from '../engine/effects';
 import { Toggle } from './controlPrimitives';
@@ -33,33 +33,8 @@ const formatDuration = (sec: number): string => {
 export const VideoNode: React.FC<NodeProps<Node<VideoNodeData, 'video'>>> = ({ id, data }) => {
   const loadVideo = useGraph((state) => state.loadVideo);
   const setVideoData = useGraph((state) => state.setVideoData);
-  const edges = useGraph((state) => state.edges);
-  const attachMathControls = useGraph((state) => state.attachMathControls);
   const inputRef = useRef<HTMLInputElement>(null);
   const [isOver, setIsOver] = useState(false);
-
-  const hasSpeedEdge = edges.some((e) => e.target === id && e.targetHandle === paramPort('speed'));
-  const hasTimeEdge = edges.some((e) => e.target === id && e.targetHandle === paramPort('time'));
-
-  const timeSpec = useMemo<ParamSpec>(
-    () => ({
-      kind: 'float',
-      key: 'time',
-      label: 'Time',
-      min: 0,
-      max: Math.max(1, data.duration || 60),
-      step: 0.01,
-      default: 0,
-    }),
-    [data.duration],
-  );
-
-  const accept = (files: FileList | null) => {
-    const file = files?.[0];
-    if (file && (file.type.startsWith('video/') || /\.(mp4|webm|mov|mkv)$/i.test(file.name))) {
-      void loadVideo(id, file);
-    }
-  };
 
   return (
     <div
@@ -137,29 +112,12 @@ export const VideoNode: React.FC<NodeProps<Node<VideoNodeData, 'video'>>> = ({ i
           port={true}
           onChange={(val) => setVideoData(id, { speed: val as number, playbackRate: val as number })}
         />
-        <ParamRow
-          nodeId={id}
-          spec={timeSpec}
-          value={data.time ?? 0}
-          port={true}
-          onChange={(val) => setVideoData(id, { time: val as number })}
-        />
         <div style={{ paddingTop: 4, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <Toggle
             label="Loop"
             value={data.loop !== false}
             onChange={(loop) => setVideoData(id, { loop })}
           />
-          {!hasSpeedEdge && !hasTimeEdge && (
-            <button
-              type="button"
-              className="export-now-btn nodrag"
-              onClick={() => attachMathControls(id)}
-              title="Add 2 Math nodes to modulate speed and time"
-            >
-              Attach Math
-            </button>
-          )}
         </div>
       </div>
 
@@ -178,4 +136,11 @@ export const VideoNode: React.FC<NodeProps<Node<VideoNodeData, 'video'>>> = ({ i
       <Handle type="source" position={Position.Right} className="port port-out" />
     </div>
   );
+
+  function accept(files: FileList | null) {
+    const file = files?.[0];
+    if (file && (file.type.startsWith('video/') || /\.(mp4|webm|mov|mkv)$/i.test(file.name))) {
+      void loadVideo(id, file);
+    }
+  }
 };

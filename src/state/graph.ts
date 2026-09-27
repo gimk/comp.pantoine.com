@@ -31,7 +31,6 @@ export type VideoNodeData = {
   height: number;
   duration: number;
   speed?: number;
-  time?: number;
   loop?: boolean;
   muted?: boolean;
   playbackRate?: number;
@@ -221,7 +220,7 @@ export const hasTargetPort = (node: AppNode, handle: string | null | undefined):
   if (node.type === 'video') {
     if (isParamPort(handle)) {
       const key = handle.slice(PARAM_PORT_PREFIX.length);
-      return key === 'speed' || key === 'time';
+      return key === 'speed';
     }
     return false;
   }
@@ -406,8 +405,6 @@ export const resolveChain = (
         const vMod: Record<string, Signal> = {};
         const speedSignal = signalFrom(byId, sourceOf, sourceOf(node.id, paramPort('speed')), new Set());
         if (speedSignal) vMod.speed = speedSignal;
-        const timeSignal = signalFrom(byId, sourceOf, sourceOf(node.id, paramPort('time')), new Set());
-        if (timeSignal) vMod.time = timeSignal;
         if (Object.keys(vMod).length > 0) {
           videoModulation.set(node.id, vMod);
         }

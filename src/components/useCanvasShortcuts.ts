@@ -20,17 +20,7 @@ const isTypingInto = (target: EventTarget | null): boolean => {
   return target instanceof HTMLInputElement && TEXT_INPUT_TYPES.has(target.type);
 };
 
-/*
- * Space means something to a focused button, switch or menu -- press it,
- * flip it, open it -- and that meaning wins. Except on the transport's own
- * buttons, where it would be the same action as the shortcut and the two
- * together would toggle twice.
- */
-const spaceBelongsTo = (target: EventTarget | null): boolean => {
-  if (!(target instanceof HTMLElement)) return false;
-  if (target.closest('[data-transport]')) return false;
-  return target.closest('button, select, a[href], [role="switch"]') !== null;
-};
+
 
 /**
  * The canvas keyboard, bound to the window.
@@ -121,9 +111,12 @@ export const useCanvasShortcuts = (
       } else if (!mod && !event.altKey && key === 'escape') {
         store.setAllSelected(false);
       } else if (!mod && !event.altKey && event.code === 'Space') {
-        if (spaceBelongsTo(event.target)) return;
-        // Or the page scrolls, or a focused transport button clicks too.
         event.preventDefault();
+        if (document.activeElement instanceof HTMLElement && document.activeElement !== document.body) {
+          if (!isTypingInto(document.activeElement)) {
+            document.activeElement.blur();
+          }
+        }
         if (!event.repeat) togglePlaying();
       } else if (!mod && !event.altKey && (key === 'home' || (key === 'r' && !event.shiftKey))) {
         event.preventDefault();

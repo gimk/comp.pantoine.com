@@ -89,8 +89,13 @@ export const subpixels: EffectDef = {
   // Grid gaps & aperture
   float aperture = 1.0;
   if (u_gap > 0.0001) {
-    float gapPx = clamp(u_gap, 0.0, 0.5) * subW;
-    float halfGap = gapPx * 0.5;
+    // Gap is a fraction of each emitter's own width/height. RGB stripes are
+    // much taller than they are wide, so reusing the horizontal gap here
+    // made row separators too faint and let adjacent rows read as pairs.
+    float gapX = clamp(u_gap, 0.0, 0.5) * subW;
+    float gapY = clamp(u_gap, 0.0, 0.5) * subH;
+    float halfGapX = gapX * 0.5;
+    float halfGapY = gapY * 0.5;
 
     // Distance in pixels to the nearest grid line (continuous, no derivative jumps)
     float sx = adjCoordX / subW;
@@ -103,10 +108,13 @@ export const subpixels: EffectDef = {
     float aaX = max(fwidth(coord.x) * 0.5, 0.25);
     float aaY = max(fwidth(coord.y) * 0.5, 0.25);
 
-    float darkX = (1.0 - smoothstep(halfGap - aaX, halfGap + aaX, distX)) * min(gapPx / aaX, 1.0);
-    float darkY = (1.0 - smoothstep(halfGap - aaY, halfGap + aaY, distY)) * min(gapPx / aaY, 1.0);
+    // Fade symmetrically around the aperture edge. A one-sided transition
+    // made the horizontal and vertical grid lines read differently at small
+    // gaps, especially when each emitter row is only a few screen pixels tall.
+    float apertureX = smoothstep(halfGapX - aaX, halfGapX + aaX, distX);
+    float apertureY = smoothstep(halfGapY - aaY, halfGapY + aaY, distY);
 
-    aperture = (1.0 - darkX) * (1.0 - darkY);
+    aperture = apertureX * apertureY;
   }
 
   vec3 channelMask = mix(vec3(u_bleed), vec3(1.0), subColor);

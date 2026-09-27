@@ -410,12 +410,10 @@ describe('graph ports and chain resolution', () => {
         height: 1080,
         duration: 10,
         speed: 1,
-        time: 0,
       },
     };
 
     expect(hasTargetPort(videoNode, 'param:speed')).toBe(true);
-    expect(hasTargetPort(videoNode, 'param:time')).toBe(true);
     expect(hasTargetPort(videoNode, 'param:mix')).toBe(false);
     expect(hasTargetPort(videoNode, null)).toBe(false);
 
@@ -429,13 +427,6 @@ describe('graph ports and chain resolution', () => {
       data: { modulatorId: 'math', params: { op: 2, a: 1, b: 2 } },
     };
 
-    const mathTime: AppNode = {
-      id: 'math-time',
-      type: 'modulator',
-      position: { x: 0, y: 100 },
-      data: { modulatorId: 'math', params: { op: 0, a: 1, b: 0.5 } },
-    };
-
     const outputNode: AppNode = {
       id: 'out-mod',
       type: 'renderOutput',
@@ -446,18 +437,15 @@ describe('graph ports and chain resolution', () => {
     const edges: Edge[] = [
       { id: 'e1', source: 'vid-mod', target: 'out-mod' },
       { id: 'e2', source: 'math-speed', sourceHandle: 'mod', target: 'vid-mod', targetHandle: 'param:speed' },
-      { id: 'e3', source: 'math-time', sourceHandle: 'mod', target: 'vid-mod', targetHandle: 'param:time' },
     ];
 
-    const chain = resolveChain([mathSpeed, mathTime, videoNode, outputNode], edges, 'out-mod');
+    const chain = resolveChain([mathSpeed, videoNode, outputNode], edges, 'out-mod');
     expect(chain).not.toBeNull();
     expect(chain?.videoModulation).toBeDefined();
     const vMod = chain?.videoModulation?.get('vid-mod');
     expect(vMod).toBeDefined();
     expect(vMod?.speed).toBeDefined();
-    expect(vMod?.time).toBeDefined();
     expect(vMod?.speed.def.id).toBe('math');
-    expect(vMod?.time.def.id).toBe('math');
 
     dropVideo('vid-mod');
   });

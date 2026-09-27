@@ -4,7 +4,7 @@ import { Pipeline, type RenderPlan } from './pipeline';
 import { createContext } from './gl';
 import { getImage, type LoadedImage } from './imageStore';
 import { getVideo, type LoadedVideo } from './videoStore';
-import { evaluateSignal, type Signal } from './modulators';
+import { type Signal } from './modulators';
 
 export type ExportProgress = {
   currentFrame: number;
@@ -61,18 +61,11 @@ const seekVideo = (video: HTMLVideoElement, time: number): Promise<void> => {
 const seekAllVideos = async (
   videos: Map<string, LoadedVideo>,
   time: number,
-  videoModulation?: Map<string, Record<string, Signal>>,
+  _videoModulation?: Map<string, Record<string, Signal>>,
 ): Promise<void> => {
   if (videos.size === 0) return;
   await Promise.all(
-    Array.from(videos.entries()).map(([nodeId, v]) => {
-      let target = time;
-      const vMod = videoModulation?.get(nodeId);
-      if (vMod?.time) {
-        target = evaluateSignal(vMod.time, time);
-      }
-      return seekVideo(v.element, target);
-    }),
+    Array.from(videos.values()).map((v) => seekVideo(v.element, time)),
   );
 };
 

@@ -1557,34 +1557,34 @@ textarea,
 
 /*
  * Subtle flowing stream animation when the comp is playing.
- * Soft pulses travel in the forward direction of the connection (source -> target).
+ * Soft, elongated pulses travel quietly in the forward direction (source -> target).
  */
 .link-edge-flow {
   fill: none;
-  stroke: rgba(68, 131, 238, 0.95);
-  stroke-width: 2.2;
+  stroke: rgba(68, 131, 238, 0.7);
+  stroke-width: 1.8;
   stroke-linecap: round;
-  stroke-dasharray: 6 22;
+  stroke-dasharray: 24 96;
   pointer-events: none;
-  animation: linkFlow 1.25s linear infinite;
-  filter: drop-shadow(0 0 2px rgba(47, 111, 214, 0.6));
+  animation: linkFlow 2.6s linear infinite;
+  filter: drop-shadow(0 0 1.5px rgba(47, 111, 214, 0.45));
 }
 
 .link-edge-flow-render {
-  stroke: rgba(192, 132, 252, 0.95);
-  filter: drop-shadow(0 0 3px rgba(168, 85, 247, 0.7));
+  stroke: rgba(192, 132, 252, 0.7);
+  filter: drop-shadow(0 0 1.5px rgba(168, 85, 247, 0.45));
 }
 
 .link-edge-flow-mod {
-  stroke: rgba(251, 146, 60, 0.95);
-  stroke-dasharray: 4 14;
-  animation: linkModFlow 0.85s linear infinite;
-  filter: drop-shadow(0 0 2px rgba(217, 122, 30, 0.7));
+  stroke: rgba(251, 146, 60, 0.7);
+  stroke-dasharray: 16 64;
+  animation: linkModFlow 1.8s linear infinite;
+  filter: drop-shadow(0 0 1.5px rgba(217, 122, 30, 0.45));
 }
 
 @keyframes linkFlow {
   from {
-    stroke-dashoffset: 28;
+    stroke-dashoffset: 120;
   }
   to {
     stroke-dashoffset: 0;
@@ -1593,7 +1593,7 @@ textarea,
 
 @keyframes linkModFlow {
   from {
-    stroke-dashoffset: 18;
+    stroke-dashoffset: 80;
   }
   to {
     stroke-dashoffset: 0;

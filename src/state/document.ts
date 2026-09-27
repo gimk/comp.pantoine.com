@@ -50,7 +50,6 @@ type SerializedNode =
       height: number;
       duration: number;
       speed?: number;
-      time?: number;
       loop?: boolean;
       muted?: boolean;
       playbackRate?: number;
@@ -136,7 +135,6 @@ export const serializeGraph = (nodes: AppNode[], edges: Edge[]): SerializedGraph
         height: node.data.height,
         duration: node.data.duration,
         speed: node.data.speed,
-        time: node.data.time,
         loop: node.data.loop,
         muted: node.data.muted,
         playbackRate: node.data.playbackRate,
@@ -304,7 +302,6 @@ export const deserializeGraph = (raw: unknown): { nodes: AppNode[]; edges: Edge[
           height: isNumber(entry.height) ? entry.height : 0,
           duration: isNumber(entry.duration) ? entry.duration : 0,
           speed: isNumber(entry.speed) ? entry.speed : 1,
-          time: isNumber(entry.time) ? entry.time : 0,
           loop: typeof entry.loop === 'boolean' ? entry.loop : true,
           muted: typeof entry.muted === 'boolean' ? entry.muted : true,
           playbackRate: isNumber(entry.playbackRate) ? entry.playbackRate : 1,

@@ -268,7 +268,6 @@ type GraphStore = {
   setFormatterData: (nodeId: string, patch: Partial<FormatterNodeData>) => void;
   setExportData: (nodeId: string, patch: Partial<ExportNodeData>) => void;
   setVideoData: (nodeId: string, patch: Partial<VideoNodeData>) => void;
-  attachMathControls: (nodeId: string) => void;
   loadImage: (nodeId: string, file: File) => Promise<void>;
   loadVideo: (nodeId: string, file: File) => Promise<void>;
   beginDrag: (dragged: AppNode[]) => void;
@@ -526,7 +525,6 @@ export const useGraph = create<GraphStore>((set, get) => ({
         height: 0,
         duration: 0,
         speed: 1,
-        time: 0,
         loop: true,
         muted: true,
         playbackRate: 1,
@@ -540,21 +538,10 @@ export const useGraph = create<GraphStore>((set, get) => ({
     const speedNode: AppNode = {
       id: speedNodeId,
       type: 'modulator',
-      position: { x: videoPos.x - 220, y: videoPos.y - 40 },
+      position: { x: videoPos.x - 220, y: videoPos.y },
       data: {
         modulatorId: 'math',
         params: { ...mathParams, op: 2, a: 1, b: 1 },
-      },
-    };
-
-    const timeNodeId = nextId('math');
-    const timeNode: AppNode = {
-      id: timeNodeId,
-      type: 'modulator',
-      position: { x: videoPos.x - 220, y: videoPos.y + 130 },
-      data: {
-        modulatorId: 'math',
-        params: { ...mathParams, op: 0, a: 0, b: 0 },
       },
     };
 
@@ -566,17 +553,9 @@ export const useGraph = create<GraphStore>((set, get) => ({
       targetHandle: paramPort('speed'),
     };
 
-    const timeEdge: Edge = {
-      id: nextId('edge'),
-      source: timeNodeId,
-      sourceHandle: MOD_OUTPUT,
-      target: videoId,
-      targetHandle: paramPort('time'),
-    };
-
     set({
-      nodes: [...get().nodes, speedNode, timeNode, videoNode],
-      edges: [...get().edges, speedEdge, timeEdge],
+      nodes: [...get().nodes, speedNode, videoNode],
+      edges: [...get().edges, speedEdge],
     });
   },
 
@@ -686,65 +665,12 @@ export const useGraph = create<GraphStore>((set, get) => ({
       if (patch.speed !== undefined && patch.speed > 0) {
         video.element.playbackRate = Math.min(16, Math.max(0.0625, patch.speed));
       }
-      if (patch.time !== undefined) {
-        video.element.currentTime = patch.time;
-      }
     }
     set({
       nodes: get().nodes.map((node) => {
         if (node.id !== nodeId || node.type !== 'video') return node;
         return { ...node, data: { ...node.data, ...patch } };
       }),
-    });
-  },
-
-  attachMathControls: (nodeId) => {
-    const videoNode = get().nodes.find((n) => n.id === nodeId && n.type === 'video');
-    if (!videoNode) return;
-    const mathDef = getModulator('math');
-    const mathParams = mathDef ? defaultModulatorParams(mathDef) : { op: 0, a: 0, b: 0 };
-
-    const speedNodeId = nextId('math');
-    const speedNode: AppNode = {
-      id: speedNodeId,
-      type: 'modulator',
-      position: { x: videoNode.position.x - 220, y: videoNode.position.y - 40 },
-      data: {
-        modulatorId: 'math',
-        params: { ...mathParams, op: 2, a: 1, b: 1 },
-      },
-    };
-
-    const timeNodeId = nextId('math');
-    const timeNode: AppNode = {
-      id: timeNodeId,
-      type: 'modulator',
-      position: { x: videoNode.position.x - 220, y: videoNode.position.y + 130 },
-      data: {
-        modulatorId: 'math',
-        params: { ...mathParams, op: 0, a: 0, b: 0 },
-      },
-    };
-
-    const speedEdge: Edge = {
-      id: nextId('edge'),
-      source: speedNodeId,
-      sourceHandle: MOD_OUTPUT,
-      target: nodeId,
-      targetHandle: paramPort('speed'),
-    };
-
-    const timeEdge: Edge = {
-      id: nextId('edge'),
-      source: timeNodeId,
-      sourceHandle: MOD_OUTPUT,
-      target: nodeId,
-      targetHandle: paramPort('time'),
-    };
-
-    set({
-      nodes: [...get().nodes, speedNode, timeNode],
-      edges: [...get().edges, speedEdge, timeEdge],
     });
   },
 
