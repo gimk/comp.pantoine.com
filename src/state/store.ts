@@ -20,8 +20,10 @@ import {
   DEFAULT_EXPORT_DATA,
   DEFAULT_PREVIEW_WIDTH,
   DEFAULT_RENDER_DATA,
+  MOD_OUTPUT,
   identityAliases,
   isModulationEdge,
+  paramPort,
   samePort,
   type AppNode,
   type BackgroundNodeData,
@@ -266,6 +268,7 @@ type GraphStore = {
   setFormatterData: (nodeId: string, patch: Partial<FormatterNodeData>) => void;
   setExportData: (nodeId: string, patch: Partial<ExportNodeData>) => void;
   setVideoData: (nodeId: string, patch: Partial<VideoNodeData>) => void;
+  attachMathControls: (nodeId: string) => void;
   loadImage: (nodeId: string, file: File) => Promise<void>;
   loadVideo: (nodeId: string, file: File) => Promise<void>;
   beginDrag: (dragged: AppNode[]) => void;
@@ -278,6 +281,22 @@ type GraphStore = {
   paste: (at?: XYPosition) => void;
   removeNodes: (ids: string[]) => void;
   setAllSelected: (selected: boolean) => void;
+};
+
+/**
+ * Center position on the currently visible area of the canvas, or a sensible
+ * fallback if the visible area is not yet known.
+ */
+const defaultNodePosition = (nodeCount = 0, width = 196, height = 120): XYPosition => {
+  const area = visibleArea();
+  if (area) {
+    const stagger = (nodeCount % 6) * 20;
+    return {
+      x: Math.round((area.left + area.right) / 2 - width / 2) + stagger,
+      y: Math.round((area.top + area.bottom) / 2 - height / 2) + stagger,
+    };
+  }
+  return { x: 280, y: 100 + (nodeCount % 6) * 40 };
 };
 
 export const useGraph = create<GraphStore>((set, get) => ({
@@ -458,13 +477,11 @@ export const useGraph = create<GraphStore>((set, get) => ({
   addEffectNode: (effectId, position) => {
     const def = getEffect(effectId);
     if (!def) return;
+    const fallback = defaultNodePosition(get().nodes.length, 196, 120);
     const node: AppNode = {
       id: nextId(effectId),
       type: 'effect',
-      // Dropped modules land where they were dropped. Added from the menu
-      // by click instead, they fan out from a fixed spot so a run of them
-      // does not stack into one unreadable pile.
-      position: position ?? { x: 280, y: 100 + (get().nodes.length % 6) * 40 },
+      position: position ?? fallback,
       data: { effectId, params: defaultParams(def) },
     };
     set({ nodes: [...get().nodes, node] });
@@ -473,51 +490,113 @@ export const useGraph = create<GraphStore>((set, get) => ({
   addModulatorNode: (modulatorId, position) => {
     const def = getModulator(modulatorId);
     if (!def) return;
+    const fallback = defaultNodePosition(get().nodes.length, 196, 120);
     const node: AppNode = {
       id: nextId(modulatorId),
       type: 'modulator',
-      // Sources start in the input column, operators in the module column.
-      position: position ?? { x: def.role === 'source' ? 40 : 280, y: 380 + (get().nodes.length % 6) * 40 },
+      position: position ?? fallback,
       data: { modulatorId, params: defaultModulatorParams(def) },
     };
     set({ nodes: [...get().nodes, node] });
   },
 
   addImageNode: (position) => {
+    const fallback = defaultNodePosition(get().nodes.length, 196, 140);
     const node: AppNode = {
       id: nextId('image'),
       type: 'image',
-      position: position ?? { x: 40, y: 100 + (get().nodes.length % 6) * 40 },
+      position: position ?? fallback,
       data: { src: null, name: '', width: 0, height: 0 },
     };
     set({ nodes: [...get().nodes, node] });
   },
 
   addVideoNode: (position) => {
-    const node: AppNode = {
-      id: nextId('video'),
+    const fallback = defaultNodePosition(get().nodes.length, 196, 140);
+    const videoPos = position ?? fallback;
+    const videoId = nextId('video');
+    const videoNode: AppNode = {
+      id: videoId,
       type: 'video',
-      position: position ?? { x: 40, y: 100 + (get().nodes.length % 6) * 40 },
-      data: { src: null, name: '', width: 0, height: 0, duration: 0, loop: true, muted: true, playbackRate: 1 },
+      position: videoPos,
+      data: {
+        src: null,
+        name: '',
+        width: 0,
+        height: 0,
+        duration: 0,
+        speed: 1,
+        time: 0,
+        loop: true,
+        muted: true,
+        playbackRate: 1,
+      },
     };
-    set({ nodes: [...get().nodes, node] });
+
+    const mathDef = getModulator('math');
+    const mathParams = mathDef ? defaultModulatorParams(mathDef) : { op: 0, a: 0, b: 0 };
+
+    const speedNodeId = nextId('math');
+    const speedNode: AppNode = {
+      id: speedNodeId,
+      type: 'modulator',
+      position: { x: videoPos.x - 220, y: videoPos.y - 40 },
+      data: {
+        modulatorId: 'math',
+        params: { ...mathParams, op: 2, a: 1, b: 1 },
+      },
+    };
+
+    const timeNodeId = nextId('math');
+    const timeNode: AppNode = {
+      id: timeNodeId,
+      type: 'modulator',
+      position: { x: videoPos.x - 220, y: videoPos.y + 130 },
+      data: {
+        modulatorId: 'math',
+        params: { ...mathParams, op: 0, a: 0, b: 0 },
+      },
+    };
+
+    const speedEdge: Edge = {
+      id: nextId('edge'),
+      source: speedNodeId,
+      sourceHandle: MOD_OUTPUT,
+      target: videoId,
+      targetHandle: paramPort('speed'),
+    };
+
+    const timeEdge: Edge = {
+      id: nextId('edge'),
+      source: timeNodeId,
+      sourceHandle: MOD_OUTPUT,
+      target: videoId,
+      targetHandle: paramPort('time'),
+    };
+
+    set({
+      nodes: [...get().nodes, speedNode, timeNode, videoNode],
+      edges: [...get().edges, speedEdge, timeEdge],
+    });
   },
 
   addOutputNode: (position) => {
+    const fallback = defaultNodePosition(get().nodes.length, DEFAULT_PREVIEW_WIDTH, 300);
     const node: AppNode = {
       id: nextId('output'),
       type: 'renderOutput',
-      position: position ?? { x: 760, y: 100 + (get().nodes.length % 6) * 40 },
+      position: position ?? fallback,
       data: { width: DEFAULT_PREVIEW_WIDTH },
     };
     set({ nodes: [...get().nodes, node] });
   },
 
   addRenderNode: (position) => {
+    const fallback = defaultNodePosition(get().nodes.length, 220, 160);
     const node: AppNode = {
       id: nextId('render'),
       type: 'render',
-      position: position ?? { x: 760, y: 100 + (get().nodes.length % 6) * 40 },
+      position: position ?? fallback,
       data: { ...DEFAULT_RENDER_DATA },
     };
     set({ nodes: [...get().nodes, node] });
@@ -528,20 +607,22 @@ export const useGraph = create<GraphStore>((set, get) => ({
   },
 
   addExportNode: (position) => {
+    const fallback = defaultNodePosition(get().nodes.length, 220, 160);
     const node: AppNode = {
       id: nextId('export'),
       type: 'export',
-      position: position ?? { x: 760, y: 100 + (get().nodes.length % 6) * 40 },
+      position: position ?? fallback,
       data: { ...DEFAULT_EXPORT_DATA },
     };
     set({ nodes: [...get().nodes, node] });
   },
 
   addBackgroundNode: (position) => {
+    const fallback = defaultNodePosition(get().nodes.length, 220, 160);
     const node: AppNode = {
       id: nextId('background'),
       type: 'backgroundOutput',
-      position: position ?? { x: 760, y: 100 + (get().nodes.length % 6) * 40 },
+      position: position ?? fallback,
       data: { ...DEFAULT_BACKGROUND_DATA },
     };
     set({ nodes: [...get().nodes, node] });
@@ -598,14 +679,72 @@ export const useGraph = create<GraphStore>((set, get) => ({
 
   setVideoData: (nodeId, patch) => {
     const video = getVideo(nodeId);
-    if (video && patch.loop !== undefined) {
-      video.element.loop = patch.loop;
+    if (video) {
+      if (patch.loop !== undefined) {
+        video.element.loop = patch.loop;
+      }
+      if (patch.speed !== undefined && patch.speed > 0) {
+        video.element.playbackRate = Math.min(16, Math.max(0.0625, patch.speed));
+      }
+      if (patch.time !== undefined) {
+        video.element.currentTime = patch.time;
+      }
     }
     set({
       nodes: get().nodes.map((node) => {
         if (node.id !== nodeId || node.type !== 'video') return node;
         return { ...node, data: { ...node.data, ...patch } };
       }),
+    });
+  },
+
+  attachMathControls: (nodeId) => {
+    const videoNode = get().nodes.find((n) => n.id === nodeId && n.type === 'video');
+    if (!videoNode) return;
+    const mathDef = getModulator('math');
+    const mathParams = mathDef ? defaultModulatorParams(mathDef) : { op: 0, a: 0, b: 0 };
+
+    const speedNodeId = nextId('math');
+    const speedNode: AppNode = {
+      id: speedNodeId,
+      type: 'modulator',
+      position: { x: videoNode.position.x - 220, y: videoNode.position.y - 40 },
+      data: {
+        modulatorId: 'math',
+        params: { ...mathParams, op: 2, a: 1, b: 1 },
+      },
+    };
+
+    const timeNodeId = nextId('math');
+    const timeNode: AppNode = {
+      id: timeNodeId,
+      type: 'modulator',
+      position: { x: videoNode.position.x - 220, y: videoNode.position.y + 130 },
+      data: {
+        modulatorId: 'math',
+        params: { ...mathParams, op: 0, a: 0, b: 0 },
+      },
+    };
+
+    const speedEdge: Edge = {
+      id: nextId('edge'),
+      source: speedNodeId,
+      sourceHandle: MOD_OUTPUT,
+      target: nodeId,
+      targetHandle: paramPort('speed'),
+    };
+
+    const timeEdge: Edge = {
+      id: nextId('edge'),
+      source: timeNodeId,
+      sourceHandle: MOD_OUTPUT,
+      target: nodeId,
+      targetHandle: paramPort('time'),
+    };
+
+    set({
+      nodes: [...get().nodes, speedNode, timeNode],
+      edges: [...get().edges, speedEdge, timeEdge],
     });
   },
 

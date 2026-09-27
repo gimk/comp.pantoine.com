@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useSyncExternalStore } from 'react';
 import { BaseEdge, EdgeLabelRenderer, getBezierPath, type EdgeProps } from '@xyflow/react';
 import { X } from 'lucide-react';
 import { useGraph } from '../state/store';
 import { findUpstreamRenderNode, isParamPort, isRenderPort } from '../state/graph';
+import { isPlaying, subscribeClock } from '../engine/clock';
 
 /**
  * A wire, with the two things you need to do to one close at hand.
@@ -34,6 +35,7 @@ export const LinkEdge: React.FC<EdgeProps> = ({
   const nodes = useGraph((state) => state.nodes);
   const edges = useGraph((state) => state.edges);
   const removeEdge = useGraph((state) => state.removeEdge);
+  const playing = useSyncExternalStore(subscribeClock, isPlaying);
   const [hovered, setHovered] = useState(false);
 
   const [path, labelX, labelY] = getBezierPath({
@@ -86,6 +88,21 @@ export const LinkEdge: React.FC<EdgeProps> = ({
               : undefined
         }
       />
+
+      {/* Subtle flowing stream overlay when comp is playing */}
+      {playing && (
+        <path
+          d={path}
+          className={`link-edge-flow ${
+            isRender
+              ? 'link-edge-flow-render'
+              : isMod
+                ? 'link-edge-flow-mod'
+                : ''
+          }`}
+          aria-hidden="true"
+        />
+      )}
 
       <path
         d={path}

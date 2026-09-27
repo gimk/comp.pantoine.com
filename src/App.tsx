@@ -4,6 +4,7 @@ import {
   BackgroundVariant,
   ReactFlow,
   ReactFlowProvider,
+  useNodesInitialized,
   useReactFlow,
   useStoreApi,
   PanOnScrollMode,
@@ -12,7 +13,7 @@ import {
   type Edge,
   type OnNodeDrag,
 } from '@xyflow/react';
-import { findEdgeUnderPoint } from './components/edgeHitTest';
+import { findEdgeUnderNode } from './components/edgeHitTest';
 import { LinkEdge } from './components/LinkEdge';
 import {
   PALETTE_DRAG_MIME,
@@ -127,9 +128,11 @@ const defaultEdgeOptions = {
   animated: false,
 };
 
-/* Even padding now that nothing overlays the graph but the toolbar. */
+/* Even padding now that nothing overlays the graph but the toolbar. Capped at maxZoom: 1
+   so small graphs are not magnified past 100%. */
 const fitViewOptions = {
-  padding: { top: '72px', right: '40px', bottom: '40px', left: '40px' },
+  padding: { top: '80px', right: '40px', bottom: '40px', left: '40px' },
+  maxZoom: 1,
 } as const;
 
 /**
@@ -171,9 +174,15 @@ const Editor: React.FC = () => {
         .filter((edge) => edge.source === node.id || edge.target === node.id || isModulationEdge(edge))
         .map((edge) => edge.id),
     );
-    const centerX = node.position.x + (node.measured?.width ?? 0) / 2;
-    const centerY = node.position.y + (node.measured?.height ?? 0) / 2;
-    setInsertTarget(findEdgeUnderPoint(centerX, centerY, own));
+    const width = node.measured?.width ?? 196;
+    const height = node.measured?.height ?? 120;
+    const box = {
+      x: node.position.x,
+      y: node.position.y,
+      width,
+      height,
+    };
+    setInsertTarget(findEdgeUnderNode(box, own));
   }, []);
 
   const handleNodeDragStart: OnNodeDrag<AppNode> = useCallback((event, _node, dragged) => {
@@ -195,7 +204,25 @@ const Editor: React.FC = () => {
     commitNow();
   }, []);
 
-  const { screenToFlowPosition } = useReactFlow();
+  const { screenToFlowPosition, fitView } = useReactFlow();
+  const nodesInitialized = useNodesInitialized();
+  const hasInitialFitRef = useRef(false);
+
+  // When all modules have initialized and measured their DOM geometry on load,
+  // fit all modules into view cleanly with maxZoom: 1.
+  useEffect(() => {
+    if (nodesInitialized && !hasInitialFitRef.current) {
+      hasInitialFitRef.current = true;
+      requestAnimationFrame(() => {
+        void fitView({
+          ...fitViewOptions,
+          maxZoom: 1,
+          duration: 0,
+        });
+      });
+    }
+  }, [nodesInitialized, fitView]);
+
   // Shift+A: where the add menu is open, in screen pixels, or null.
   const [quickAdd, setQuickAdd] = useState<{ x: number; y: number } | null>(null);
   const closeQuickAdd = useCallback(() => setQuickAdd(null), []);

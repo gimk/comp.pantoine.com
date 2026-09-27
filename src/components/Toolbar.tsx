@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { useReactFlow } from '@xyflow/react';
 import { Import, MonitorPlay, Plus } from 'lucide-react';
-import { PALETTE_DRAG_MIME, encodePaletteItem } from './paletteDrag';
+import { PALETTE_DRAG_MIME, encodePaletteItem, paletteCenterOffset } from './paletteDrag';
 import { addPaletteItem, catalog, type CatalogEntry, type CatalogFolder } from './paletteCatalog';
 
 type MenuId = CatalogFolder['id'];
@@ -14,11 +15,14 @@ const ICONS: Record<MenuId, React.ReactNode> = {
 /**
  * One entry in a palette menu.
  *
- * Drag to place it where you want it; clicking still drops one on the
- * canvas, which is the fallback for touch and for the keyboard, where there
- * is no drag at all.
+ * Drag to place it where you want it; clicking drops one in the centre of
+ * the active screen.
  */
-const PaletteItem: React.FC<{ entry: CatalogEntry; onDone: () => void }> = ({ entry, onDone }) => (
+const PaletteItem: React.FC<{
+  entry: CatalogEntry;
+  onSelect: (entry: CatalogEntry) => void;
+  onDone: () => void;
+}> = ({ entry, onSelect, onDone }) => (
   <button
     className="toolbar-menu-item"
     draggable
@@ -29,10 +33,7 @@ const PaletteItem: React.FC<{ entry: CatalogEntry; onDone: () => void }> = ({ en
     // Left open during the drag: removing the element being dragged
     // mid-gesture cancels it in some browsers.
     onDragEnd={onDone}
-    onClick={() => {
-      addPaletteItem(entry.payload);
-      onDone();
-    }}
+    onClick={() => onSelect(entry)}
   >
     <span>{entry.label}</span>
     {entry.tag && <span className="tag">{entry.tag}</span>}
@@ -59,9 +60,24 @@ export const Toolbar: React.FC = () => {
     return () => document.removeEventListener('pointerdown', onPointerDown);
   }, [openMenu]);
 
+  const { screenToFlowPosition } = useReactFlow();
+
   const close = () => setOpenMenu(null);
   const toggle = (menu: MenuId) => setOpenMenu((open) => (open === menu ? null : menu));
   const folder = catalog.find((f) => f.id === openMenu);
+
+  const handleSelect = (entry: CatalogEntry) => {
+    const center = screenToFlowPosition({
+      x: window.innerWidth / 2,
+      y: window.innerHeight / 2,
+    });
+    const offset = paletteCenterOffset(entry.payload);
+    addPaletteItem(entry.payload, {
+      x: Math.round(center.x - offset.x),
+      y: Math.round(center.y - offset.y),
+    });
+    close();
+  };
 
   return (
     <div className="toolbar" ref={rootRef}>
@@ -87,13 +103,13 @@ export const Toolbar: React.FC = () => {
               <div className="toolbar-menu-group" key={group.heading}>
                 <span className="toolbar-menu-heading">{group.heading}</span>
                 {group.entries.map((entry) => (
-                  <PaletteItem key={entry.key} entry={entry} onDone={close} />
+                  <PaletteItem key={entry.key} entry={entry} onSelect={handleSelect} onDone={close} />
                 ))}
               </div>
             ) : (
               <React.Fragment key={i}>
                 {group.entries.map((entry) => (
-                  <PaletteItem key={entry.key} entry={entry} onDone={close} />
+                  <PaletteItem key={entry.key} entry={entry} onSelect={handleSelect} onDone={close} />
                 ))}
               </React.Fragment>
             ),

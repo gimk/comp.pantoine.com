@@ -1,9 +1,21 @@
-import React, { useRef, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
 import { Film, Video as VideoIcon } from 'lucide-react';
-import type { VideoNodeData } from '../state/graph';
+import { paramPort, type VideoNodeData } from '../state/graph';
 import { useGraph } from '../state/store';
+import { type ParamSpec } from '../engine/effects';
 import { Toggle } from './controlPrimitives';
+import { ParamRow } from './EffectNode';
+
+const SPEED_SPEC: ParamSpec = {
+  kind: 'float',
+  key: 'speed',
+  label: 'Speed',
+  min: 0,
+  max: 4,
+  step: 0.05,
+  default: 1,
+};
 
 const formatDuration = (sec: number): string => {
   if (!Number.isFinite(sec) || sec <= 0) return '0:00';
@@ -21,8 +33,26 @@ const formatDuration = (sec: number): string => {
 export const VideoNode: React.FC<NodeProps<Node<VideoNodeData, 'video'>>> = ({ id, data }) => {
   const loadVideo = useGraph((state) => state.loadVideo);
   const setVideoData = useGraph((state) => state.setVideoData);
+  const edges = useGraph((state) => state.edges);
+  const attachMathControls = useGraph((state) => state.attachMathControls);
   const inputRef = useRef<HTMLInputElement>(null);
   const [isOver, setIsOver] = useState(false);
+
+  const hasSpeedEdge = edges.some((e) => e.target === id && e.targetHandle === paramPort('speed'));
+  const hasTimeEdge = edges.some((e) => e.target === id && e.targetHandle === paramPort('time'));
+
+  const timeSpec = useMemo<ParamSpec>(
+    () => ({
+      kind: 'float',
+      key: 'time',
+      label: 'Time',
+      min: 0,
+      max: Math.max(1, data.duration || 60),
+      step: 0.01,
+      default: 0,
+    }),
+    [data.duration],
+  );
 
   const accept = (files: FileList | null) => {
     const file = files?.[0];
@@ -90,23 +120,48 @@ export const VideoNode: React.FC<NodeProps<Node<VideoNodeData, 'video'>>> = ({ i
       </button>
 
       {data.src && (
-        <>
-          <div className="node-meta">
-            <span className="node-meta-name">{data.name}</span>
-            <span>
-              {data.width} &times; {data.height}
-              {data.duration > 0 && ` (${formatDuration(data.duration)})`}
-            </span>
-          </div>
-          <div style={{ padding: '0 12px 10px' }}>
-            <Toggle
-              label="Loop"
-              value={data.loop !== false}
-              onChange={(loop) => setVideoData(id, { loop })}
-            />
-          </div>
-        </>
+        <div className="node-meta">
+          <span className="node-meta-name">{data.name}</span>
+          <span>
+            {data.width} &times; {data.height}
+            {data.duration > 0 && ` (${formatDuration(data.duration)})`}
+          </span>
+        </div>
       )}
+
+      <div className="node-body">
+        <ParamRow
+          nodeId={id}
+          spec={SPEED_SPEC}
+          value={data.speed ?? 1}
+          port={true}
+          onChange={(val) => setVideoData(id, { speed: val as number, playbackRate: val as number })}
+        />
+        <ParamRow
+          nodeId={id}
+          spec={timeSpec}
+          value={data.time ?? 0}
+          port={true}
+          onChange={(val) => setVideoData(id, { time: val as number })}
+        />
+        <div style={{ paddingTop: 4, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <Toggle
+            label="Loop"
+            value={data.loop !== false}
+            onChange={(loop) => setVideoData(id, { loop })}
+          />
+          {!hasSpeedEdge && !hasTimeEdge && (
+            <button
+              type="button"
+              className="export-now-btn nodrag"
+              onClick={() => attachMathControls(id)}
+              title="Add 2 Math nodes to modulate speed and time"
+            >
+              Attach Math
+            </button>
+          )}
+        </div>
+      </div>
 
       <input
         ref={inputRef}

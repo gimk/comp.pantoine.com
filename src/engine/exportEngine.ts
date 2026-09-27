@@ -4,6 +4,7 @@ import { Pipeline, type RenderPlan } from './pipeline';
 import { createContext } from './gl';
 import { getImage, type LoadedImage } from './imageStore';
 import { getVideo, type LoadedVideo } from './videoStore';
+import { evaluateSignal, type Signal } from './modulators';
 
 export type ExportProgress = {
   currentFrame: number;
@@ -57,9 +58,22 @@ const seekVideo = (video: HTMLVideoElement, time: number): Promise<void> => {
   });
 };
 
-const seekAllVideos = async (videos: Map<string, LoadedVideo>, time: number): Promise<void> => {
+const seekAllVideos = async (
+  videos: Map<string, LoadedVideo>,
+  time: number,
+  videoModulation?: Map<string, Record<string, Signal>>,
+): Promise<void> => {
   if (videos.size === 0) return;
-  await Promise.all(Array.from(videos.values()).map((v) => seekVideo(v.element, time)));
+  await Promise.all(
+    Array.from(videos.entries()).map(([nodeId, v]) => {
+      let target = time;
+      const vMod = videoModulation?.get(nodeId);
+      if (vMod?.time) {
+        target = evaluateSignal(vMod.time, time);
+      }
+      return seekVideo(v.element, target);
+    }),
+  );
 };
 
 /** Trigger a browser file download for a Blob. */
@@ -147,7 +161,7 @@ export const exportStill = async (options: {
 
   try {
     pipeline.resetFeedback();
-    await seekAllVideos(videos, data.time);
+    await seekAllVideos(videos, data.time, chain.videoModulation);
     pipeline.render({
       plan: chain.plan,
       images,
@@ -224,7 +238,7 @@ export const exportGif = async (options: {
       if (signal?.aborted) throw new Error('Export cancelled');
 
       const currentTime = data.time + f * dt;
-      await seekAllVideos(videos, currentTime);
+      await seekAllVideos(videos, currentTime, chain.videoModulation);
       pipeline.render({
         plan: chain.plan,
         images,
@@ -347,7 +361,7 @@ export const exportVideo = async (options: {
       }
 
       const currentTime = data.time + f * dt;
-      await seekAllVideos(videos, currentTime);
+      await seekAllVideos(videos, currentTime, chain.videoModulation);
       pipeline.render({
         plan: chain.plan,
         images,

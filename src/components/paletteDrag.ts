@@ -76,3 +76,14 @@ export const paletteDropOffset = (item: PaletteItem): { x: number; y: number } =
         : 98,
   y: 18,
 });
+
+/**
+ * Offset to place a card with its center at the target point.
+ * Uses half width and half approximate height for the module type.
+ */
+export const paletteCenterOffset = (item: PaletteItem): { x: number; y: number } => {
+  const drop = paletteDropOffset(item);
+  const halfHeight = item.kind === 'output' ? 150 : 60;
+  return { x: drop.x, y: halfHeight };
+};
+

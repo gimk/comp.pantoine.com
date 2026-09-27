@@ -30,6 +30,8 @@ export type VideoNodeData = {
   width: number;
   height: number;
   duration: number;
+  speed?: number;
+  time?: number;
   loop?: boolean;
   muted?: boolean;
   playbackRate?: number;
@@ -216,6 +218,13 @@ export const hasTargetPort = (node: AppNode, handle: string | null | undefined):
     const def = getModulator(node.data.modulatorId);
     return !!def && isParamPort(handle) && modulatorPortsOf(def).includes(handle.slice(PARAM_PORT_PREFIX.length));
   }
+  if (node.type === 'video') {
+    if (isParamPort(handle)) {
+      const key = handle.slice(PARAM_PORT_PREFIX.length);
+      return key === 'speed' || key === 'time';
+    }
+    return false;
+  }
   if (node.type !== 'effect') return false;
   if (!handle) return true;
   const def = getEffect(node.data.effectId);
@@ -311,6 +320,8 @@ export type ResolvedChain = {
   plan: RenderPlan;
   /** Every effect in the plan, in run order. */
   passes: Pass[];
+  /** Modulation applied to video nodes in the graph (nodeId -> { speed?: Signal, time?: Signal }) */
+  videoModulation?: Map<string, Record<string, Signal>>;
   /** The recipe from the nearest upstream formatter node, if any. */
   formatter?: FormatterNodeData;
 };
@@ -363,6 +374,7 @@ export const resolveChain = (
   const steps: Step[] = [];
   const done = new Map<string, number | null>();
   const visiting = new Set<string>();
+  const videoModulation = new Map<string, Record<string, Signal>>();
 
   const modulationFor = (nodeId: string, specs: ReturnType<typeof paramsOf>): Record<string, Signal> => {
     const modulation: Record<string, Signal> = {};
@@ -389,7 +401,17 @@ export const resolveChain = (
     if (node?.type === 'image') {
       if (getImage(node.id)) index = steps.push({ kind: 'image', nodeId: node.id }) - 1;
     } else if (node?.type === 'video') {
-      if (getVideo(node.id)) index = steps.push({ kind: 'video', nodeId: node.id }) - 1;
+      if (getVideo(node.id)) {
+        index = steps.push({ kind: 'video', nodeId: node.id }) - 1;
+        const vMod: Record<string, Signal> = {};
+        const speedSignal = signalFrom(byId, sourceOf, sourceOf(node.id, paramPort('speed')), new Set());
+        if (speedSignal) vMod.speed = speedSignal;
+        const timeSignal = signalFrom(byId, sourceOf, sourceOf(node.id, paramPort('time')), new Set());
+        if (timeSignal) vMod.time = timeSignal;
+        if (Object.keys(vMod).length > 0) {
+          videoModulation.set(node.id, vMod);
+        }
+      }
     } else if (
       node?.type === 'renderOutput' ||
       node?.type === 'backgroundOutput' ||
@@ -444,6 +466,7 @@ export const resolveChain = (
     sourceNodeId: head.nodeId,
     plan: { steps, output: outputIndex },
     passes,
+    videoModulation,
     formatter: activeFormatter,
   };
 };

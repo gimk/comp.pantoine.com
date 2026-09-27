@@ -74,9 +74,11 @@ describe('document serialization & deserialization', () => {
           width: 1280,
           height: 720,
           duration: 15.5,
-          loop: true,
+          speed: 2,
+          time: 3.5,
+          loop: false,
           muted: true,
-          playbackRate: 1,
+          playbackRate: 2,
         },
       },
     ];
@@ -92,9 +94,11 @@ describe('document serialization & deserialization', () => {
       width: 1280,
       height: 720,
       duration: 15.5,
-      loop: true,
+      speed: 2,
+      time: 3.5,
+      loop: false,
       muted: true,
-      playbackRate: 1,
+      playbackRate: 2,
     });
   });
 

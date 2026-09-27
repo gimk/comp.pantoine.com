@@ -1556,6 +1556,57 @@ textarea,
 }
 
 /*
+ * Subtle flowing stream animation when the comp is playing.
+ * Soft pulses travel in the forward direction of the connection (source -> target).
+ */
+.link-edge-flow {
+  fill: none;
+  stroke: rgba(68, 131, 238, 0.95);
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-dasharray: 6 22;
+  pointer-events: none;
+  animation: linkFlow 1.25s linear infinite;
+  filter: drop-shadow(0 0 2px rgba(47, 111, 214, 0.6));
+}
+
+.link-edge-flow-render {
+  stroke: rgba(192, 132, 252, 0.95);
+  filter: drop-shadow(0 0 3px rgba(168, 85, 247, 0.7));
+}
+
+.link-edge-flow-mod {
+  stroke: rgba(251, 146, 60, 0.95);
+  stroke-dasharray: 4 14;
+  animation: linkModFlow 0.85s linear infinite;
+  filter: drop-shadow(0 0 2px rgba(217, 122, 30, 0.7));
+}
+
+@keyframes linkFlow {
+  from {
+    stroke-dashoffset: 28;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes linkModFlow {
+  from {
+    stroke-dashoffset: 18;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .link-edge-flow {
+    display: none;
+  }
+}
+
+/*
  * The band that actually catches the pointer. The drawn wire is 1.6px, so
  * without this a link would have to be hit exactly; `pointer-events: stroke`
  * keeps the catchment to the ribbon and off the area the curve encloses.

@@ -1,13 +1,43 @@
 import React, { useMemo, useSyncExternalStore } from 'react';
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
-import { Sparkles } from 'lucide-react';
+import {
+  Aperture,
+  CassetteTape,
+  History,
+  Layers,
+  Move,
+  Palette,
+  Sparkles,
+  Tv,
+  Waves,
+} from 'lucide-react';
 import { paramPort, resolveSignal, type EffectNodeData } from '../state/graph';
 import { getEffect } from '../engine/registry';
-import { inputsOf, paramsOf, type ParamSpec, type ParamValue, type Rgb, type Vec2 } from '../engine/effects';
+import {
+  inputsOf,
+  paramsOf,
+  type Category,
+  type ParamSpec,
+  type ParamValue,
+  type Rgb,
+  type Vec2,
+} from '../engine/effects';
 import { isModulatable, readPort, signalIsMoving, signalKey, type Signal } from '../engine/modulators';
 import { useGraph } from '../state/store';
 import { getShaderError, subscribeShaderErrors } from '../engine/shaderErrors';
 import { ColorField, NumberField, Select, Slider, Toggle, Vec2Field, type LiveReading } from './controlPrimitives';
+
+const CATEGORY_ICONS: Record<Category, React.ComponentType<{ size?: number }>> = {
+  color: Palette,
+  stylize: Sparkles,
+  optics: Aperture,
+  geometry: Move,
+  crt: Tv,
+  tape: CassetteTape,
+  noise: Waves,
+  temporal: History,
+  composite: Layers,
+};
 
 /**
  * One control, picked from the param's kind.
@@ -199,6 +229,7 @@ export const EffectNode: React.FC<NodeProps<Node<EffectNodeData, 'effect'>>> = (
   }
 
   const inputs = inputsOf(def);
+  const CategoryIcon = CATEGORY_ICONS[def.category] ?? Sparkles;
 
   return (
     <div className="node node-effect">
@@ -210,7 +241,7 @@ export const EffectNode: React.FC<NodeProps<Node<EffectNodeData, 'effect'>>> = (
       <Handle type="target" position={Position.Left} className="port port-in port-title" />
 
       <div className="node-title">
-        <Sparkles size={13} />
+        <CategoryIcon size={13} />
         <span>{def.label}</span>
       </div>
 

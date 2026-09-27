@@ -12,7 +12,7 @@ import { createContext } from '../engine/gl';
 import { clockSeconds, isPlaying, resetCount, subscribeClock } from '../engine/clock';
 import { getImage, type LoadedImage } from '../engine/imageStore';
 import { getVideo, type LoadedVideo } from '../engine/videoStore';
-import { signalKey } from '../engine/modulators';
+import { evaluateSignal, signalKey, type Signal } from '../engine/modulators';
 
 const MAX_DPR = 2;
 const MAX_WORKING_SIZE = 2048;
@@ -41,14 +41,20 @@ const videosFor = (plan: RenderPlan): Map<string, LoadedVideo> | null => {
   return videos;
 };
 
-const signatureOf = (plan: RenderPlan): string =>
+const signatureOf = (plan: RenderPlan, videoModulation?: Map<string, Record<string, Signal>>): string =>
   JSON.stringify([
     plan.output,
     plan.steps.map((step) =>
       step.kind === 'image'
         ? [step.nodeId, getImage(step.nodeId)?.version]
         : step.kind === 'video'
-          ? [step.nodeId, getVideo(step.nodeId)?.version]
+          ? [
+              step.nodeId,
+              getVideo(step.nodeId)?.version,
+              videoModulation?.get(step.nodeId)
+                ? Object.entries(videoModulation.get(step.nodeId)!).map(([k, s]) => [k, signalKey(s)])
+                : null,
+            ]
           : [
               step.pass.def.id,
               step.pass.params,
@@ -106,7 +112,7 @@ export const FullScreenBackground: React.FC = () => {
   fitModeRef.current = fitMode;
 
   const signature = chain
-    ? signatureOf(chain.plan) + (chain.formatter ? JSON.stringify(chain.formatter) : '') + fitMode
+    ? signatureOf(chain.plan, chain.videoModulation) + (chain.formatter ? JSON.stringify(chain.formatter) : '') + fitMode
     : 'empty';
 
   const draw = useCallback(() => {
@@ -172,6 +178,58 @@ export const FullScreenBackground: React.FC = () => {
       ? Math.max(16, Math.round(maxDim * current.formatter.scale))
       : Math.max(MAX_WORKING_SIZE, Math.min(canvas.width, 2560));
 
+    if (videos.size > 0) {
+      for (const [vId, v] of videos.entries()) {
+        const vMod = current.videoModulation?.get(vId);
+        const node = nodes.find((n) => n.id === vId);
+        const videoData = node?.type === 'video' ? node.data : undefined;
+        const duration = v.element.duration || videoData?.duration || 1;
+        const loop = videoData?.loop !== false;
+
+        if (vMod?.time) {
+          if (!v.element.paused) {
+            v.element.pause();
+          }
+          let targetTime = evaluateSignal(vMod.time, time);
+          if (loop && duration > 0) {
+            targetTime = ((targetTime % duration) + duration) % duration;
+          } else {
+            targetTime = Math.min(Math.max(0, targetTime), duration);
+          }
+          if (!v.element.seeking && Math.abs(v.element.currentTime - targetTime) > 0.01) {
+            v.element.currentTime = targetTime;
+          }
+        } else {
+          let targetSpeed = 1;
+          if (vMod?.speed) {
+            targetSpeed = Math.max(0, evaluateSignal(vMod.speed, time));
+          } else if (typeof videoData?.speed === 'number') {
+            targetSpeed = Math.max(0, videoData.speed);
+          } else if (typeof videoData?.playbackRate === 'number') {
+            targetSpeed = Math.max(0, videoData.playbackRate);
+          }
+
+          if (targetSpeed <= 0.001) {
+            if (!v.element.paused) v.element.pause();
+          } else {
+            v.element.playbackRate = Math.min(16, Math.max(0.0625, targetSpeed));
+            if (isPlaying() && v.element.paused && !v.element.ended) {
+              void v.element.play().catch(() => {});
+            }
+          }
+
+          if (v.element.ended || (loop && duration > 0 && v.element.currentTime >= duration - 0.05)) {
+            if (loop) {
+              v.element.currentTime = 0;
+              if (isPlaying()) {
+                void v.element.play().catch(() => {});
+              }
+            }
+          }
+        }
+      }
+    }
+
     pipeline.render({
       plan: current.plan,
       images,
@@ -185,7 +243,7 @@ export const FullScreenBackground: React.FC = () => {
       maxWorkingSize: targetWorkingSize,
       fitMode: fitModeRef.current,
     });
-  }, [setBackgroundFps]);
+  }, [nodes, setBackgroundFps]);
 
   const drawRef = useRef(draw);
   drawRef.current = draw;
@@ -264,7 +322,12 @@ export const FullScreenBackground: React.FC = () => {
     if (!chain || !isEnabled || isRenderMode) return;
     const vids = videosFor(chain.plan);
     if (!vids || vids.size === 0) return;
-    for (const v of vids.values()) {
+    for (const [vId, v] of vids.entries()) {
+      const isTimeModulated = !!chain.videoModulation?.get(vId)?.time;
+      if (isTimeModulated) {
+        if (!v.element.paused) v.element.pause();
+        continue;
+      }
       if (playing) {
         if (v.element.paused && !v.element.ended) {
           void v.element.play().catch(() => {});

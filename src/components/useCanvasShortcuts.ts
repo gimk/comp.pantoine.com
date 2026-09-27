@@ -44,7 +44,7 @@ const spaceBelongsTo = (target: EventTarget | null): boolean => {
  *   F                    frame the selection, or the whole graph
  *   Space                play / pause
  *   R (or Home)          back to time 0
- *   Shift + A            the add menu, under the pointer
+ *   Shift + A / Shift + I / Cmd + / the add menu, under the pointer
  *   Shift (while dragging) snap to other modules' centres
  *   Ctrl (while dragging)  lift the module out of its chain
  *   Alt (while dragging)   leave a copy behind
@@ -128,7 +128,10 @@ export const useCanvasShortcuts = (
       } else if (!mod && !event.altKey && (key === 'home' || (key === 'r' && !event.shiftKey))) {
         event.preventDefault();
         resetClock();
-      } else if (!mod && !event.altKey && event.shiftKey && key === 'a') {
+      } else if (
+        (!mod && !event.altKey && event.shiftKey && (key === 'a' || key === 'i')) ||
+        (mod && !event.altKey && (key === '/' || event.code === 'Slash'))
+      ) {
         event.preventDefault();
         // A pointer that has not moved since the page loaded has no known
         // position; the middle of the window is the next best guess.

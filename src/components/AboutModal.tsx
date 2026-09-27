@@ -107,7 +107,7 @@ export const AboutModal: React.FC = () => {
               </div>
 
               <div className="about-shortcuts-hint">
-                <span><kbd>Shift</kbd> + <kbd>A</kbd> Add node</span>
+                <span><kbd>Shift</kbd> + <kbd>A</kbd> / <kbd>I</kbd> · <kbd>⌘</kbd><kbd>/</kbd> Add node</span>
                 <span className="about-hint-sep">•</span>
                 <span><kbd>Space</kbd> Play / pause</span>
                 <span className="about-hint-sep">•</span>

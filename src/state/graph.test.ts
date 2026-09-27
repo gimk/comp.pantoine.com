@@ -397,4 +397,68 @@ describe('graph ports and chain resolution', () => {
     };
     expect(videoNode.data.loop).toBe(false);
   });
+
+  it('validates video target ports and resolves video modulation', () => {
+    const videoNode: AppNode = {
+      id: 'vid-mod',
+      type: 'video',
+      position: { x: 200, y: 0 },
+      data: {
+        src: 'blob:test',
+        name: 'clip.mp4',
+        width: 1920,
+        height: 1080,
+        duration: 10,
+        speed: 1,
+        time: 0,
+      },
+    };
+
+    expect(hasTargetPort(videoNode, 'param:speed')).toBe(true);
+    expect(hasTargetPort(videoNode, 'param:time')).toBe(true);
+    expect(hasTargetPort(videoNode, 'param:mix')).toBe(false);
+    expect(hasTargetPort(videoNode, null)).toBe(false);
+
+    const mockVideo = { pause: () => {}, removeAttribute: () => {}, load: () => {} } as unknown as HTMLVideoElement;
+    putVideo('vid-mod', mockVideo, 'blob:test', 'clip.mp4', 1920, 1080, 10);
+
+    const mathSpeed: AppNode = {
+      id: 'math-speed',
+      type: 'modulator',
+      position: { x: 0, y: 0 },
+      data: { modulatorId: 'math', params: { op: 2, a: 1, b: 2 } },
+    };
+
+    const mathTime: AppNode = {
+      id: 'math-time',
+      type: 'modulator',
+      position: { x: 0, y: 100 },
+      data: { modulatorId: 'math', params: { op: 0, a: 1, b: 0.5 } },
+    };
+
+    const outputNode: AppNode = {
+      id: 'out-mod',
+      type: 'renderOutput',
+      position: { x: 400, y: 0 },
+      data: { width: 360 },
+    };
+
+    const edges: Edge[] = [
+      { id: 'e1', source: 'vid-mod', target: 'out-mod' },
+      { id: 'e2', source: 'math-speed', sourceHandle: 'mod', target: 'vid-mod', targetHandle: 'param:speed' },
+      { id: 'e3', source: 'math-time', sourceHandle: 'mod', target: 'vid-mod', targetHandle: 'param:time' },
+    ];
+
+    const chain = resolveChain([mathSpeed, mathTime, videoNode, outputNode], edges, 'out-mod');
+    expect(chain).not.toBeNull();
+    expect(chain?.videoModulation).toBeDefined();
+    const vMod = chain?.videoModulation?.get('vid-mod');
+    expect(vMod).toBeDefined();
+    expect(vMod?.speed).toBeDefined();
+    expect(vMod?.time).toBeDefined();
+    expect(vMod?.speed.def.id).toBe('math');
+    expect(vMod?.time.def.id).toBe('math');
+
+    dropVideo('vid-mod');
+  });
 });

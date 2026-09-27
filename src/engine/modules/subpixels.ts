@@ -30,66 +30,83 @@ export const subpixels: EffectDef = {
     { kind: 'float', key: 'boost', label: 'Brightness', min: 1, max: 3, step: 0.05, default: 1.8 },
     { kind: 'bool', key: 'pixelate', label: 'Pixelate', default: true },
   ],
-  fragment: `  vec2 cellSize = vec2(max(u_size, 1.0)) / u_resolution;
-  vec2 px = v_uv * u_resolution / max(u_size, 1.0);
-  vec2 cell = floor(px);
-  vec2 f = fract(px);
+  fragment: `  float size = max(u_size, 1.0);
+  vec2 coord = v_uv * u_resolution;
 
-  vec2 cellOffset = vec2(0.0);
-  if (u_pattern == 2 && mod(cell.y, 2.0) >= 1.0) {
-    f.x = fract(f.x + 0.5);
-    cellOffset.x = 0.5;
+  bool isBayer = (u_pattern == 3);
+  bool isDelta = (u_pattern == 2);
+  bool isBgr = (u_pattern == 1);
+
+  // Sub-pixel dimensions (period of emitter repeat)
+  float subW = isBayer ? (size * 0.5) : (size / 3.0);
+  float subH = isBayer ? (size * 0.5) : size;
+
+  // Stagger odd rows by 1.5 sub-pixels (half a pixel cell) for RGB Delta
+  float row = floor(coord.y / size);
+  float deltaStagger = (isDelta && mod(row, 2.0) >= 1.0) ? (1.5 * subW) : 0.0;
+
+  float adjCoordX = coord.x - deltaStagger;
+
+  // Pixelate: quantize sample UV to the parent pixel cell center
+  vec2 sampleUv = v_uv;
+  if (u_pixelate) {
+    if (isDelta) {
+      float cellX = floor(adjCoordX / size);
+      sampleUv = vec2((cellX + 0.5) * size + deltaStagger, (row + 0.5) * size) / u_resolution;
+    } else {
+      vec2 cell = floor(coord / size);
+      sampleUv = (cell + 0.5) * size / u_resolution;
+    }
   }
-
-  vec2 sampleUv = u_pixelate ? (cell + cellOffset + 0.5) * cellSize : v_uv;
   vec4 src = sampleEdge(u_src, sampleUv, 0);
 
-  float gapHalf = clamp(u_gap, 0.0, 0.45) * 0.5;
+  // Determine sub-pixel color emitter
   vec3 subColor;
-  float aperture;
-
-  if (u_pattern == 3) {
-    vec2 gridPos = f * 2.0;
-    vec2 bayerIdx = floor(gridPos);
-    vec2 bayerFrac = fract(gridPos);
-
-    float edgeX = max(fwidth(gridPos.x), 0.01);
-    float edgeY = max(fwidth(gridPos.y), 0.01);
-    float maskX = smoothstep(0.0, edgeX, bayerFrac.x - gapHalf) *
-                  smoothstep(0.0, edgeX, (1.0 - gapHalf) - bayerFrac.x);
-    float maskY = smoothstep(0.0, edgeY, bayerFrac.y - gapHalf) *
-                  smoothstep(0.0, edgeY, (1.0 - gapHalf) - bayerFrac.y);
-    aperture = maskX * maskY;
-
-    if (bayerIdx.y < 1.0) {
-      subColor = (bayerIdx.x < 1.0) ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0);
+  if (isBayer) {
+    ivec2 bayerIdx = ivec2(mod(floor(coord / subW), 2.0));
+    if (bayerIdx.x < 0) bayerIdx.x += 2;
+    if (bayerIdx.y < 0) bayerIdx.y += 2;
+    if (bayerIdx.y == 0) {
+      subColor = (bayerIdx.x == 0) ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0);
     } else {
-      subColor = (bayerIdx.x < 1.0) ? vec3(0.0, 1.0, 0.0) : vec3(0.0, 0.0, 1.0);
+      subColor = (bayerIdx.x == 0) ? vec3(0.0, 1.0, 0.0) : vec3(0.0, 0.0, 1.0);
     }
   } else {
-    float sub = f.x * 3.0;
-    float subIdx = floor(sub);
-    float subFrac = fract(sub);
-
-    float edgeX = max(fwidth(sub), 0.01);
-    float edgeY = max(fwidth(f.y), 0.01);
-    float maskX = smoothstep(0.0, edgeX, subFrac - gapHalf) *
-                  smoothstep(0.0, edgeX, (1.0 - gapHalf) - subFrac);
-    float maskY = smoothstep(0.0, edgeY, f.y - gapHalf) *
-                  smoothstep(0.0, edgeY, (1.0 - gapHalf) - f.y);
-    aperture = maskX * maskY;
-
-    if (subIdx < 1.0) {
+    int subIdx = int(mod(floor(adjCoordX / subW), 3.0));
+    if (subIdx < 0) subIdx += 3;
+    if (subIdx == 0) {
       subColor = vec3(1.0, 0.0, 0.0);
-    } else if (subIdx < 2.0) {
+    } else if (subIdx == 1) {
       subColor = vec3(0.0, 1.0, 0.0);
     } else {
       subColor = vec3(0.0, 0.0, 1.0);
     }
-
-    if (u_pattern == 1) {
+    if (isBgr) {
       subColor = subColor.bgr;
     }
+  }
+
+  // Grid gaps & aperture
+  float aperture = 1.0;
+  if (u_gap > 0.0001) {
+    float gapPx = clamp(u_gap, 0.0, 0.5) * subW;
+    float halfGap = gapPx * 0.5;
+
+    // Distance in pixels to the nearest grid line (continuous, no derivative jumps)
+    float sx = adjCoordX / subW;
+    float distX = abs(fract(sx + 0.5) - 0.5) * subW;
+
+    float sy = coord.y / subH;
+    float distY = abs(fract(sy + 0.5) - 0.5) * subH;
+
+    // Anti-aliasing width in buffer pixels based on continuous coordinate derivatives
+    float aaX = max(fwidth(coord.x) * 0.5, 0.25);
+    float aaY = max(fwidth(coord.y) * 0.5, 0.25);
+
+    float darkX = (1.0 - smoothstep(halfGap - aaX, halfGap + aaX, distX)) * min(gapPx / aaX, 1.0);
+    float darkY = (1.0 - smoothstep(halfGap - aaY, halfGap + aaY, distY)) * min(gapPx / aaY, 1.0);
+
+    aperture = (1.0 - darkX) * (1.0 - darkY);
   }
 
   vec3 channelMask = mix(vec3(u_bleed), vec3(1.0), subColor);
