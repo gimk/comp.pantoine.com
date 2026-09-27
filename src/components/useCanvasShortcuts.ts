@@ -20,6 +20,28 @@ const isTypingInto = (target: EventTarget | null): boolean => {
   return target instanceof HTMLInputElement && TEXT_INPUT_TYPES.has(target.type);
 };
 
+/*
+ * A focused <select> reads plain letters as type-ahead (R jumps to "Red",
+ * F to "Full"), so unmodified letter keys there are its own. Space is the
+ * exception: it always plays/pauses, from any control (see below).
+ */
+const isSelect = (target: EventTarget | null): boolean => target instanceof HTMLSelectElement;
+
+/*
+ * Clipboard chords mean nothing on a slider or a menu, but the user's
+ * attention is on the control, not the selection behind it: a stray Ctrl+X
+ * while fiddling with a value shouldn't delete the module it lives on.
+ */
+const isValueControl = (target: EventTarget | null): boolean =>
+  target instanceof HTMLSelectElement ||
+  (target instanceof HTMLInputElement && target.type === 'range');
+
+/*
+ * While a modal dialog is open the graph behind it is inert: Escape, Space
+ * and the rest belong to the dialog (or to nothing), never to a selection
+ * the user can't see.
+ */
+const dialogIsOpen = (): boolean => document.querySelector('[aria-modal="true"]') !== null;
 
 
 /**
@@ -78,11 +100,12 @@ export const useCanvasShortcuts = (
         if (event.key === 'Alt') event.preventDefault();
         return;
       }
-      if (isTypingInto(event.target)) return;
+      if (isTypingInto(event.target) || dialogIsOpen()) return;
 
       const store = useGraph.getState();
       const mod = event.ctrlKey || event.metaKey;
       const key = event.key.toLowerCase();
+      if (!mod && !event.altKey && event.code !== 'Space' && isSelect(event.target)) return;
 
       if (mod && key === 'z') {
         // Otherwise a focused slider or the page itself may act on it too.
@@ -98,11 +121,13 @@ export const useCanvasShortcuts = (
         store.duplicateSelection(DUPLICATE_OFFSET);
       } else if (mod && key === 'c') {
         // Leave a text selection to the browser's own copy.
-        if (window.getSelection()?.toString()) return;
+        if (window.getSelection()?.toString() || isValueControl(event.target)) return;
         store.copySelection();
       } else if (mod && key === 'x') {
+        if (isValueControl(event.target)) return;
         store.cutSelection();
       } else if (mod && key === 'v') {
+        if (isValueControl(event.target)) return;
         event.preventDefault();
         store.paste(pointer.current ? screenToFlowPosition(pointer.current) : undefined);
       } else if (mod && key === 'a') {

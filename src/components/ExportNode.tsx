@@ -2,30 +2,24 @@ import React, { useCallback } from 'react';
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
 import { Download, Loader2 } from 'lucide-react';
 import { useGraph } from '../state/store';
-import {
-  RENDER_PORT,
-  findUpstreamRenderNode,
-  type ExportNodeData,
-} from '../state/graph';
+import { RENDER_PORT, type ExportNodeData } from '../state/graph';
+import { isRendering } from '../state/renderJobs';
 import { downloadBlob, getExportFilename } from '../engine/exportEngine';
-
-const formatBytes = (bytes: number): string => {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-};
+import { useUpstreamRender } from './viewerPipeline';
+import { formatBytes, formatLabel } from './format';
 
 export const ExportNode: React.FC<NodeProps<Node<ExportNodeData, 'export'>>> = ({ id, data }) => {
-  const nodes = useGraph((state) => state.nodes);
-  const edges = useGraph((state) => state.edges);
   const setExportData = useGraph((state) => state.setExportData);
 
-  // Find upstream purple connection from a Render node (directly or through pass-through Viewers)
-  const upstreamRenderNode = findUpstreamRenderNode(nodes, edges, id);
-
-  const renderData = upstreamRenderNode?.data;
-  const hasBakedAsset = !!renderData?.renderedBlob;
-  const isConnected = !!upstreamRenderNode && !!renderData;
+  // The Render node upstream along purple wires (directly or through pass-through Viewers).
+  const { renderId, settings, job } = useUpstreamRender(id);
+  const isConnected = !!renderId && !!settings;
+  const asset = job.asset;
+  const rendering = isRendering(job);
+  // A finished file is named by what it is, not what was asked for: an MP4
+  // request can come back as WebM. While a bake runs, by what is coming.
+  const label =
+    asset && !rendering ? formatLabel(asset.extension) : settings ? formatLabel(settings.format) : null;
 
   const update = useCallback(
     (patch: Partial<ExportNodeData>) => {
@@ -35,11 +29,10 @@ export const ExportNode: React.FC<NodeProps<Node<ExportNodeData, 'export'>>> = (
   );
 
   const handleDownload = useCallback(() => {
-    if (!renderData?.renderedBlob) return;
+    if (!asset || !settings) return;
     const baseName = data.filenamePrefix.trim() || 'comp';
-    const filename = getExportFilename(baseName, renderData.format);
-    downloadBlob(renderData.renderedBlob, filename);
-  }, [data.filenamePrefix, renderData]);
+    downloadBlob(asset.blob, getExportFilename(baseName, settings.format, asset.extension));
+  }, [asset, data.filenamePrefix, settings]);
 
   return (
     <div className="node node-export">
@@ -59,11 +52,7 @@ export const ExportNode: React.FC<NodeProps<Node<ExportNodeData, 'export'>>> = (
           className="render-info"
           style={{ marginLeft: 'auto', textTransform: 'none', fontWeight: 400 }}
         >
-          {hasBakedAsset && renderData?.renderedDimensions
-            ? `${renderData.renderedDimensions.width} × ${renderData.renderedDimensions.height}`
-            : isConnected && renderData
-              ? renderData.format.toUpperCase()
-              : '—'}
+          {isConnected && asset ? `${asset.width} × ${asset.height}` : isConnected ? label : '—'}
         </span>
       </div>
 
@@ -78,24 +67,21 @@ export const ExportNode: React.FC<NodeProps<Node<ExportNodeData, 'export'>>> = (
                 : undefined
             }
           >
-            {isConnected && renderData ? renderData.format.toUpperCase() : 'NO INPUT'}
+            {isConnected ? label : 'NO INPUT'}
           </div>
           <div className="export-recipe-desc">
-            {isConnected && renderData ? (
-              hasBakedAsset ? (
+            {isConnected ? (
+              rendering ? (
+                <span>Baking in Render node…</span>
+              ) : asset ? (
                 <>
                   <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
                     Ready to download
                   </span>
                   <span>
-                    {renderData.renderedDimensions
-                      ? `${renderData.renderedDimensions.width}×${renderData.renderedDimensions.height} · `
-                      : ''}
-                    {formatBytes(renderData.renderedSize ?? renderData.renderedBlob!.size)}
+                    {asset.width}×{asset.height} · {formatBytes(asset.blob.size)}
                   </span>
                 </>
-              ) : renderData.rendering ? (
-                <span>Baking in Render node…</span>
               ) : (
                 <span>Click Render in node</span>
               )
@@ -118,21 +104,24 @@ export const ExportNode: React.FC<NodeProps<Node<ExportNodeData, 'export'>>> = (
           />
         </div>
 
-        {/* Instant Download Action Button */}
+        {/* Held back while a new bake runs, so what is downloaded is never
+            the file the Render node is in the middle of replacing. */}
         <button
           type="button"
           className="export-action-btn nodrag"
-          disabled={!hasBakedAsset}
+          disabled={!isConnected || !asset || rendering}
           onClick={handleDownload}
           title={
-            !isConnected || !renderData
+            !isConnected
               ? 'Connect a Render node to export'
-              : !hasBakedAsset
-                ? 'Render asset first in upstream node'
-                : `Download ${renderData.format.toUpperCase()} file`
+              : rendering
+                ? 'Rendering in progress…'
+                : !asset
+                  ? 'Render asset first in upstream node'
+                  : `Download ${label} file`
           }
         >
-          {renderData?.rendering ? (
+          {rendering ? (
             <>
               <Loader2 size={13} className="spin" />
               <span>Baking…</span>
@@ -140,7 +129,7 @@ export const ExportNode: React.FC<NodeProps<Node<ExportNodeData, 'export'>>> = (
           ) : (
             <>
               <Download size={13} />
-              <span>Download {isConnected && renderData ? renderData.format.toUpperCase() : 'File'}</span>
+              <span>Download {isConnected ? label : 'File'}</span>
             </>
           )}
         </button>

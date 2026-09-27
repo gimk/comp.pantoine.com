@@ -26,7 +26,7 @@ export const directionalBlur: EffectDef = {
   ],
   fragment: `  const int TAPS = 12;
   float a = u_angle * TAU;
-  vec2 stepUv = vec2(cos(a), sin(a)) * u_length / u_resolution;
+  vec2 stepUv = vec2(cos(a), sin(a)) * u_length * u_pixel_scale / max(u_resolution, vec2(1.0));
 
   vec4 sum = vec4(0.0);
   float total = 0.0;

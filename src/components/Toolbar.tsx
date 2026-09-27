@@ -24,6 +24,7 @@ const PaletteItem: React.FC<{
   onDone: () => void;
 }> = ({ entry, onSelect, onDone }) => (
   <button
+    type="button"
     className="toolbar-menu-item"
     draggable
     onDragStart={(event) => {
@@ -80,14 +81,29 @@ export const Toolbar: React.FC = () => {
   };
 
   return (
-    <div className="toolbar" ref={rootRef}>
+    <div
+      className="toolbar"
+      ref={rootRef}
+      onKeyDown={(event) => {
+        // Escape closes an open menu, and only that: stopped here, at the
+        // React root, it never reaches the canvas's window listener, which
+        // would otherwise also clear the selection.
+        if (event.key === 'Escape' && openMenu) {
+          event.stopPropagation();
+          close();
+        }
+      }}
+    >
       <div className="glass toolbar-pill">
         <span className="brand">COMP</span>
         <span className="toolbar-sep" />
         {catalog.map((f) => (
           <button
             key={f.id}
+            type="button"
             className={'toolbar-button' + (openMenu === f.id ? ' is-active' : '')}
+            aria-haspopup="menu"
+            aria-expanded={openMenu === f.id}
             onClick={() => toggle(f.id)}
           >
             {ICONS[f.id]}

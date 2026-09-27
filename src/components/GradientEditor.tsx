@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Plus, Trash2, ArrowLeftRight } from 'lucide-react';
 import type { ParamValue, Rgb } from '../engine/effects';
 import { toHex, fromHex } from './controlPrimitives';
@@ -50,45 +50,77 @@ interface GradientEditorProps {
   setParam: (id: string, key: string, value: ParamValue) => void;
 }
 
+type StopValue = { pos: number; color: [number, number, number] };
+
+const MAX_STOPS = 8;
+const MIN_STOPS = 2;
+
+const clampCount = (count: number | undefined, fallback: number) =>
+  Math.min(MAX_STOPS, Math.max(MIN_STOPS, count ?? fallback));
+
+/** The stops as stored in a node's params, in slot order. */
+const readStops = (params: Record<string, ParamValue>, fallbackCount = 3): StopValue[] => {
+  const count = clampCount(params.stopCount as number | undefined, fallbackCount);
+  const list: StopValue[] = [];
+  for (let i = 0; i < count; i++) {
+    const defStop = DEFAULT_STOPS[i] ?? { pos: i / (count - 1), color: [1, 1, 1] as [number, number, number] };
+    list.push({
+      pos: (params[`pos${i}`] as number) ?? defStop.pos,
+      color: (params[`color${i}`] as [number, number, number]) ?? defStop.color,
+    });
+  }
+  return list;
+};
+
 export const GradientEditor: React.FC<GradientEditorProps> = ({ nodeId, params, setParam }) => {
   const [selectedIdx, setSelectedIdx] = useState(0);
   const trackRef = useRef<HTMLDivElement>(null);
+  // Detaches an in-flight thumb drag's window listeners; also run on unmount
+  // so a node deleted mid-drag doesn't leave them behind.
+  const endDragRef = useRef<(() => void) | null>(null);
+  useEffect(() => () => endDragRef.current?.(), []);
 
-  const stopCount = Math.min(8, Math.max(2, (params.stopCount as number) ?? 3));
+  const stopCount = clampCount(params.stopCount as number | undefined, 3);
 
-  // Extract stops from params
-  const stops: GradientStop[] = useMemo(() => {
-    const list: GradientStop[] = [];
-    for (let i = 0; i < stopCount; i++) {
-      const defStop = DEFAULT_STOPS[i] ?? { id: i, pos: i / (stopCount - 1), color: [1, 1, 1] };
-      const pos = (params[`pos${i}`] as number) ?? defStop.pos;
-      const color = (params[`color${i}`] as [number, number, number]) ?? defStop.color;
-      list.push({ id: i, pos, color });
-    }
-    return list;
-  }, [params, stopCount]);
+  const stops: GradientStop[] = useMemo(
+    () => readStops(params).map((stop, id) => ({ id, ...stop })),
+    [params],
+  );
 
   const activeIdx = Math.min(selectedIdx, stops.length - 1);
   const activeStop = stops[activeIdx] ?? stops[0];
 
-  // Helper to commit sorted stops to the store
+  /*
+   * Every structural edit goes through here. The Ramp shader walks the
+   * stops in slot order and expects them sorted, so they are sorted on every
+   * commit -- not just when a drag ends -- and written as one patch: one
+   * store update, one undo step, instead of a write per slot. `selected` is
+   * the index, in `next`, of the stop that should stay selected; it's
+   * followed through the sort so the selection sticks to the same stop, not
+   * the same slot. Returns that stop's new index.
+   */
   const commitStops = useCallback(
-    (newStops: { pos: number; color: [number, number, number] }[], selectedStopId?: number) => {
-      const sorted = [...newStops].sort((a, b) => a.pos - b.pos);
-      setParam(nodeId, 'stopCount', sorted.length);
-      for (let i = 0; i < sorted.length; i++) {
-        setParam(nodeId, `pos${i}`, sorted[i].pos);
-        setParam(nodeId, `color${i}`, sorted[i].color);
-      }
-      if (selectedStopId !== undefined) {
-        const nextIdx = sorted.findIndex((s) => s.pos === newStops[selectedStopId]?.pos);
-        if (nextIdx !== -1) {
-          setSelectedIdx(nextIdx);
-        }
-      }
+    (next: StopValue[], selected: number): number => {
+      const order = next.map((stop, i) => ({ stop, i })).sort((a, b) => a.stop.pos - b.stop.pos);
+      const patch: Record<string, ParamValue> = { stopCount: order.length };
+      order.forEach(({ stop }, slot) => {
+        patch[`pos${slot}`] = stop.pos;
+        patch[`color${slot}`] = stop.color;
+      });
+      useGraph.getState().setEffectParams(nodeId, patch);
+      const nextIdx = Math.max(0, order.findIndex(({ i }) => i === selected));
+      setSelectedIdx(nextIdx);
+      return nextIdx;
     },
-    [nodeId, setParam],
+    [nodeId],
   );
+
+  /** The latest stops from the store, not the (possibly stale) render's. */
+  const latestStops = (): StopValue[] => {
+    const node = useGraph.getState().nodes.find((n) => n.id === nodeId);
+    const current = node?.data && 'params' in node.data ? (node.data.params as Record<string, ParamValue>) : params;
+    return readStops(current);
+  };
 
   // CSS linear-gradient string for the visual preview track
   const gradientCss = useMemo(() => {
@@ -103,35 +135,26 @@ export const GradientEditor: React.FC<GradientEditorProps> = ({ nodeId, params, 
     return `linear-gradient(to right, ${parts.join(', ')})`;
   }, [stops]);
 
+  const addStopAt = (pos: number) => {
+    if (stopCount >= MAX_STOPS) return;
+    const rounded = Math.round(pos * 100) / 100;
+    const current = latestStops();
+    commitStops([...current, { pos: rounded, color: sampleGradientColor(current, rounded) }], current.length);
+  };
+
   // Click on track: add a new color stop at clicked position
   const handleTrackClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (stopCount >= 8) return;
     const track = trackRef.current;
     if (!track) return;
     const rect = track.getBoundingClientRect();
-    const t = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    const roundedPos = Math.round(t * 100) / 100;
-    const sampledColor = sampleGradientColor(stops, roundedPos);
-
-    const newStops = [...stops.map((s) => ({ pos: s.pos, color: s.color })), { pos: roundedPos, color: sampledColor }];
-    newStops.sort((a, b) => a.pos - b.pos);
-    const newIdx = newStops.findIndex((s) => s.pos === roundedPos);
-
-    setParam(nodeId, 'stopCount', newStops.length);
-    for (let i = 0; i < newStops.length; i++) {
-      setParam(nodeId, `pos${i}`, newStops[i].pos);
-      setParam(nodeId, `color${i}`, newStops[i].color);
-    }
-    setSelectedIdx(newIdx !== -1 ? newIdx : newStops.length - 1);
+    addStopAt(Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)));
   };
 
   // Add a stop at the midpoint of the largest gap
   const handleAddStop = () => {
-    if (stopCount >= 8) return;
     const sorted = [...stops].sort((a, b) => a.pos - b.pos);
     let maxGap = -1;
     let insertPos = 0.5;
-
     for (let i = 0; i < sorted.length - 1; i++) {
       const gap = sorted[i + 1].pos - sorted[i].pos;
       if (gap > maxGap) {
@@ -139,49 +162,33 @@ export const GradientEditor: React.FC<GradientEditorProps> = ({ nodeId, params, 
         insertPos = (sorted[i].pos + sorted[i + 1].pos) / 2;
       }
     }
-    const roundedPos = Math.round(insertPos * 100) / 100;
-    const sampledColor = sampleGradientColor(stops, roundedPos);
-
-    const newStops = [...stops.map((s) => ({ pos: s.pos, color: s.color })), { pos: roundedPos, color: sampledColor }];
-    newStops.sort((a, b) => a.pos - b.pos);
-    const newIdx = newStops.findIndex((s) => s.pos === roundedPos);
-
-    setParam(nodeId, 'stopCount', newStops.length);
-    for (let i = 0; i < newStops.length; i++) {
-      setParam(nodeId, `pos${i}`, newStops[i].pos);
-      setParam(nodeId, `color${i}`, newStops[i].color);
-    }
-    setSelectedIdx(newIdx !== -1 ? newIdx : newStops.length - 1);
+    addStopAt(insertPos);
   };
 
   // Delete currently selected stop
   const handleDeleteStop = () => {
-    if (stopCount <= 2) return;
-    const remaining = stops
-      .filter((_, idx) => idx !== activeIdx)
-      .map((s) => ({ pos: s.pos, color: s.color }));
-    commitStops(remaining);
-    setSelectedIdx(Math.max(0, activeIdx - 1));
+    if (stopCount <= MIN_STOPS) return;
+    const remaining = latestStops().filter((_, idx) => idx !== activeIdx);
+    commitStops(remaining, Math.max(0, activeIdx - 1));
   };
 
   // Reverse gradient stops
   const handleReverseGradient = () => {
-    const reversed = stops.map((s) => ({
-      pos: Math.round((1.0 - s.pos) * 100) / 100,
-      color: s.color,
-    }));
+    const reversed = latestStops().map((s) => ({ pos: Math.round((1.0 - s.pos) * 100) / 100, color: s.color }));
     commitStops(reversed, activeIdx);
   };
 
-  // Color change for active stop
+  // Color change for active stop: order is unaffected, one param is enough.
   const handleColorChange = (newColor: Rgb) => {
     setParam(nodeId, `color${activeIdx}`, newColor);
   };
 
-  // Position change from slider / input
+  // Position change from the slider -- pointer or keyboard alike -- re-sorts
+  // straight away, so the stored order is never left out of step.
   const handlePosChange = (newPos: number) => {
-    const clamped = Math.max(0, Math.min(1, newPos));
-    setParam(nodeId, `pos${activeIdx}`, clamped);
+    const next = latestStops();
+    next[activeIdx] = { ...next[activeIdx], pos: Math.max(0, Math.min(1, newPos)) };
+    commitStops(next, activeIdx);
   };
 
   // Dragging stop thumb along the track
@@ -189,48 +196,33 @@ export const GradientEditor: React.FC<GradientEditorProps> = ({ nodeId, params, 
     e.preventDefault();
     e.stopPropagation();
     setSelectedIdx(idx);
+    endDragRef.current?.();
 
     const track = trackRef.current;
     if (!track) return;
     const rect = track.getBoundingClientRect();
+    // The dragged stop's slot moves as it passes its neighbours.
+    let dragged = idx;
 
     const onPointerMove = (moveEvt: PointerEvent) => {
       const t = Math.max(0, Math.min(1, (moveEvt.clientX - rect.left) / rect.width));
-      const rounded = Math.round(t * 100) / 100;
-      setParam(nodeId, `pos${idx}`, rounded);
+      const next = latestStops();
+      if (!next[dragged]) return;
+      next[dragged] = { ...next[dragged], pos: Math.round(t * 100) / 100 };
+      dragged = commitStops(next, dragged);
     };
 
-    const onPointerUp = () => {
+    const endDrag = () => {
       window.removeEventListener('pointermove', onPointerMove);
-      window.removeEventListener('pointerup', onPointerUp);
-
-      // Re-read latest stops from params and commit sorted
-      const currNode = useGraph.getState().nodes.find((n) => n.id === nodeId);
-      const currParams = currNode?.data && 'params' in currNode.data ? (currNode.data.params as Record<string, ParamValue>) : params;
-      const count = Math.min(8, Math.max(2, (currParams.stopCount as number) ?? stopCount));
-
-      const updatedStops: { pos: number; color: [number, number, number]; wasSelected: boolean }[] = [];
-      for (let i = 0; i < count; i++) {
-        const p = (currParams[`pos${i}`] as number) ?? (i / (count - 1));
-        const c = (currParams[`color${i}`] as [number, number, number]) ?? [0, 0, 0];
-        updatedStops.push({ pos: p, color: c, wasSelected: i === idx });
-      }
-
-      updatedStops.sort((a, b) => a.pos - b.pos);
-      setParam(nodeId, 'stopCount', updatedStops.length);
-      let newSelected = 0;
-      for (let i = 0; i < updatedStops.length; i++) {
-        setParam(nodeId, `pos${i}`, updatedStops[i].pos);
-        setParam(nodeId, `color${i}`, updatedStops[i].color);
-        if (updatedStops[i].wasSelected) {
-          newSelected = i;
-        }
-      }
-      setSelectedIdx(newSelected);
+      window.removeEventListener('pointerup', endDrag);
+      window.removeEventListener('pointercancel', endDrag);
+      if (endDragRef.current === endDrag) endDragRef.current = null;
     };
 
     window.addEventListener('pointermove', onPointerMove);
-    window.addEventListener('pointerup', onPointerUp);
+    window.addEventListener('pointerup', endDrag);
+    window.addEventListener('pointercancel', endDrag);
+    endDragRef.current = endDrag;
   };
 
   return (
@@ -242,6 +234,7 @@ export const GradientEditor: React.FC<GradientEditorProps> = ({ nodeId, params, 
             type="button"
             className="gradient-btn gradient-btn-icon nodrag"
             title="Reverse gradient"
+            aria-label="Reverse gradient"
             onClick={handleReverseGradient}
           >
             <ArrowLeftRight size={11} />
@@ -250,6 +243,7 @@ export const GradientEditor: React.FC<GradientEditorProps> = ({ nodeId, params, 
             type="button"
             className="gradient-btn gradient-btn-icon nodrag"
             title={stopCount >= 8 ? 'Maximum 8 stops reached' : 'Add color stop'}
+            aria-label="Add color stop"
             disabled={stopCount >= 8}
             onClick={handleAddStop}
           >
@@ -259,6 +253,7 @@ export const GradientEditor: React.FC<GradientEditorProps> = ({ nodeId, params, 
             type="button"
             className="gradient-btn gradient-btn-icon nodrag"
             title={stopCount <= 2 ? 'Minimum 2 stops required' : 'Delete selected stop'}
+            aria-label="Delete selected stop"
             disabled={stopCount <= 2}
             onClick={handleDeleteStop}
           >
@@ -314,6 +309,7 @@ export const GradientEditor: React.FC<GradientEditorProps> = ({ nodeId, params, 
               <span className="control-swatch nodrag" title="Change stop color">
                 <input
                   type="color"
+                  aria-label={`Stop ${activeIdx + 1} color`}
                   value={toHex(activeStop.color)}
                   onChange={(e) => handleColorChange(fromHex(e.target.value))}
                 />
@@ -326,12 +322,12 @@ export const GradientEditor: React.FC<GradientEditorProps> = ({ nodeId, params, 
             <input
               type="range"
               className="control-slider nodrag"
+              aria-label={`Stop ${activeIdx + 1} position`}
               min={0}
               max={100}
               step={1}
               value={Math.round(activeStop.pos * 100)}
               onChange={(e) => handlePosChange(Number(e.target.value) / 100)}
-              onPointerUp={() => commitStops(stops.map((s) => ({ pos: s.pos, color: s.color })), activeIdx)}
             />
           </div>
         </div>

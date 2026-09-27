@@ -24,7 +24,7 @@ export const chromaticAberration: EffectDef = {
     { kind: 'vec2', key: 'center', label: 'Center', min: 0, max: 1, step: 0.01, default: [0.5, 0.5] },
   ],
   fragment: `  vec2 radial = (v_uv - u_center) * u_radial;
-  vec2 lateral = vec2(u_lateral / max(u_resolution.x, 1.0), 0.0);
+  vec2 lateral = vec2(u_lateral * u_pixel_scale / max(u_resolution.x, 1.0), 0.0);
   vec2 shift = radial + lateral;
 
   vec4 src = texture(u_src, v_uv);

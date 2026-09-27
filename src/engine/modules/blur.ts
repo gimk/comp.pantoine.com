@@ -10,7 +10,7 @@ import type { EffectDef } from '../effects';
  * -- which is the whole reason that uniform exists.
  */
 const AXIS = `  vec2 dir = (u_pass == 0) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
-  fragColor = blurAxis(u_src, v_uv, u_resolution, dir, u_radius);`;
+  fragColor = blurAxis(u_src, v_uv, u_resolution, dir, u_radius * u_pixel_scale);`;
 
 export const blur: EffectDef = {
   id: 'blur',

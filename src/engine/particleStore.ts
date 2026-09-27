@@ -1,14 +1,22 @@
-import type { LoadedImage } from './imageStore';
-import { isPlaying, resetCount, clockSeconds } from './clock';
-import { useGraph } from '../state/store';
-import { getImage } from './imageStore';
-import { paramsOf, type ParamValue } from './effects';
-import { getEffect } from './registry';
-import { isModulatable, modulatedValue } from './modulators';
-import { paramPort, resolveSignal, type AppNode } from '../state/graph';
+import type { ParamValue } from './effects';
 
 export const PARTICLE_SIM_SIZE = 256;
 export const MAX_PARTICLES = PARTICLE_SIM_SIZE * PARTICLE_SIM_SIZE; // 65,536
+
+/** Side of the square grid the speed driver is sampled from. */
+export const DRIVER_GRID_SIZE = 256;
+
+/** Longest single simulation step, in seconds. Longer advances are split. */
+export const SIM_MAX_STEP = 1 / 60;
+
+/**
+ * How much history a simulation is given when asked for a moment far from
+ * where it is. Particles are born over a few seconds and take a few more to
+ * settle into the picture, so this is enough to reach something close to
+ * the steady state -- and short enough that jumping to t = 900 costs a
+ * fraction of a second rather than replaying fifteen minutes.
+ */
+export const SIM_PREROLL_SECONDS = 6;
 
 export type ParticleParams = {
   angle: number;
@@ -47,94 +55,138 @@ export const DEFAULT_PARTICLE_PARAMS: ParticleParams = {
 };
 
 /**
- * High-performance CPU downsampled image sampler for driver attributes
- * (luminance, red, green, blue, saturation).
+ * Speed drivers, in the order particleFlow's menu lists them. The menu
+ * stores the index, so this order is part of the document format.
  */
-class LumaGrid {
-  private grid: Uint8Array | null = null;
-  private lastVersion = -1;
-  private lastDriver = -1;
-  private canvas: HTMLCanvasElement | null = null;
-  private ctx: CanvasRenderingContext2D | null = null;
+export const DRIVERS = [
+  'luminance',
+  'invertedLuma',
+  'saturation',
+  'edges',
+  'red',
+  'green',
+  'blue',
+  'hue',
+] as const;
 
-  public update(image: LoadedImage | undefined, driver: number): void {
-    if (!image || !image.bitmap) {
-      this.grid = null;
-      return;
-    }
+const luma = (r: number, g: number, b: number): number => (0.299 * r + 0.587 * g + 0.114 * b) / 255;
 
-    const versionKey = image.version;
-    if (this.lastVersion === versionKey && this.lastDriver === driver && this.grid) {
-      return;
-    }
-    this.lastVersion = versionKey;
-    this.lastDriver = driver;
+/**
+ * Reduce an RGBA picture to one driver value per cell, each in [0, 1].
+ *
+ * `rgba` is `size * size` pixels, rows in GL order (bottom row first) --
+ * straight off `readPixels`. Pure, so it can be tested without a GPU.
+ */
+export const computeDriverGrid = (
+  rgba: Uint8Array,
+  size: number,
+  driver: number,
+  out: Float32Array = new Float32Array(size * size),
+): Float32Array => {
+  const count = size * size;
+  const kind = DRIVERS[Math.round(driver)] ?? 'luminance';
 
-    try {
-      if (!this.canvas) {
-        this.canvas = document.createElement('canvas');
-        this.canvas.width = 256;
-        this.canvas.height = 256;
-        this.ctx = this.canvas.getContext('2d', { willReadFrequently: true });
+  if (kind === 'edges') {
+    // Sobel on luma. The kernel's largest response to a hard black/white
+    // edge is 4, so halving it makes a clean edge read as 1 while leaving
+    // soft gradients down in the low values where they belong.
+    const l = new Float32Array(count);
+    for (let i = 0; i < count; i++) l[i] = luma(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2]);
+    const at = (x: number, y: number): number =>
+      l[Math.min(size - 1, Math.max(0, y)) * size + Math.min(size - 1, Math.max(0, x))];
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const gx =
+          at(x + 1, y - 1) + 2 * at(x + 1, y) + at(x + 1, y + 1) - at(x - 1, y - 1) - 2 * at(x - 1, y) - at(x - 1, y + 1);
+        const gy =
+          at(x - 1, y + 1) + 2 * at(x, y + 1) + at(x + 1, y + 1) - at(x - 1, y - 1) - 2 * at(x, y - 1) - at(x + 1, y - 1);
+        out[y * size + x] = Math.min(1, Math.hypot(gx, gy) / 2);
       }
+    }
+    return out;
+  }
 
-      if (!this.ctx) return;
-      this.ctx.clearRect(0, 0, 256, 256);
-      this.ctx.drawImage(image.bitmap, 0, 0, 256, 256);
-      const imgData = this.ctx.getImageData(0, 0, 256, 256).data;
-
-      if (!this.grid) {
-        this.grid = new Uint8Array(256 * 256);
+  for (let i = 0; i < count; i++) {
+    const r = rgba[i * 4];
+    const g = rgba[i * 4 + 1];
+    const b = rgba[i * 4 + 2];
+    let value: number;
+    switch (kind) {
+      case 'invertedLuma':
+        value = 1 - luma(r, g, b);
+        break;
+      case 'saturation': {
+        const max = Math.max(r, g, b);
+        const min = Math.min(r, g, b);
+        value = max === 0 ? 0 : (max - min) / max;
+        break;
       }
-
-      for (let i = 0; i < 256 * 256; i++) {
-        const r = imgData[i * 4 + 0];
-        const g = imgData[i * 4 + 1];
-        const b = imgData[i * 4 + 2];
-        let val = 0;
-        if (driver === 0) {
-          // Luminance
-          val = 0.299 * r + 0.587 * g + 0.114 * b;
-        } else if (driver === 1) {
-          // Red
-          val = r;
-        } else if (driver === 2) {
-          // Green
-          val = g;
-        } else if (driver === 3) {
-          // Blue
-          val = b;
-        } else if (driver === 4) {
-          // Saturation
-          const max = Math.max(r, g, b);
-          const min = Math.min(r, g, b);
-          val = max === 0 ? 0 : ((max - min) / max) * 255;
+      case 'red':
+        value = r / 255;
+        break;
+      case 'green':
+        value = g / 255;
+        break;
+      case 'blue':
+        value = b / 255;
+        break;
+      case 'hue': {
+        const max = Math.max(r, g, b);
+        const min = Math.min(r, g, b);
+        const d = max - min;
+        if (d === 0) {
+          value = 0;
+        } else {
+          let h: number;
+          if (max === r) h = ((g - b) / d + 6) % 6;
+          else if (max === g) h = (b - r) / d + 2;
+          else h = (r - g) / d + 4;
+          value = h / 6;
         }
-        this.grid[i] = Math.round(val);
+        break;
       }
-    } catch {
-      this.grid = null;
+      default:
+        value = luma(r, g, b);
     }
+    out[i] = value;
+  }
+  return out;
+};
+
+/** The driver, sampled at a particle's position. */
+export class DriverGrid {
+  private grid: Float32Array | null = null;
+
+  public update(rgba: Uint8Array, driver: number): void {
+    this.grid = computeDriverGrid(rgba, DRIVER_GRID_SIZE, driver, this.grid ?? undefined);
+  }
+
+  public clear(): void {
+    this.grid = null;
   }
 
   public sample(x: number, y: number): number {
     if (!this.grid) return 0.5;
-    const gx = Math.min(255, Math.max(0, (x * 256) | 0));
-    // ImageBitmap was decoded with flipY, so row 0 is bottom and row 255 is top.
-    // In particle coordinates, y=0 is top and y=1 is bottom.
-    const gy = Math.min(255, Math.max(0, ((1.0 - y) * 256) | 0));
-    return this.grid[gy * 256 + gx] / 255.0;
+    const n = DRIVER_GRID_SIZE;
+    const gx = Math.min(n - 1, Math.max(0, (x * n) | 0));
+    // The grid is in GL order, row 0 at the bottom; particle y runs down.
+    const gy = Math.min(n - 1, Math.max(0, ((1.0 - y) * n) | 0));
+    return this.grid[gy * n + gx];
   }
 }
 
 /**
- * Discrete particle simulation instance for a single graph node.
- * Stored centrally so all viewers display the exact same state,
- * and the simulation continues running whether a viewer is attached or not.
+ * The particle simulation for one node, as a function of time.
+ *
+ * `advanceTo` moves it to a requested moment in steps of at most
+ * SIM_MAX_STEP, restarting (with a bounded pre-roll) when asked to go
+ * backwards or to jump far ahead. That makes its state depend only on the
+ * seed, the params and the sequence of times it was shown -- not on wall
+ * time -- so an export is reproducible, a paused viewer stays put, and two
+ * viewers watching the same moment agree.
  */
 export class ParticleSimulation {
-  public readonly nodeId: string;
-  public seed: number;
+  public readonly seed: number;
   /**
    * Continuous buffer of particle state: 4 floats per particle:
    * [0]: x in [0, 1] (-10 if dead/pending)
@@ -144,18 +196,24 @@ export class ParticleSimulation {
    */
   public data: Float32Array;
   public params: ParticleParams = { ...DEFAULT_PARTICLE_PARAMS };
-  public lumaGrid = new LumaGrid();
-  public initialized = false;
+  public driverGrid = new DriverGrid();
+  /** The moment the particles are at, in seconds; null before the first advance. */
+  public time: number | null = null;
+  /** Bumped whenever `data` changes, so a renderer can skip re-uploading it. */
+  public version = 0;
 
   // Linear congruential generator for deterministic particle distributions
   private rngState: number;
 
-  constructor(nodeId: string, seed: number) {
-    this.nodeId = nodeId;
+  constructor(seed: number) {
     this.seed = seed;
-    this.rngState = Math.floor(Math.abs(seed) * 1000000) || 1234567;
+    this.rngState = this.initialRngState();
     this.data = new Float32Array(MAX_PARTICLES * 4);
     this.reset();
+  }
+
+  private initialRngState(): number {
+    return Math.floor(Math.abs(this.seed) * 1000000) || 1234567;
   }
 
   private nextRandom(): number {
@@ -169,7 +227,7 @@ export class ParticleSimulation {
     const delaySpan = 3.5 / Math.max(Math.abs(speed), 0.25);
 
     // Re-seed deterministic PRNG so reset always produces consistent pattern
-    this.rngState = Math.floor(Math.abs(this.seed) * 1000000) || 1234567;
+    this.rngState = this.initialRngState();
 
     for (let i = 0; i < MAX_PARTICLES; i++) {
       const idx = i * 4;
@@ -178,7 +236,7 @@ export class ParticleSimulation {
       this.data[idx + 2] = angleRad;
       this.data[idx + 3] = this.nextRandom() * delaySpan; // birthDelay for progressive fill
     }
-    this.initialized = true;
+    this.version += 1;
   }
 
   public setParams(newParams: Record<string, ParamValue>): void {
@@ -199,9 +257,39 @@ export class ParticleSimulation {
     if (newParams.mix !== undefined) this.params.mix = Number(newParams.mix);
   }
 
-  public step(dt: number): void {
-    if (!this.initialized) this.reset();
+  /** Forget where the particles were; the next advance starts them afresh. */
+  public restart(): void {
+    this.time = null;
+  }
 
+  /**
+   * Bring the particles to `time`.
+   *
+   * Returns how many seconds of motion were simulated -- zero for a redraw
+   * at the moment already reached, which is how a renderer knows not to
+   * fade or accumulate anything -- and whether the particles were reset.
+   */
+  public advanceTo(time: number, preroll: number = SIM_PREROLL_SECONDS): { advanced: number; restarted: boolean } {
+    const target = Math.max(0, time);
+    let restarted = false;
+    if (this.time === null || target < this.time - 1e-9 || target - this.time > preroll) {
+      this.reset();
+      this.time = Math.max(0, target - preroll);
+      restarted = true;
+    }
+    const span = target - this.time;
+    if (span <= 1e-9) return { advanced: 0, restarted };
+
+    // Equal sub-steps rather than a fixed grid plus remainder, so a steady
+    // frame rate moves the particles by the same amount every frame.
+    const steps = Math.ceil(span / SIM_MAX_STEP - 1e-9);
+    const dt = span / steps;
+    for (let i = 0; i < steps; i++) this.step(dt);
+    this.time = target;
+    return { advanced: span, restarted };
+  }
+
+  public step(dt: number): void {
     const dtClamped = Math.min(Math.max(dt, 0.0005), 0.06);
     const rad = (this.params.angle * Math.PI) / 180.0;
 
@@ -302,13 +390,13 @@ export class ParticleSimulation {
         vy = -Math.sin(angle);
       }
 
-      // 4. Sample luminance/driver for speed modulation
+      // 4. Sample the driver for speed modulation
       let factor = 1.0;
       if (x >= 0 && x <= 1 && y >= 0 && y <= 1) {
-        factor = this.lumaGrid.sample(x, y);
+        factor = this.driverGrid.sample(x, y);
       }
 
-      // Slower in brighter areas (bunches up particles into image contours)
+      // Slower where the driver is high (bunches up particles into image contours)
       const speedMult = 1.0 / (1.0 + factor * slowdown * 4.0);
       const stepDist = this.params.speed * speedMult * dtClamped * 0.4;
       x += vx * stepDist;
@@ -318,140 +406,6 @@ export class ParticleSimulation {
       data[idx + 1] = y;
       data[idx + 2] = angle;
     }
+    this.version += 1;
   }
 }
-
-/**
- * Central singleton simulation manager.
- * Owns simulations for each particleFlow node in the graph,
- * ticks them continuously when playing, and coordinates resets.
- */
-class ParticleSimulationManager {
-  private simulations = new Map<string, ParticleSimulation>();
-  private lastTickTime = performance.now();
-  private lastResetCount = resetCount();
-  private loopRunning = false;
-
-  constructor() {
-    this.startLoop();
-  }
-
-  public getSimulation(nodeId: string, seed = 0): ParticleSimulation {
-    let sim = this.simulations.get(nodeId);
-    if (!sim) {
-      sim = new ParticleSimulation(nodeId, seed);
-      this.simulations.set(nodeId, sim);
-    }
-    return sim;
-  }
-
-  public reset(): void {
-    for (const sim of this.simulations.values()) {
-      sim.reset();
-    }
-  }
-
-  public prune(liveNodes: Set<string>): void {
-    for (const nodeId of this.simulations.keys()) {
-      if (!liveNodes.has(nodeId)) {
-        this.simulations.delete(nodeId);
-      }
-    }
-  }
-
-  private startLoop(): void {
-    if (this.loopRunning || typeof window === 'undefined') return;
-    this.loopRunning = true;
-
-    const tick = (now: number) => {
-      // 1. Handle transport resets
-      const currentResets = resetCount();
-      if (currentResets !== this.lastResetCount) {
-        this.lastResetCount = currentResets;
-        this.reset();
-      }
-
-      // 2. Compute delta
-      const delta = Math.min((now - this.lastTickTime) / 1000, 0.05);
-      this.lastTickTime = now;
-
-      // 3. Step simulations if transport is playing
-      if (isPlaying() && delta > 0.0001) {
-        this.stepAll(delta);
-      }
-
-      requestAnimationFrame(tick);
-    };
-
-    requestAnimationFrame(tick);
-  }
-
-  public stepAll(dt: number): void {
-    const state = useGraph.getState();
-    const nodes = state.nodes;
-    const edges = state.edges;
-
-    // Prune deleted nodes
-    const activeNodeIds = new Set(nodes.map((n) => n.id));
-    this.prune(activeNodeIds);
-
-    const time = clockSeconds();
-    const def = getEffect('particleFlow');
-    const specs = def ? paramsOf(def) : [];
-
-    // Map of incoming edges: targetNodeId -> Map(targetHandle -> sourceNodeId)
-    const incoming = new Map<string, Map<string | null, string>>();
-    for (const edge of edges) {
-      let ports = incoming.get(edge.target);
-      if (!ports) incoming.set(edge.target, (ports = new Map()));
-      ports.set(edge.targetHandle ?? null, edge.source);
-    }
-
-    for (const node of nodes) {
-      if (node.type !== 'effect' || node.data.effectId !== 'particleFlow') continue;
-
-      const sim = this.getSimulation(node.id);
-      const nodePorts = incoming.get(node.id);
-
-      const resolvedParams: Record<string, ParamValue> = { ...node.data.params };
-      for (const spec of specs) {
-        if (!isModulatable(spec)) continue;
-        const port = paramPort(spec.key);
-        const sourceId = nodePorts?.get(port);
-        if (!sourceId) continue;
-        const signal = resolveSignal(nodes, edges, sourceId);
-        if (!signal) continue;
-        resolvedParams[spec.key] = modulatedValue(spec, node.data.params[spec.key], signal, time);
-      }
-
-      sim.setParams(resolvedParams);
-
-      // Find source image for luminance sampling
-      let currentId: string | undefined = node.id;
-      let sourceImageId: string | null = null;
-      const visited = new Set<string>();
-
-      while (currentId && !visited.has(currentId)) {
-        visited.add(currentId);
-        const inEdgeSource: string | undefined = incoming.get(currentId)?.get(null);
-        if (!inEdgeSource) break;
-        const upstream: AppNode | undefined = nodes.find((n) => n.id === inEdgeSource);
-        if (!upstream) break;
-        if (upstream.type === 'image') {
-          sourceImageId = upstream.id;
-          break;
-        }
-        currentId = upstream.id;
-      }
-
-      if (sourceImageId) {
-        const image = getImage(sourceImageId);
-        sim.lumaGrid.update(image, sim.params.driver);
-      }
-
-      sim.step(dt);
-    }
-  }
-}
-
-export const particleManager = new ParticleSimulationManager();

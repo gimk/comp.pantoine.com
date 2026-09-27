@@ -19,7 +19,6 @@ export type PaletteItem =
   | { kind: 'output' }
   | { kind: 'background' }
   | { kind: 'render' }
-  | { kind: 'formatter' }
   | { kind: 'export' };
 
 export const encodePaletteItem = (item: PaletteItem): string => JSON.stringify(item);
@@ -45,7 +44,6 @@ export const decodePaletteItem = (raw: string): PaletteItem | null => {
       item.kind === 'output' ||
       item.kind === 'background' ||
       item.kind === 'render' ||
-      item.kind === 'formatter' ||
       item.kind === 'export'
     ) {
       return item;
@@ -73,7 +71,7 @@ export const paletteDropOffset = (item: PaletteItem): { x: number; y: number } =
   x:
     item.kind === 'output'
       ? DEFAULT_PREVIEW_WIDTH / 2
-      : item.kind === 'formatter' || item.kind === 'export' || item.kind === 'background'
+      : item.kind === 'render' || item.kind === 'export' || item.kind === 'background'
         ? 110
         : 98,
   y: 18,

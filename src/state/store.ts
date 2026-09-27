@@ -15,7 +15,17 @@ import { getGenerator } from '../engine/generators';
 import { defaultParams, type ParamValue } from '../engine/effects';
 import { defaultModulatorParams, getModulator } from '../engine/modulators';
 import { decodeImage, dropImage, putImage, shareImage, swapImages } from '../engine/imageStore';
-import { createVideoElementFromFile, dropVideo, getVideo, putVideo, shareVideo, swapVideos } from '../engine/videoStore';
+import {
+  cloneVideo,
+  configureVideo,
+  createVideoElementFromFile,
+  discardVideo,
+  dropVideo,
+  pauseVideo,
+  putVideo,
+  shareVideo,
+  swapVideos,
+} from '../engine/videoStore';
 import {
   DEFAULT_BACKGROUND_DATA,
   DEFAULT_EXPORT_DATA,
@@ -23,18 +33,22 @@ import {
   DEFAULT_RENDER_DATA,
   MOD_OUTPUT,
   identityAliases,
+  carriesRenderAsset,
+  clampRenderData,
   isModulationEdge,
+  isRenderEdge,
   paramPort,
   samePort,
   type AppNode,
   type BackgroundNodeData,
   type ExportNodeData,
-  type FormatterNodeData,
   type RenderNodeData,
   type VideoNodeData,
 } from './graph';
 import { highestIdSuffix, loadGraph, saveGraph } from './document';
 import { snapDrag, type Box, type SnapGuide } from './snapping';
+import { isValidConnection, wouldCreateCycle } from './connections';
+import { useRenderJobs } from './renderJobs';
 
 /**
  * Whatever was left in local storage, restored before anything else runs.
@@ -61,7 +75,7 @@ const idPrefixFor = (node: AppNode): string => {
   if (node.type === 'effect') return node.data.effectId;
   if (node.type === 'generator') return node.data.generatorId;
   if (node.type === 'modulator') return node.data.modulatorId;
-  if (node.type === 'render' || node.type === 'formatter') return 'render';
+  if (node.type === 'render') return 'render';
   if (node.type === 'export') return 'export';
   if (node.type === 'backgroundOutput') return 'background';
   if (node.type === 'video') return 'video';
@@ -79,12 +93,31 @@ const rewire = (edge: Edge, source: string, target: string): Edge => ({
 });
 
 /**
+ * A node's data as a copy of it should carry it: deep-copied, and with any
+ * reference to another node's id renamed through `rename` -- or dropped, if
+ * that node is not coming along. Today that is only a speed helper's mark.
+ */
+const copyData = (node: AppNode, rename: (id: string) => string | undefined): AppNode['data'] => {
+  const data = structuredClone(node.data);
+  if (node.type === 'modulator' && node.data.helperFor) {
+    const helperFor = rename(node.data.helperFor);
+    if (helperFor) (data as typeof node.data).helperFor = helperFor;
+    else delete (data as typeof node.data).helperFor;
+  }
+  return data;
+};
+
+/**
  * Copies of a set of nodes, with fresh ids and the wiring a copy keeps.
  *
  * A copy keeps the wires among the copied nodes and the ones feeding in
  * from outside, since an output can fan out to as many inputs as it likes.
  * It never keeps a wire out to a node that was not copied: that input is
  * already taken by the original.
+ *
+ * A copied video gets an element of its own, not a share of the original's:
+ * loop, speed and playhead are per node, and a shared element would have the
+ * two fighting over them.
  */
 const copySubgraph = (
   picked: AppNode[],
@@ -98,12 +131,12 @@ const copySubgraph = (
   const nodes = picked.map((node): AppNode => {
     const id = ids.get(node.id)!;
     if (node.type === 'image') shareImage(imageFrom(node.id), id);
-    if (node.type === 'video') shareVideo(imageFrom(node.id), id);
+    if (node.type === 'video') cloneVideo(imageFrom(node.id), id);
     return {
       ...node,
       id,
       position: { x: node.position.x + offset.x, y: node.position.y + offset.y },
-      data: structuredClone(node.data),
+      data: copyData(node, (other) => ids.get(other)),
       selected: true,
       dragging: false,
     } as AppNode;
@@ -186,9 +219,13 @@ const cancelAltDuplicate = (): void => {
   altDuplicate = null;
   if (!pairs) return;
   const standIns = new Set(pairs.values());
-  for (const standIn of standIns) {
+  for (const [original, standIn] of pairs) {
     identityAliases.delete(standIn);
     dropImage(standIn);
+    // The stand-in was lent the original's element (see beginAltDuplicate);
+    // it goes back before the fresh one is let go.
+    swapVideos(original, standIn);
+    pauseVideo(standIn);
     dropVideo(standIn);
   }
   useGraph.setState({ nodes: useGraph.getState().nodes.filter((node) => !standIns.has(node.id)) });
@@ -218,6 +255,78 @@ export const setDragModifiers = (keys: { ctrl: boolean; alt: boolean }): void =>
     // not on the next pointer move.
     store.setInsertTarget(null);
   }
+};
+
+/**
+ * The speed helpers that should go with a set of deleted videos: marked as
+ * that video's helper, still wired to it, and wired to nothing that is
+ * staying. One the user has put to other use stays put.
+ */
+const orphanedHelpers = (nodes: AppNode[], edges: Edge[], gone: Set<string>): string[] =>
+  nodes
+    .filter((node) => {
+      if (node.type !== 'modulator' || gone.has(node.id)) return false;
+      const video = node.data.helperFor;
+      if (!video || !gone.has(video)) return false;
+      const own = edges.filter((edge) => edge.source === node.id || edge.target === node.id);
+      return (
+        own.some((edge) => edge.source === node.id && edge.target === video) &&
+        own.every((edge) => gone.has(edge.source === node.id ? edge.target : edge.source))
+      );
+    })
+    .map((node) => node.id);
+
+/**
+ * Let go of what the store holds for nodes leaving the graph: pixels, a
+ * video's element (paused first -- an undo snapshot may keep it alive, and it
+ * must not play on unseen), and a Render node's baked file.
+ */
+const retire = (nodes: AppNode[], gone: Set<string>): void => {
+  for (const node of nodes) {
+    if (!gone.has(node.id)) continue;
+    if (node.type === 'image') dropImage(node.id);
+    if (node.type === 'video') {
+      pauseVideo(node.id);
+      dropVideo(node.id);
+    }
+    if (node.type === 'render') useRenderJobs.getState().clear(node.id);
+  }
+};
+
+/**
+ * Apply `update` to one node, keeping the same array -- and so not waking
+ * every subscriber -- when it hands the node back unchanged.
+ */
+const updateNode = (nodes: AppNode[], nodeId: string, update: (node: AppNode) => AppNode): AppNode[] => {
+  const index = nodes.findIndex((node) => node.id === nodeId);
+  if (index < 0) return nodes;
+  const next = update(nodes[index]);
+  if (next === nodes[index]) return nodes;
+  const copy = nodes.slice();
+  copy[index] = next;
+  return copy;
+};
+
+/** Whether merging `patch` into `data` would change anything. */
+const differs = <T extends object>(data: T, patch: Partial<T>): boolean =>
+  (Object.keys(patch) as (keyof T)[]).some((key) => !Object.is(data[key], patch[key]));
+
+/**
+ * Whether an effect may be spliced into this wire: one carrying a live
+ * picture, not a modulation signal and not a baked file. Exported for the
+ * canvas, which asks while a node is dragged over wires.
+ */
+export const canSpliceInto = (nodes: AppNode[], edges: Edge[], edge: Edge): boolean =>
+  !isModulationEdge(edge) && !isRenderEdge(edge) && !carriesRenderAsset(nodes, edges, edge.source);
+
+/* Latest load request per node, so a slow decode that finishes after a newer one is ignored. */
+const loadRequests = new Map<string, number>();
+let loadCounter = 0;
+
+const beginLoad = (nodeId: string): number => {
+  loadCounter += 1;
+  loadRequests.set(nodeId, loadCounter);
+  return loadCounter;
 };
 
 const initialNodes = (): AppNode[] => [
@@ -259,17 +368,17 @@ type GraphStore = {
   addVideoNode: (position?: XYPosition) => void;
   addOutputNode: (position?: XYPosition) => void;
   addRenderNode: (position?: XYPosition) => void;
-  addFormatterNode: (position?: XYPosition) => void;
   addExportNode: (position?: XYPosition) => void;
   addBackgroundNode: (position?: XYPosition) => void;
   setParam: (nodeId: string, key: string, value: ParamValue) => void;
+  /** Several params of one node at once: one change, one undo step. */
+  setEffectParams: (nodeId: string, patch: Record<string, ParamValue>) => void;
   setGeneratorResolution: (nodeId: string, width: number, height: number) => void;
   setPreviewWidth: (nodeId: string, width: number) => void;
   setBackgroundData: (nodeId: string, patch: Partial<BackgroundNodeData>) => void;
   backgroundFps: number | null;
   setBackgroundFps: (fps: number | null) => void;
   setRenderData: (nodeId: string, patch: Partial<RenderNodeData>) => void;
-  setFormatterData: (nodeId: string, patch: Partial<FormatterNodeData>) => void;
   setExportData: (nodeId: string, patch: Partial<ExportNodeData>) => void;
   setVideoData: (nodeId: string, patch: Partial<VideoNodeData>) => void;
   loadImage: (nodeId: string, file: File) => Promise<void>;
@@ -329,12 +438,17 @@ export const useGraph = create<GraphStore>((set, get) => ({
    * dropped: it is moving into this link, and an input takes one wire
    * anyway. Its extra inputs and modulation wires stay, since they belong
    * to how the node is set up rather than to where it sits in the flow.
+   *
+   * Nor does a wire carrying a baked file: an effect works on live
+   * pictures, and there is no picture on it to work on. And a splice that
+   * would close a loop through the node's extra inputs is refused, like any
+   * other wire that would.
    */
   insertNodeOnEdge: (nodeId, edgeId) => {
     const { nodes, edges } = get();
     const node = nodes.find((candidate) => candidate.id === nodeId);
     const edge = edges.find((candidate) => candidate.id === edgeId);
-    if (!node || !edge || node.type !== 'effect' || isModulationEdge(edge)) return;
+    if (!node || !edge || node.type !== 'effect' || !canSpliceInto(nodes, edges, edge)) return;
     if (edge.source === nodeId || edge.target === nodeId) return;
 
     const kept = edges.filter(
@@ -343,13 +457,12 @@ export const useGraph = create<GraphStore>((set, get) => ({
         candidate.source !== nodeId &&
         !(candidate.target === nodeId && samePort(candidate.targetHandle, null)),
     );
+    const into: Edge = { ...rewire(edge, edge.source, nodeId), targetHandle: null };
+    const out: Edge = { ...rewire(edge, nodeId, edge.target), sourceHandle: null };
+    if (wouldCreateCycle(kept, into) || wouldCreateCycle([...kept, into], out)) return;
 
     set({
-      edges: [
-        ...kept,
-        { ...rewire(edge, edge.source, nodeId), targetHandle: null },
-        { ...rewire(edge, nodeId, edge.target), sourceHandle: null },
-      ],
+      edges: [...kept, into, out],
       insertTargetEdgeId: null,
     });
   },
@@ -407,11 +520,21 @@ export const useGraph = create<GraphStore>((set, get) => ({
 
   onNodesChange: (changes) => {
     // Free the bitmap and its object URL as the node goes, so repeatedly
-    // importing and deleting does not leak the decoded pixels.
-    for (const change of changes) {
-      if (change.type === 'remove') {
-        dropImage(change.id);
-        dropVideo(change.id);
+    // importing and deleting does not leak the decoded pixels -- and take a
+    // video's untouched speed helper with it.
+    const removed = new Set(changes.flatMap((change) => (change.type === 'remove' ? [change.id] : [])));
+    if (removed.size > 0) {
+      const { nodes, edges } = get();
+      const helpers = orphanedHelpers(nodes, edges, removed);
+      for (const id of helpers) {
+        removed.add(id);
+        changes = [...changes, { type: 'remove', id }];
+      }
+      retire(nodes, removed);
+      // React Flow sends the removed nodes' wires separately; the helpers'
+      // wires are ours to take.
+      if (helpers.length > 0) {
+        set({ edges: edges.filter((edge) => !removed.has(edge.source) && !removed.has(edge.target)) });
       }
     }
     // Shift held mid-drag: pull the dragged nodes onto the nearest
@@ -447,6 +570,8 @@ export const useGraph = create<GraphStore>((set, get) => ({
   },
 
   onConnect: (connection) => {
+    // The canvas checks as the wire is dragged; this is for every other way in.
+    if (!isValidConnection(get().nodes, get().edges, connection)) return;
     // An input takes one wire: connecting to an occupied port replaces what
     // was there, which is what dropping a new link on it is asking for.
     const cleared = get().edges.filter(
@@ -468,6 +593,8 @@ export const useGraph = create<GraphStore>((set, get) => ({
    * moved is exempt from that sweep, or it would clear itself on the way in.
    */
   reconnectLink: (oldEdge, connection) => {
+    const others = get().edges.filter((edge) => edge.id !== oldEdge.id);
+    if (!isValidConnection(get().nodes, others, connection)) return;
     const kept = get().edges.filter(
       (edge) =>
         edge.id === oldEdge.id ||
@@ -564,6 +691,8 @@ export const useGraph = create<GraphStore>((set, get) => ({
       data: {
         modulatorId: 'math',
         params: { ...mathParams, op: 2, a: 1, b: 1 },
+        // Marked, so deleting the video can take it along (see orphanedHelpers).
+        helperFor: videoId,
       },
     };
 
@@ -573,6 +702,7 @@ export const useGraph = create<GraphStore>((set, get) => ({
       sourceHandle: MOD_OUTPUT,
       target: videoId,
       targetHandle: paramPort('speed'),
+      type: 'link',
     };
 
     set({
@@ -603,10 +733,6 @@ export const useGraph = create<GraphStore>((set, get) => ({
     set({ nodes: [...get().nodes, node] });
   },
 
-  addFormatterNode: (position) => {
-    get().addRenderNode(position);
-  },
-
   addExportNode: (position) => {
     const fallback = defaultNodePosition(get().nodes.length, 220, 160);
     const node: AppNode = {
@@ -630,84 +756,92 @@ export const useGraph = create<GraphStore>((set, get) => ({
   },
 
   setParam: (nodeId, key, value) => {
-    set({
-      nodes: get().nodes.map((node) => {
-        if (node.id !== nodeId || (node.type !== 'effect' && node.type !== 'modulator' && node.type !== 'generator')) return node;
-        return { ...node, data: { ...node.data, params: { ...node.data.params, [key]: value } } } as AppNode;
-      }),
+    get().setEffectParams(nodeId, { [key]: value });
+  },
+
+  setEffectParams: (nodeId, patch) => {
+    const nodes = updateNode(get().nodes, nodeId, (node) => {
+      if (node.type !== 'effect' && node.type !== 'modulator' && node.type !== 'generator') return node;
+      if (!differs(node.data.params, patch)) return node;
+      return { ...node, data: { ...node.data, params: { ...node.data.params, ...patch } } } as AppNode;
     });
+    if (nodes !== get().nodes) set({ nodes });
   },
 
   setGeneratorResolution: (nodeId, width, height) => {
-    set({
-      nodes: get().nodes.map((node) => {
-        if (node.id !== nodeId || node.type !== 'generator') return node;
-        return { ...node, data: { ...node.data, width, height } };
-      }),
+    const nodes = updateNode(get().nodes, nodeId, (node) => {
+      if (node.type !== 'generator' || !differs(node.data, { width, height })) return node;
+      return { ...node, data: { ...node.data, width, height } };
     });
+    if (nodes !== get().nodes) set({ nodes });
   },
 
   setPreviewWidth: (nodeId, width) => {
-    set({
-      nodes: get().nodes.map((node) => {
-        if (node.id !== nodeId || node.type !== 'renderOutput') return node;
-        return { ...node, data: { ...node.data, width } };
-      }),
+    const nodes = updateNode(get().nodes, nodeId, (node) => {
+      if (node.type !== 'renderOutput' || node.data.width === width) return node;
+      return { ...node, data: { ...node.data, width } };
     });
+    if (nodes !== get().nodes) set({ nodes });
   },
 
   setBackgroundData: (nodeId, patch) => {
-    set({
-      nodes: get().nodes.map((node) => {
-        if (node.id !== nodeId || node.type !== 'backgroundOutput') return node;
-        return { ...node, data: { ...node.data, ...patch } };
-      }),
+    const nodes = updateNode(get().nodes, nodeId, (node) => {
+      if (node.type !== 'backgroundOutput' || !differs(node.data, patch)) return node;
+      return { ...node, data: { ...node.data, ...patch } };
     });
+    if (nodes !== get().nodes) set({ nodes });
   },
 
+  /**
+   * Change a Render node's recipe. The result is brought within what the
+   * format can do (see RENDER_LIMITS) -- switching to GIF pulls a 60 fps,
+   * two-minute setting down to something GIF can hold.
+   */
   setRenderData: (nodeId, patch) => {
-    set({
-      nodes: get().nodes.map((node) => {
-        if (node.id !== nodeId || (node.type !== 'render' && node.type !== 'formatter')) return node;
-        return { ...node, data: { ...node.data, ...patch } };
-      }),
+    const nodes = updateNode(get().nodes, nodeId, (node) => {
+      if (node.type !== 'render') return node;
+      const data = clampRenderData({ ...node.data, ...patch });
+      if (!differs(node.data, data)) return node;
+      return { ...node, data };
     });
-  },
-
-  setFormatterData: (nodeId, patch) => {
-    get().setRenderData(nodeId, patch);
+    if (nodes !== get().nodes) set({ nodes });
   },
 
   setExportData: (nodeId, patch) => {
-    set({
-      nodes: get().nodes.map((node) => {
-        if (node.id !== nodeId || node.type !== 'export') return node;
-        return { ...node, data: { ...node.data, ...patch } };
-      }),
+    const nodes = updateNode(get().nodes, nodeId, (node) => {
+      if (node.type !== 'export' || !differs(node.data, patch)) return node;
+      return { ...node, data: { ...node.data, ...patch } };
     });
+    if (nodes !== get().nodes) set({ nodes });
   },
 
   setVideoData: (nodeId, patch) => {
-    const video = getVideo(nodeId);
-    if (video) {
-      if (patch.loop !== undefined) {
-        video.element.loop = patch.loop;
-      }
-      if (patch.speed !== undefined && patch.speed > 0) {
-        video.element.playbackRate = Math.min(16, Math.max(0.0625, patch.speed));
-      }
-    }
-    set({
-      nodes: get().nodes.map((node) => {
-        if (node.id !== nodeId || node.type !== 'video') return node;
-        return { ...node, data: { ...node.data, ...patch } };
-      }),
+    configureVideo(nodeId, patch);
+    const nodes = updateNode(get().nodes, nodeId, (node) => {
+      if (node.type !== 'video' || !differs(node.data, patch)) return node;
+      return { ...node, data: { ...node.data, ...patch } };
     });
+    if (nodes !== get().nodes) set({ nodes });
   },
 
+  /*
+   * Loading is asynchronous, and a lot can happen before a file finishes
+   * decoding: a second file dropped on the same node, or the node deleted.
+   * Each load takes a ticket; one that is no longer the latest for its node,
+   * or whose node has gone, throws its result away rather than overwriting
+   * a newer picture or leaking into a store entry nothing will ever free.
+   */
   loadImage: async (nodeId, file) => {
+    const ticket = beginLoad(nodeId);
+    const current = (): boolean =>
+      loadRequests.get(nodeId) === ticket && get().nodes.some((node) => node.id === nodeId && node.type === 'image');
     try {
       const bitmap = await decodeImage(file);
+      if (!current()) {
+        bitmap.close();
+        return;
+      }
+      loadRequests.delete(nodeId);
       const url = URL.createObjectURL(file);
       const loaded = putImage(nodeId, bitmap, url, file.name);
       set({
@@ -720,6 +854,8 @@ export const useGraph = create<GraphStore>((set, get) => ({
         }),
       });
     } catch (err) {
+      if (!current()) return;
+      loadRequests.delete(nodeId);
       const message = err instanceof Error ? err.message : 'Could not decode image file';
       set({
         nodes: get().nodes.map((node) => {
@@ -734,12 +870,23 @@ export const useGraph = create<GraphStore>((set, get) => ({
   },
 
   loadVideo: async (nodeId, file) => {
+    const ticket = beginLoad(nodeId);
+    const current = (): boolean =>
+      loadRequests.get(nodeId) === ticket && get().nodes.some((node) => node.id === nodeId && node.type === 'video');
     try {
       const { element, url, width, height, duration } = await createVideoElementFromFile(file);
+      if (!current()) {
+        discardVideo(element, url);
+        return;
+      }
+      loadRequests.delete(nodeId);
       const targetNode = get().nodes.find((n) => n.id === nodeId);
       const isLoop = targetNode?.type === 'video' && targetNode.data.loop !== undefined ? targetNode.data.loop : true;
-      element.loop = isLoop;
       const loaded = putVideo(nodeId, element, url, file.name, width, height, duration);
+      configureVideo(nodeId, {
+        loop: isLoop,
+        speed: targetNode?.type === 'video' ? targetNode.data.speed : undefined,
+      });
       set({
         nodes: get().nodes.map((node) => {
           if (node.id !== nodeId || node.type !== 'video') return node;
@@ -759,6 +906,8 @@ export const useGraph = create<GraphStore>((set, get) => ({
         }),
       });
     } catch (err) {
+      if (!current()) return;
+      loadRequests.delete(nodeId);
       const message = err instanceof Error ? err.message : 'Could not decode video file';
       set({
         nodes: get().nodes.map((node) => {
@@ -804,14 +953,20 @@ export const useGraph = create<GraphStore>((set, get) => ({
     const standIns = picked.map((node): AppNode => {
       const id = pairs.get(node.id)!;
       if (node.type === 'image') shareImage(node.id, id);
-      if (node.type === 'video') shareVideo(node.id, id);
+      if (node.type === 'video') {
+        // The stand-in stays where the original was and ends up as the
+        // original, so it is lent the playing element and the traveller gets
+        // the fresh one; the swap in endAltDuplicate hands both back.
+        cloneVideo(node.id, id);
+        swapVideos(node.id, id);
+      }
       identityAliases.set(id, node.id);
       return {
         ...node,
         id,
         // Where the original started: Alt may be pressed well into a drag.
         position: dragOrigins?.get(node.id) ?? node.position,
-        data: structuredClone(node.data),
+        data: copyData(node, (other) => pairs.get(other) ?? other),
         selected: false,
         dragging: false,
       } as AppNode;
@@ -849,8 +1004,13 @@ export const useGraph = create<GraphStore>((set, get) => ({
     const rename = (id: string): string => swap.get(id) ?? id;
 
     const { nodes, edges } = get();
+    // A speed helper's mark names a node id too, and follows the same swap.
+    const renamed = (node: AppNode): AppNode =>
+      node.type === 'modulator' && node.data.helperFor && swap.has(node.data.helperFor)
+        ? { ...node, data: { ...node.data, helperFor: rename(node.data.helperFor) } }
+        : node;
     set({
-      nodes: nodes.map((node) => (swap.has(node.id) ? { ...node, id: rename(node.id) } : node)),
+      nodes: nodes.map((node) => renamed(swap.has(node.id) ? { ...node, id: rename(node.id) } : node)),
       edges: edges.map((edge) => ({ ...edge, source: rename(edge.source), target: rename(edge.target) })),
     });
     return rename;
@@ -923,10 +1083,8 @@ export const useGraph = create<GraphStore>((set, get) => ({
     // leaving the chain broken.
     get().detachFromChain(ids);
     const gone = new Set(ids);
-    for (const id of gone) {
-      dropImage(id);
-      dropVideo(id);
-    }
+    for (const id of orphanedHelpers(get().nodes, get().edges, gone)) gone.add(id);
+    retire(get().nodes, gone);
     set({
       nodes: get().nodes.filter((node) => !gone.has(node.id)),
       edges: get().edges.filter((edge) => !gone.has(edge.source) && !gone.has(edge.target)),

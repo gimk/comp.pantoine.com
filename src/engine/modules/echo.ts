@@ -35,7 +35,7 @@ export const echo: EffectDef = {
     { kind: 'float', key: 'persistence', label: 'Persistence (s)', min: 0.05, max: 4, step: 0.05, default: 0.5 },
   ],
   fragment: `  vec4 src = texture(u_src, v_uv);
-  vec2 shift = u_offset / max(u_resolution, vec2(1.0));
+  vec2 shift = u_offset * u_pixel_scale / max(u_resolution, vec2(1.0));
   vec3 ghost = texture(u_prev, v_uv - shift).rgb;
 
   float k = pow(0.1, u_delta / max(u_persistence, 0.001));

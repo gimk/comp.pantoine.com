@@ -30,7 +30,7 @@ export const subpixels: EffectDef = {
     { kind: 'float', key: 'boost', label: 'Brightness', min: 1, max: 3, step: 0.05, default: 1.8 },
     { kind: 'bool', key: 'pixelate', label: 'Pixelate', default: true },
   ],
-  fragment: `  float size = max(u_size, 1.0);
+  fragment: `  float size = max(u_size * u_pixel_scale, 0.5);
   vec2 coord = v_uv * u_resolution;
 
   bool isBayer = (u_pattern == 3);

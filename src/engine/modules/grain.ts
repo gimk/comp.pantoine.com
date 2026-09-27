@@ -23,7 +23,9 @@ export const grain: EffectDef = {
     { kind: 'bool', key: 'mono', label: 'Monochrome', default: true },
   ],
   fragment: `  vec4 src = texture(u_src, v_uv);
-  vec2 cell = floor(v_uv * u_resolution / max(u_size, 1.0));
+  // Size is in source pixels. Below one working pixel every cell is its own
+  // pixel anyway, so the floor only stops the divide collapsing.
+  vec2 cell = floor(v_uv * u_resolution / max(u_size * u_pixel_scale, 0.5));
   float tick = floor(u_phase_rate);
   vec2 s = cell + vec2(tick * 37.0, u_seed * 991.0);
   vec3 n;

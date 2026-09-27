@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef } from 'react';
+import React, { useCallback } from 'react';
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
 import { CheckCircle2, Film, Loader2, X } from 'lucide-react';
 import { useGraph } from '../state/store';
@@ -9,15 +9,14 @@ import {
   type ExportFormat,
   type RenderNodeData,
 } from '../state/graph';
+import { isRendering, useRenderJob, useRenderJobs } from '../state/renderJobs';
 import { getImage } from '../engine/imageStore';
 import { getVideo } from '../engine/videoStore';
 import { clockSeconds } from '../engine/clock';
 import { NumberField, Slider } from './controlPrimitives';
-import {
-  exportGif,
-  exportStill,
-  exportVideo,
-} from '../engine/exportEngine';
+import { exportGif, exportStill, exportVideo } from '../engine/exportEngine';
+import { useResolvedChain } from './viewerPipeline';
+import { formatBytes, formatLabel } from './format';
 
 const FORMATS: { format: ExportFormat; label: string; isMotion: boolean }[] = [
   { format: 'mp4', label: 'MP4', isMotion: true },
@@ -27,26 +26,31 @@ const FORMATS: { format: ExportFormat; label: string; isMotion: boolean }[] = [
   { format: 'jpg', label: 'JPG', isMotion: false },
 ];
 
-const formatBytes = (bytes: number): string => {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-};
-
+/**
+ * Bakes the chain feeding it into a file.
+ *
+ * The file itself is not in the node's data but in the render-job store,
+ * keyed by this node's id: it is session state, and keeping it out of the
+ * document keeps it out of undo, saves and copies. Each render takes a
+ * token from that store and reports under it, so a render that was
+ * cancelled, or overtaken by a newer one, can finish however it likes
+ * without touching what the node shows. The previous file stays up in
+ * every viewer until the new one lands.
+ */
 export const RenderNode: React.FC<NodeProps<Node<RenderNodeData, 'render'>>> = ({
   id,
   data,
 }) => {
-  const nodes = useGraph((state) => state.nodes);
-  const edges = useGraph((state) => state.edges);
   const setRenderData = useGraph((state) => state.setRenderData);
+  const job = useRenderJob(id);
+  const rendering = isRendering(job);
+  const asset = job.asset;
+  const progress = job.progress;
 
-  const chain = resolveChain(nodes, edges, id);
+  const { chain } = useResolvedChain(id);
   const primaryVideo = chain ? getVideo(chain.sourceNodeId) : undefined;
   const primaryGenerator = chain ? generatorsForPlan(chain.plan).get(chain.sourceNodeId) : undefined;
   const primarySource = chain ? getImage(chain.sourceNodeId) ?? primaryVideo ?? primaryGenerator : undefined;
-
-  const abortControllerRef = useRef<AbortController | null>(null);
 
   const update = useCallback(
     (patch: Partial<RenderNodeData>) => {
@@ -69,90 +73,51 @@ export const RenderNode: React.FC<NodeProps<Node<RenderNodeData, 'render'>>> = (
   const outputHeight = primarySource ? Math.max(1, Math.round(primarySource.height * data.scale)) : 0;
 
   const cancelRender = useCallback(() => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      abortControllerRef.current = null;
-    }
-    update({
-      rendering: false,
-      progress: null,
-    });
-  }, [update]);
+    useRenderJobs.getState().cancel(id);
+  }, [id]);
 
   const handleRender = useCallback(async () => {
-    if (!chain || !primarySource || data.rendering) return;
-
-    // Revoke old URL if existing to free memory
-    if (data.renderedUrl) {
-      URL.revokeObjectURL(data.renderedUrl);
-    }
-
-    update({
-      rendering: true,
-      error: null,
-      progress: { currentFrame: 0, totalFrames: 1, percent: 0 },
-    });
+    // Read fresh at the click rather than closed over from the last render,
+    // so the settings baked are the ones on screen.
+    const { nodes, edges } = useGraph.getState();
+    const node = nodes.find((n) => n.id === id);
+    const renderChain = resolveChain(nodes, edges, id);
+    if (node?.type !== 'render' || !renderChain) return;
+    const settings = node.data;
 
     const controller = new AbortController();
-    abortControllerRef.current = controller;
+    const jobs = useRenderJobs.getState();
+    const token = jobs.start(id, controller);
+    const request = {
+      chain: renderChain,
+      data: settings,
+      signal: controller.signal,
+      onProgress: (next: { currentFrame: number; totalFrames: number; percent: number }) =>
+        useRenderJobs.getState().progress(id, token, next),
+    };
 
     try {
-      let result: { blob: Blob; extension: string };
-
-      if (data.format === 'jpg' || data.format === 'png') {
-        result = await exportStill({ chain, data });
-      } else if (data.format === 'gif') {
-        result = await exportGif({
-          chain,
-          data,
-          signal: controller.signal,
-          onProgress: (progress) => update({ progress }),
-        });
-      } else {
-        result = await exportVideo({
-          chain,
-          data,
-          signal: controller.signal,
-          onProgress: (progress) => update({ progress }),
-        });
-      }
-
-      const url = URL.createObjectURL(result.blob);
-      update({
-        renderedBlob: result.blob,
-        renderedUrl: url,
-        renderedSize: result.blob.size,
-        renderedDimensions: { width: outputWidth, height: outputHeight },
-        rendering: false,
-        progress: null,
-        error: null,
+      const result =
+        settings.format === 'jpg' || settings.format === 'png'
+          ? await exportStill(request)
+          : settings.format === 'gif'
+            ? await exportGif(request)
+            : await exportVideo(request);
+      // Both of these are no-ops unless this is still the node's current
+      // job, so a cancelled or superseded render drops its result here.
+      if (controller.signal.aborted) return;
+      useRenderJobs.getState().finish(id, token, {
+        blob: result.blob,
+        requested: settings.format,
+        extension: result.extension,
+        width: result.width,
+        height: result.height,
       });
     } catch (err: unknown) {
-      if (controller.signal.aborted) {
-        update({ rendering: false, progress: null });
-        return;
-      }
-      const message = err instanceof Error ? err.message : 'Render failed';
-      update({
-        rendering: false,
-        progress: null,
-        error: message,
-      });
-    } finally {
-      abortControllerRef.current = null;
+      if (controller.signal.aborted) return;
+      useRenderJobs.getState().fail(id, token, err instanceof Error ? err.message : 'Render failed');
     }
-  }, [chain, data, id, outputHeight, outputWidth, primarySource, update]);
-
-  // Clean up object URL on unmount
-  useEffect(() => {
-    return () => {
-      if (data.renderedUrl) {
-        URL.revokeObjectURL(data.renderedUrl);
-      }
-    };
-  }, []);
-
-  const hasRendered = !!data.renderedBlob && !!data.renderedUrl;
+  }, [id]);
 
   return (
     <div className="node node-render">
@@ -182,9 +147,11 @@ export const RenderNode: React.FC<NodeProps<Node<RenderNodeData, 'render'>>> = (
             <button
               key={format}
               type="button"
+              role="tab"
+              aria-selected={data.format === format}
               className={`export-format-btn${data.format === format ? ' is-active' : ''}`}
               onClick={() => update({ format })}
-              disabled={data.rendering}
+              disabled={rendering}
             >
               {label}
             </button>
@@ -350,36 +317,43 @@ export const RenderNode: React.FC<NodeProps<Node<RenderNodeData, 'render'>>> = (
           </>
         )}
 
-        {/* Baked status badge */}
-        {hasRendered && !data.rendering && (
-          <div className="render-badge-baked">
+        {/* Baked status badge. Named by the container actually produced:
+            an MP4 request comes back as WebM where MP4 cannot be recorded. */}
+        {asset && !rendering && (
+          <div
+            className="render-badge-baked"
+            title={
+              asset.extension !== asset.requested
+                ? `${formatLabel(asset.requested)} is not supported here; baked as ${formatLabel(asset.extension)}`
+                : undefined
+            }
+          >
             <CheckCircle2 size={12} />
             <span>
-              Baked {data.renderedDimensions ? `${data.renderedDimensions.width}×${data.renderedDimensions.height}` : ''}
-              {data.renderedSize ? ` · ${formatBytes(data.renderedSize)}` : ''}
+              Baked {formatLabel(asset.extension)} {asset.width}×{asset.height} · {formatBytes(asset.blob.size)}
             </span>
           </div>
         )}
 
         {/* Error message */}
-        {data.error && <div className="export-error">{data.error}</div>}
+        {job.error && <div className="export-error">{job.error}</div>}
 
         {/* Progress indicator during baking */}
-        {data.rendering && data.progress && (
+        {rendering && progress && (
           <div className="export-progress">
             <div className="export-progress-track">
               <div
                 className="export-progress-bar"
                 style={{
-                  width: `${data.progress.percent}%`,
+                  width: `${progress.percent}%`,
                   background: 'var(--port-render)',
                 }}
               />
             </div>
             <div className="export-progress-status">
               <span>
-                {data.progress.totalFrames > 1
-                  ? `${data.progress.currentFrame} / ${data.progress.totalFrames} (${data.progress.percent}%)`
+                {progress.totalFrames > 1
+                  ? `${progress.currentFrame} / ${progress.totalFrames} (${progress.percent}%)`
                   : 'Baking…'}
               </span>
               <button
@@ -387,6 +361,7 @@ export const RenderNode: React.FC<NodeProps<Node<RenderNodeData, 'render'>>> = (
                 className="export-cancel-btn nodrag"
                 onClick={cancelRender}
                 title="Cancel render"
+                aria-label="Cancel render"
               >
                 <X size={10} />
               </button>
@@ -399,16 +374,16 @@ export const RenderNode: React.FC<NodeProps<Node<RenderNodeData, 'render'>>> = (
           type="button"
           className="render-action-btn nodrag"
           onClick={handleRender}
-          disabled={!chain || !primarySource || data.rendering}
+          disabled={!chain || !primarySource || rendering}
           title={
             !chain || !primarySource
               ? 'Connect an image or video chain to render'
-              : data.rendering
+              : rendering
                 ? 'Rendering in progress…'
                 : 'Bake media file asset'
           }
         >
-          {data.rendering ? (
+          {rendering ? (
             <>
               <Loader2 size={13} className="spin" />
               <span>Rendering…</span>
@@ -416,7 +391,7 @@ export const RenderNode: React.FC<NodeProps<Node<RenderNodeData, 'render'>>> = (
           ) : (
             <>
               <Film size={13} />
-              <span>{hasRendered ? `Re-render ${data.format.toUpperCase()}` : `Render ${data.format.toUpperCase()}`}</span>
+              <span>{asset ? `Re-render ${formatLabel(data.format)}` : `Render ${formatLabel(data.format)}`}</span>
             </>
           )}
         </button>

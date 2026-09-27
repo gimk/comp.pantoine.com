@@ -29,7 +29,7 @@ export const iridescentMetal: EffectDef = {
   vec2 px = 1.0 / u_resolution;
 
   // Multi-scale filter spread for surface curvature
-  float filterDist = mix(1.0, 12.0, u_smoothness);
+  float filterDist = mix(1.0, 12.0, u_smoothness) * u_pixel_scale;
   vec2 sampleDist = px * filterDist;
 
   // 3x3 Sobel filter with expanded radius to produce smooth, sculptural liquid normals
@@ -112,7 +112,7 @@ export const iridescentMetal: EffectDef = {
 
   // Surface reflection with roughness-controlled multi-tap frosted blur
   vec2 reflOffset = normal.xy * (u_reflection * 0.08);
-  float blurRadius = u_roughness * 7.0;
+  float blurRadius = u_roughness * 7.0 * u_pixel_scale;
   vec2 blurStep = px * blurRadius;
 
   vec4 srcCol = texture(u_src, clamp(v_uv + reflOffset, 0.0, 1.0)) * 0.36;

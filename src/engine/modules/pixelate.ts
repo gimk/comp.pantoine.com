@@ -16,7 +16,7 @@ export const pixelate: EffectDef = {
     { kind: 'float', key: 'size', label: 'Pixel Size', min: 1, max: 64, step: 1, default: 8 },
     { kind: 'int', key: 'quantize', label: 'Color Depth', min: 0, max: 32, default: 0 },
   ],
-  fragment: `  vec2 pixelSize = vec2(max(u_size, 1.0)) / u_resolution;
+  fragment: `  vec2 pixelSize = vec2(max(u_size * u_pixel_scale, 1.0)) / u_resolution;
   vec2 gridUv = (floor(v_uv / pixelSize) + 0.5) * pixelSize;
   vec4 c = sampleEdge(u_src, gridUv, 0);
 

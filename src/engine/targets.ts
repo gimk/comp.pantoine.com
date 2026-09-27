@@ -8,18 +8,71 @@
  * worked on -- which is what the pool is for.
  */
 
+/**
+ * Storage for a target. Almost everything is `rgba8`; `rgba16f` is for
+ * state that is faded a little every frame and read back the next one.
+ */
+export type TargetFormat = 'rgba8' | 'rgba16f';
+
 export type RenderTarget = {
   framebuffer: WebGLFramebuffer;
   texture: WebGLTexture;
   width: number;
   height: number;
+  format: TargetFormat;
 };
 
-export const createTarget = (gl: WebGL2RenderingContext, width: number, height: number): RenderTarget => {
+const floatSupport = new WeakMap<WebGL2RenderingContext, boolean>();
+
+/**
+ * The format decaying state should live in on this context.
+ *
+ * Feedback -- a trail, an echo, a particle's afterglow -- is last frame
+ * times a factor just under one. In eight bits that product rounds back to
+ * the same value once it gets down to a few steps above zero, so the fade
+ * stalls and leaves a faint permanent ghost. Half floats keep going all the
+ * way to black. Rendering to them needs EXT_color_buffer_float, so this is
+ * asked once per context, and verified with a real framebuffer because a
+ * driver advertising the extension is not quite the same as one honouring
+ * it.
+ */
+export const feedbackFormat = (gl: WebGL2RenderingContext): TargetFormat => {
+  let supported = floatSupport.get(gl);
+  if (supported === undefined) {
+    supported = false;
+    if (gl.getExtension('EXT_color_buffer_float')) {
+      const texture = gl.createTexture();
+      const framebuffer = gl.createFramebuffer();
+      if (texture && framebuffer) {
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, 1, 1, 0, gl.RGBA, gl.HALF_FLOAT, null);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+        supported = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      }
+      gl.deleteFramebuffer(framebuffer);
+      gl.deleteTexture(texture);
+    }
+    floatSupport.set(gl, supported);
+  }
+  return supported ? 'rgba16f' : 'rgba8';
+};
+
+export const createTarget = (
+  gl: WebGL2RenderingContext,
+  width: number,
+  height: number,
+  format: TargetFormat = 'rgba8',
+): RenderTarget => {
   const texture = gl.createTexture();
   if (!texture) throw new Error('Could not create target texture');
   gl.bindTexture(gl.TEXTURE_2D, texture);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  if (format === 'rgba16f') {
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, width, height, 0, gl.RGBA, gl.HALF_FLOAT, null);
+  } else {
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  }
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
   // Effects that sample off their own edges should smear the border pixel
@@ -33,7 +86,12 @@ export const createTarget = (gl: WebGL2RenderingContext, width: number, height: 
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
-  return { framebuffer, texture, width, height };
+  return { framebuffer, texture, width, height, format };
+};
+
+export const deleteTarget = (gl: WebGL2RenderingContext, target: RenderTarget): void => {
+  gl.deleteFramebuffer(target.framebuffer);
+  gl.deleteTexture(target.texture);
 };
 
 /**
@@ -44,13 +102,14 @@ export const createTarget = (gl: WebGL2RenderingContext, width: number, height: 
  * pictures that were alive at the same moment -- two for a plain chain,
  * three inside a multi-pass effect, a few more for a graph with branches.
  * Targets are kept across frames and reallocated only when the working
- * resolution changes.
+ * resolution changes. Each format has its own free list, so asking for a
+ * half-float target never hands back an eight-bit one.
  */
 export class TargetPool {
   private gl: WebGL2RenderingContext;
   private all: RenderTarget[] = [];
-  /** A set, so releasing twice cannot hand one target to two owners. */
-  private free = new Set<RenderTarget>();
+  /** Sets, so releasing twice cannot hand one target to two owners. */
+  private free: Record<TargetFormat, Set<RenderTarget>> = { rgba8: new Set(), rgba16f: new Set() };
   private width = 0;
   private height = 0;
 
@@ -65,33 +124,32 @@ export class TargetPool {
     this.height = height;
   }
 
-  acquire(): RenderTarget {
+  acquire(format: TargetFormat = 'rgba8'): RenderTarget {
     if (this.width === 0) throw new Error('TargetPool used before resize()');
-    for (const target of this.free) {
-      this.free.delete(target);
+    const free = this.free[format];
+    for (const target of free) {
+      free.delete(target);
       return target;
     }
-    const target = createTarget(this.gl, this.width, this.height);
+    const target = createTarget(this.gl, this.width, this.height, format);
     this.all.push(target);
     return target;
   }
 
   release(target: RenderTarget): void {
-    this.free.add(target);
+    this.free[target.format].add(target);
   }
 
   /** Everything back in the pool, at the end of a frame. */
   releaseAll(): void {
-    for (const target of this.all) this.free.add(target);
+    for (const target of this.all) this.free[target.format].add(target);
   }
 
   dispose(): void {
-    for (const target of this.all) {
-      this.gl.deleteFramebuffer(target.framebuffer);
-      this.gl.deleteTexture(target.texture);
-    }
+    for (const target of this.all) deleteTarget(this.gl, target);
     this.all = [];
-    this.free.clear();
+    this.free.rgba8.clear();
+    this.free.rgba16f.clear();
     this.width = 0;
     this.height = 0;
   }

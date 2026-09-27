@@ -23,7 +23,16 @@ void main() {
 }
 `;
 
-export const createContext = (canvas: HTMLCanvasElement): WebGL2RenderingContext | null =>
+/**
+ * `preserveDrawingBuffer` stays off for viewers, which redraw every frame
+ * anyway. Export turns it on: it reads the canvas back (toBlob, a video
+ * frame) after the draw, and must not depend on doing so before the
+ * browser gets round to clearing it.
+ */
+export const createContext = (
+  canvas: HTMLCanvasElement,
+  options: { preserveDrawingBuffer?: boolean } = {},
+): WebGL2RenderingContext | null =>
   canvas.getContext('webgl2', {
     alpha: true,
     // The canvas sits on glass, so the page shows through wherever the
@@ -33,7 +42,7 @@ export const createContext = (canvas: HTMLCanvasElement): WebGL2RenderingContext
     antialias: false,
     depth: false,
     stencil: false,
-    preserveDrawingBuffer: false,
+    preserveDrawingBuffer: options.preserveDrawingBuffer ?? false,
   });
 
 const compileShader = (gl: WebGL2RenderingContext, type: number, source: string): WebGLShader => {

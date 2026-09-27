@@ -1,5 +1,9 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 
+/** Mirrors STORAGE_KEY in state/document.ts; kept local so the last-resort
+ * boundary doesn't import the module graph that may be what crashed. */
+const GRAPH_KEY = 'comp.graph';
+
 type Props = {
   children: ReactNode;
 };
@@ -27,13 +31,59 @@ export class ErrorBoundary extends Component<Props, State> {
     window.location.reload();
   };
 
+  /*
+   * Reset is the last resort, and the saved graph may be exactly what makes
+   * the app crash -- but it is also the user's work. So it is never simply
+   * deleted: a copy goes to a timestamped key first, and if that copy can't
+   * be written (quota, private mode) the reset doesn't happen at all.
+   */
   private handleReset = (): void => {
     try {
-      localStorage.removeItem('comp.graph');
+      const saved = localStorage.getItem(GRAPH_KEY);
+      if (saved !== null) {
+        // Keep only the few most recent backups, so repeated resets can't
+        // fill the storage quota and break normal autosave.
+        const prefix = `${GRAPH_KEY}.backup-`;
+        const old = Object.keys(localStorage)
+          .filter((key) => key.startsWith(prefix))
+          .sort()
+          .slice(0, -2);
+        for (const key of old) localStorage.removeItem(key);
+        localStorage.setItem(`${prefix}${Date.now()}`, saved);
+      }
+      localStorage.removeItem(GRAPH_KEY);
+    } catch {
+      window.alert(
+        'The saved project could not be backed up, so it was left in place. ' +
+          'Use "Download project JSON" to keep a copy before resetting.',
+      );
+      return;
+    }
+    window.location.reload();
+  };
+
+  private handleDownload = (): void => {
+    let saved: string | null = null;
+    try {
+      saved = localStorage.getItem(GRAPH_KEY);
     } catch {
       // Storage access might be restricted
     }
-    window.location.reload();
+    if (saved === null) {
+      window.alert('There is no saved project to download.');
+      return;
+    }
+    // The raw string, untouched: if it's malformed, that's worth seeing too.
+    const url = URL.createObjectURL(new Blob([saved], { type: 'application/json' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `comp-project-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    // Revoke on the next tick; some browsers cancel a download revoked
+    // synchronously after the click.
+    setTimeout(() => URL.revokeObjectURL(url), 0);
   };
 
   override render(): ReactNode {
@@ -68,7 +118,7 @@ export class ErrorBoundary extends Component<Props, State> {
               Something went wrong
             </h2>
             <p style={{ margin: '0 0 16px', color: '#5d5d66', fontSize: '13px', lineHeight: 1.5 }}>
-              An unexpected error occurred in the editor. You can reload the page or reset the saved project state.
+              An unexpected error occurred in the editor. You can reload the page, download the saved project, or reset it (a backup copy is kept in this browser).
             </p>
             {this.state.error && (
               <pre
@@ -88,7 +138,7 @@ export class ErrorBoundary extends Component<Props, State> {
                 {this.state.error.message}
               </pre>
             )}
-            <div style={{ display: 'flex', gap: '10px' }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
               <button
                 type="button"
                 onClick={this.handleReload}
@@ -108,8 +158,27 @@ export class ErrorBoundary extends Component<Props, State> {
               </button>
               <button
                 type="button"
+                onClick={this.handleDownload}
+                title="Downloads the saved project exactly as stored"
+                style={{
+                  flex: 1,
+                  padding: '9px 14px',
+                  borderRadius: '999px',
+                  border: '1px solid rgba(23, 23, 26, 0.12)',
+                  background: 'rgba(255, 255, 255, 0.8)',
+                  color: '#17171a',
+                  fontSize: '13px',
+                  fontWeight: 500,
+                  cursor: 'pointer',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                Download project JSON
+              </button>
+              <button
+                type="button"
                 onClick={this.handleReset}
-                title="Clears localStorage and reloads a fresh default graph"
+                title="Backs up the saved project, then reloads a fresh default graph"
                 style={{
                   flex: 1,
                   padding: '9px 14px',

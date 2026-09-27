@@ -18,8 +18,10 @@ export const blockGlitch: EffectDef = {
     { kind: 'float', key: 'colorShift', label: 'Color Drift', min: 0, max: 1, step: 0.01, default: 0.3 },
     { kind: 'float', key: 'speed', label: 'Speed', min: -2, max: 2, step: 0.05, default: 0.6 },
   ],
-  fragment: `  vec2 blockUv = floor(v_uv * u_resolution / max(u_blockSize, 2.0));
-  float t = floor(u_time * u_speed * 12.0);
+  fragment: `  vec2 blockUv = floor(v_uv * u_resolution / max(u_blockSize * u_pixel_scale, 1.0));
+  // The integrated phase, not time * speed: modulating Speed then changes
+  // how fast the blocks reshuffle instead of scrubbing through them.
+  float t = floor(u_phase_speed * 12.0);
   float seedVal = u_seed * 43.17 + t * 0.173;
 
   float blockNoise = hash12(blockUv + seedVal);

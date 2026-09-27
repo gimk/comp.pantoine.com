@@ -22,14 +22,9 @@ import {
 } from './components/paletteDrag';
 import { addPaletteItem } from './components/paletteCatalog';
 import { QuickAdd } from './components/QuickAdd';
-import {
-  MOD_OUTPUT,
-  findUpstreamRenderNode,
-  isModulationEdge,
-  isParamPort,
-  isRenderPort,
-  type AppNode,
-} from './state/graph';
+import type { AppNode } from './state/graph';
+import { isValidConnection as isConnectionAllowed } from './state/connections';
+import { withNodeBoundary } from './components/NodeBoundary';
 import { ImageNode } from './components/ImageNode';
 import { VideoNode } from './components/VideoNode';
 import { GeneratorNode } from './components/GeneratorNode';
@@ -45,8 +40,9 @@ import { Toolbar } from './components/Toolbar';
 import { Transport } from './components/Transport';
 import { AboutModal } from './components/AboutModal';
 import { useCanvasShortcuts } from './components/useCanvasShortcuts';
-import { dragMode, setDragModifiers, setVisibleAreaSource, useGraph } from './state/store';
+import { canSpliceInto, dragMode, setDragModifiers, setVisibleAreaSource, useGraph } from './state/store';
 import { commitNow } from './state/history';
+import { autosaveBlocked } from './state/document';
 import '@xyflow/react/dist/style.css';
 import './styles/glass.css';
 
@@ -56,65 +52,31 @@ import './styles/glass.css';
  * The sink is `renderOutput` rather than `output` on purpose: React Flow
  * ships built-in `input`/`output`/`default` node types, and reusing the name
  * pulls in their stylesheet, which paints a white card behind the glass one.
+ *
+ * Each is wrapped in its own error boundary, so one card that throws shows
+ * as broken on its own instead of taking the whole canvas with it.
  */
 const nodeTypes = {
-  image: ImageNode,
-  video: VideoNode,
-  generator: GeneratorNode,
-  effect: EffectNode,
-  modulator: ModulatorNode,
-  renderOutput: OutputNode,
-  backgroundOutput: BackgroundNode,
-  render: RenderNode,
-  formatter: RenderNode,
-  export: ExportNode,
+  image: withNodeBoundary(ImageNode),
+  video: withNodeBoundary(VideoNode),
+  generator: withNodeBoundary(GeneratorNode),
+  effect: withNodeBoundary(EffectNode),
+  modulator: withNodeBoundary(ModulatorNode),
+  renderOutput: withNodeBoundary(OutputNode),
+  backgroundOutput: withNodeBoundary(BackgroundNode),
+  render: withNodeBoundary(RenderNode),
+  export: withNodeBoundary(ExportNode),
 };
 
 /**
- * Pictures go into picture inputs, signals into param ports, and rendered
- * media assets into render ports -- and never cross-wired.
- *
  * Checked while the wire is still being dragged, so a port that would not
  * take it never lights up -- rather than accepting the drop and then
- * producing nothing, which would look like a bug in the effect.
+ * producing nothing, which would look like a bug in the effect. The rules
+ * themselves live in `connections`, where the store and the loader share them.
  */
 const isValidConnection = (connection: Connection | Edge): boolean => {
-  if (connection.source === connection.target) return false;
-
   const { nodes, edges } = useGraph.getState();
-  const sourceNode = nodes.find((n) => n.id === connection.source);
-  const targetNode = nodes.find((n) => n.id === connection.target);
-
-  const isSourceMod = connection.sourceHandle === MOD_OUTPUT || sourceNode?.type === 'modulator';
-  const isTargetMod = isParamPort(connection.targetHandle);
-
-  // Modulation signals can only connect to modulation param ports
-  if (isSourceMod || isTargetMod) {
-    return isSourceMod && isTargetMod;
-  }
-
-  // Determine whether the source stream is a rendered asset (purple) or live picture (blue)
-  let isSourceRender = isRenderPort(connection.sourceHandle);
-  if (!isSourceRender && sourceNode) {
-    if (sourceNode.type === 'render' || sourceNode.type === 'formatter') {
-      isSourceRender = true;
-    } else if (sourceNode.type === 'renderOutput' || sourceNode.type === 'backgroundOutput') {
-      isSourceRender = !!findUpstreamRenderNode(nodes, edges, sourceNode.id);
-    }
-  }
-
-  // If target is Viewer (renderOutput) or Background (backgroundOutput), it accepts BOTH live picture and rendered asset
-  if (targetNode?.type === 'renderOutput' || targetNode?.type === 'backgroundOutput') {
-    return true;
-  }
-
-  // If target is Export, it ONLY accepts rendered assets
-  if (targetNode?.type === 'export' || isRenderPort(connection.targetHandle)) {
-    return isSourceRender;
-  }
-
-  // Other targets (effects, render node, etc.) ONLY accept live WebGL pictures
-  return !isSourceRender;
+  return isConnectionAllowed(nodes, edges, connection);
 };
 
 /**
@@ -162,18 +124,21 @@ const Editor: React.FC = () => {
    * drop is never a guess.
    */
   const handleNodeDrag: OnNodeDrag<AppNode> = useCallback((_event, node) => {
-    const { edges: current, setInsertTarget } = useGraph.getState();
+    const { nodes: all, edges: current, setInsertTarget } = useGraph.getState();
     // A Ctrl-drag lifts modules out of the flow, the opposite of splicing
     // one in, so it never offers to.
     if (node.type !== 'effect' || dragMode() === 'detach') {
       setInsertTarget(null);
       return;
     }
-    // The node's own wires are always underneath it, and a modulation wire
-    // has no picture on it to put an effect into.
+    // The node's own wires are always underneath it, and neither a
+    // modulation wire nor one carrying a baked file has a live picture on it
+    // to put an effect into -- the same test the drop itself applies.
     const own = new Set(
       current
-        .filter((edge) => edge.source === node.id || edge.target === node.id || isModulationEdge(edge))
+        .filter(
+          (edge) => edge.source === node.id || edge.target === node.id || !canSpliceInto(all, current, edge),
+        )
         .map((edge) => edge.id),
     );
     const width = node.measured?.width ?? 196;
@@ -383,6 +348,20 @@ const handleCanvasContextMenu = (event: React.MouseEvent) => {
   event.preventDefault();
 };
 
+/*
+ * The saved project came from a newer build, so this one leaves it alone
+ * rather than overwrite what it cannot read. That makes the whole session
+ * unsaved, which is worth saying out loud -- once, at load, since it cannot
+ * change while the page is open.
+ */
+const AutosaveNotice: React.FC = () =>
+  autosaveBlocked() ? (
+    <div className="autosave-notice glass" role="status">
+      Your saved project was made by a newer version of this app. Nothing here will be saved -- reload the
+      latest version to keep working on it.
+    </div>
+  ) : null;
+
 export const App: React.FC = () => (
   <div className="app">
     <ReactFlowProvider>
@@ -392,6 +371,7 @@ export const App: React.FC = () => (
       <Toolbar />
       <Transport />
       <AboutModal />
+      <AutosaveNotice />
     </ReactFlowProvider>
   </div>
 );

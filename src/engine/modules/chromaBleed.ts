@@ -26,8 +26,8 @@ export const chromaBleed: EffectDef = {
     { kind: 'float', key: 'saturation', label: 'Saturation', min: 0, max: 2, step: 0.01, default: 1 },
   ],
   fragment: `  vec3 sharp = texture(u_src, v_uv).rgb;
-  vec2 shifted = v_uv + vec2(u_offset / max(u_resolution.x, 1.0), 0.0);
-  vec3 soft = blurAxis(u_src, shifted, u_resolution, vec2(1.0, 0.0), u_width).rgb;
+  vec2 shifted = v_uv + vec2(u_offset * u_pixel_scale / max(u_resolution.x, 1.0), 0.0);
+  vec3 soft = blurAxis(u_src, shifted, u_resolution, vec2(1.0, 0.0), u_width * u_pixel_scale).rgb;
 
   // Colour as its departure from grey, so recombining it with a different
   // brightness cannot also drag that brightness along with it.

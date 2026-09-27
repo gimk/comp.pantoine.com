@@ -114,7 +114,6 @@ export const addPaletteItem = (item: PaletteItem, position?: XYPosition): void =
   else if (item.kind === 'image') store.addImageNode(position);
   else if (item.kind === 'video') store.addVideoNode(position);
   else if (item.kind === 'render') store.addRenderNode(position);
-  else if (item.kind === 'formatter') store.addFormatterNode(position);
   else if (item.kind === 'export') store.addExportNode(position);
   else if (item.kind === 'background') store.addBackgroundNode(position);
   else store.addOutputNode(position);

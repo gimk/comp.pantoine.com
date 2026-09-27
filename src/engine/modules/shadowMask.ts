@@ -23,7 +23,7 @@ export const shadowMask: EffectDef = {
     { kind: 'float', key: 'strength', label: 'Strength', min: 0, max: 1, step: 0.01, default: 0.5 },
   ],
   fragment: `  vec4 src = texture(u_src, v_uv);
-  vec2 px = v_uv * u_resolution / max(u_pitch, 1.0);
+  vec2 px = v_uv * u_resolution / max(u_pitch * u_pixel_scale, 0.5);
 
   // Slot staggers every other row by half a triad, which is what breaks a
   // grille's continuous vertical stripes into brickwork.

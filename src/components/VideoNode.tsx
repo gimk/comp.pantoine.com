@@ -35,6 +35,14 @@ export const VideoNode: React.FC<NodeProps<Node<VideoNodeData, 'video'>>> = ({ i
   const setVideoData = useGraph((state) => state.setVideoData);
   const inputRef = useRef<HTMLInputElement>(null);
   const [isOver, setIsOver] = useState(false);
+  /*
+   * Problems the store never hears about: a dropped file that isn't a video
+   * (ignored before loadVideo), or a preview the browser can't decode even
+   * though the load itself succeeded. Keyed to the src they were raised
+   * against, so a new file clears them without an effect.
+   */
+  const [localError, setLocalError] = useState<{ src: string | null; message: string } | null>(null);
+  const shownError = data.error ?? (localError && localError.src === data.src ? localError.message : undefined);
 
   return (
     <div
@@ -55,14 +63,16 @@ export const VideoNode: React.FC<NodeProps<Node<VideoNodeData, 'video'>>> = ({ i
         <span>Video</span>
       </div>
 
-      {data.error && (
-        <div className="node-body node-warning" title={data.error}>
-          {data.error}
+      {shownError && (
+        <div className="node-body node-warning" title={shownError} role="alert">
+          {shownError}
         </div>
       )}
 
       <button
+        type="button"
         className="node-body image-drop nodrag"
+        aria-label={data.src ? `Replace video ${data.name}` : undefined}
         onClick={() => inputRef.current?.click()}
         onMouseEnter={(e) => {
           const video = e.currentTarget.querySelector('video');
@@ -85,6 +95,7 @@ export const VideoNode: React.FC<NodeProps<Node<VideoNodeData, 'video'>>> = ({ i
             muted
             playsInline
             preload="auto"
+            onError={() => setLocalError({ src: data.src, message: 'This video could not be previewed.' })}
           />
         ) : (
           <span className="image-empty">
@@ -139,8 +150,12 @@ export const VideoNode: React.FC<NodeProps<Node<VideoNodeData, 'video'>>> = ({ i
 
   function accept(files: FileList | null) {
     const file = files?.[0];
-    if (file && (file.type.startsWith('video/') || /\.(mp4|webm|mov|mkv)$/i.test(file.name))) {
+    if (!file) return;
+    if (file.type.startsWith('video/') || /\.(mp4|webm|mov|mkv)$/i.test(file.name)) {
+      setLocalError(null);
       void loadVideo(id, file);
+    } else {
+      setLocalError({ src: data.src, message: `${file.name} is not a video file.` });
     }
   }
 };

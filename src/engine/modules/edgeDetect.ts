@@ -24,7 +24,7 @@ export const edgeDetect: EffectDef = {
     { kind: 'float', key: 'thickness', label: 'Thickness', min: 0.5, max: 5, step: 0.1, default: 1.0 },
     { kind: 'color', key: 'edgeColor', label: 'Edge Color', default: [0.0, 1.0, 0.85] },
   ],
-  fragment: `  vec2 d = vec2(max(u_thickness, 0.1)) / u_resolution;
+  fragment: `  vec2 d = vec2(max(u_thickness * u_pixel_scale, 0.5)) / u_resolution;
 
   float tl = luma(texture(u_src, v_uv + vec2(-d.x, -d.y)).rgb);
   float tc = luma(texture(u_src, v_uv + vec2( 0.0, -d.y)).rgb);

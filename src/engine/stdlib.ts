@@ -13,6 +13,8 @@
  */
 export const STDLIB = `
 const float TAU = 6.28318530718;
+/** Period every u_phase_* uniform wraps at (PHASE_WRAP in phase.ts). */
+const float PHASE_WRAP = 1000.0;
 
 float sat(float x) { return clamp(x, 0.0, 1.0); }
 vec2 sat(vec2 x) { return clamp(x, 0.0, 1.0); }
@@ -118,6 +120,54 @@ float fbm(vec2 p, int octaves) {
   return sum;
 }
 
+/*
+ * Value noise that repeats: the lattice is indexed modulo \`period\` on each
+ * axis with a period above zero, so noise(p) == noise(p + period) exactly.
+ * Periods should be whole numbers of cells.
+ *
+ * This is what makes noise driven by a wrapped phase seamless: feed it
+ * vec2(u_phase_speed * k, y) with period vec2(PHASE_WRAP * k, 0.0) for a
+ * whole-number k, and the wrap from 1000 back to 0 lands on the same value.
+ * A period of 0 leaves that axis unwrapped.
+ */
+float valueNoisePeriodic(vec2 p, vec2 period) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  vec2 i1 = i + 1.0;
+  if (period.x > 0.0) { i.x = mod(i.x, period.x); i1.x = mod(i1.x, period.x); }
+  if (period.y > 0.0) { i.y = mod(i.y, period.y); i1.y = mod(i1.y, period.y); }
+  float a = hash12(i);
+  float b = hash12(vec2(i1.x, i.y));
+  float c = hash12(vec2(i.x, i1.y));
+  float d = hash12(i1);
+  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+/** One-dimensional periodic value noise in roughly 0..1. */
+float valueNoisePeriodic(float x, float period) {
+  return valueNoisePeriodic(vec2(x, 0.0), vec2(period, 0.0));
+}
+
+/*
+ * Fractal sum of periodic noise, periodic in \`period\` like its octaves.
+ * Unlike fbm the lacunarity is exactly 2 -- anything else would break the
+ * period -- so each octave is shifted by an odd offset instead to keep the
+ * lattices from lining up.
+ */
+float fbmPeriodic(vec2 p, int octaves, vec2 period) {
+  float sum = 0.0;
+  float amp = 0.5;
+  for (int i = 0; i < 8; i++) {
+    if (i >= octaves) break;
+    sum += amp * valueNoisePeriodic(p, period);
+    p = p * 2.0 + vec2(17.0, 31.0);
+    period *= 2.0;
+    amp *= 0.5;
+  }
+  return sum;
+}
+
 /** Rotate hue about the grey axis, leaving luma untouched. */
 vec3 hueRotate(vec3 c, float angle) {
   const vec3 k = vec3(0.57735027);
@@ -182,11 +232,14 @@ vec4 blurAxis(sampler2D tex, vec2 uv, vec2 resolution, vec2 dir, float radius) {
  * Triangle and square are phase-aligned to the sine -- all four rise from
  * zero at phase 0 and peak at 0.25 -- so switching waveform changes the
  * shape of the motion without also jumping its position.
+ *
+ * All four are continuous across the phase wrap: the first three repeat
+ * every whole unit, and the noise repeats every PHASE_WRAP.
  */
 float wave(float phase, int shape) {
   if (shape == 1) return abs(fract(phase - 0.25) * 4.0 - 2.0) - 1.0;
   if (shape == 2) return fract(phase) < 0.5 ? 1.0 : -1.0;
-  if (shape == 3) return valueNoise(vec2(phase, 0.0)) * 2.0 - 1.0;
+  if (shape == 3) return valueNoisePeriodic(phase, PHASE_WRAP) * 2.0 - 1.0;
   return sin(phase * TAU);
 }
 `;

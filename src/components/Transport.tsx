@@ -48,6 +48,7 @@ const DeckCounter: React.FC<{ playing: boolean }> = ({ playing }) => {
   const shown = useRef<number[]>([]);
 
   useEffect(() => {
+    const snapBacks: ((() => void) | undefined)[] = [];
     const place = (strip: HTMLSpanElement, cell: number, ms: number) => {
       strip.style.transition = ms > 0 ? `transform ${ms}ms cubic-bezier(0.2, 0.7, 0.2, 1)` : 'none';
       // A translate percentage is of the strip's own height, and the strip
@@ -73,20 +74,30 @@ const DeckCounter: React.FC<{ playing: boolean }> = ({ playing }) => {
         // 9 to 0: roll onto the spare 0 at the end, then jump back to the
         // first one, which looks identical.
         place(strip, 10, ROLL_MS[i]);
-        strip.addEventListener(
-          'transitionend',
-          () => {
-            if (shown.current[i] === 0) place(strip, 0, 0);
-          },
-          { once: true },
-        );
+        // One pending snap-back per tile. With reduced motion the strips
+        // have no transition, `transitionend` never comes, and one-shot
+        // listeners would otherwise pile up, one for every ten counts.
+        snapBacks[i]?.();
+        const snapBack = () => {
+          strip.removeEventListener('transitionend', snapBack);
+          snapBacks[i] = undefined;
+          if (shown.current[i] === 0) place(strip, 0, 0);
+        };
+        strip.addEventListener('transitionend', snapBack);
+        snapBacks[i] = () => strip.removeEventListener('transitionend', snapBack);
       });
     };
 
     paint(false);
     // Resets arrive as clock events, and jump rather than roll.
     const unsubscribe = subscribeClock(() => paint(false));
-    if (!playing) return unsubscribe;
+    const detach = () => snapBacks.forEach((cancel) => cancel?.());
+    if (!playing) {
+      return () => {
+        unsubscribe();
+        detach();
+      };
+    }
     let frame = requestAnimationFrame(function tick() {
       paint(true);
       frame = requestAnimationFrame(tick);
@@ -94,6 +105,7 @@ const DeckCounter: React.FC<{ playing: boolean }> = ({ playing }) => {
     return () => {
       cancelAnimationFrame(frame);
       unsubscribe();
+      detach();
     };
   }, [playing]);
 

@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { putVideo, dropVideo } from '../engine/videoStore';
 import {
   RENDER_PORT,
+  carriesRenderAsset,
+  clampRenderData,
   findUpstreamRenderNode,
+  RENDER_LIMITS,
   hasTargetPort,
   isModulationEdge,
   isParamPort,
@@ -136,7 +139,7 @@ describe('graph ports and chain resolution', () => {
       },
       {
         id: 'formatter-1',
-        type: 'formatter',
+        type: 'render',
         position: { x: 300, y: 0 },
         data: {
           format: 'gif',
@@ -525,5 +528,83 @@ describe('graph ports and chain resolution', () => {
     expect(chain).not.toBeNull();
     expect(chain?.sourceNodeId).toBe('noise-1');
     expect(chainIsAnimated(chain)).toBe(true);
+  });
+});
+
+describe('loops and render recipes', () => {
+  const render = (id: string): AppNode => ({
+    id,
+    type: 'render',
+    position: { x: 0, y: 0 },
+    data: { format: 'gif', quality: 0.9, scale: 1, time: 0, duration: 3, fps: 15 },
+  });
+  const viewer = (id: string): AppNode => ({ id, type: 'renderOutput', position: { x: 0, y: 0 }, data: { width: 360 } });
+  const ramp = (id: string): AppNode => ({
+    id,
+    type: 'generator',
+    position: { x: 0, y: 0 },
+    data: { generatorId: 'ramp', width: 64, height: 64, params: {} },
+  });
+  const blend: AppNode = {
+    id: 'blend-1',
+    type: 'effect',
+    position: { x: 0, y: 0 },
+    data: { effectId: 'blend', params: {} },
+  };
+
+  it('walks a viewer <-> viewer loop without recursing forever', () => {
+    const nodes = [viewer('a'), viewer('b')];
+    const edges: Edge[] = [
+      { id: 'e1', source: 'a', target: 'b' },
+      { id: 'e2', source: 'b', target: 'a' },
+    ];
+    expect(findUpstreamRenderNode(nodes, edges, 'a')).toBeNull();
+    expect(carriesRenderAsset(nodes, edges, 'b')).toBe(false);
+    expect(resolveChain(nodes, edges, 'a')).toBeNull();
+  });
+
+  it('still finds a render feeding into a looped pair of viewers', () => {
+    const nodes = [render('r'), viewer('a'), viewer('b')];
+    const edges: Edge[] = [
+      { id: 'e1', source: 'b', target: 'a' },
+      { id: 'e2', source: 'a', target: 'b' },
+      { id: 'e3', source: 'r', target: 'b', targetHandle: RENDER_PORT },
+    ];
+    expect(findUpstreamRenderNode(nodes, edges, 'a')?.id).toBe('r');
+    expect(carriesRenderAsset(nodes, edges, 'a')).toBe(true);
+    expect(carriesRenderAsset(nodes, edges, 'r')).toBe(true);
+  });
+
+  it('takes the render recipe from the main path only, not a side branch', () => {
+    const nodes = [ramp('base'), ramp('side'), render('r'), blend, viewer('v')];
+    const side: Edge[] = [
+      { id: 'e1', source: 'base', target: 'blend-1' },
+      { id: 'e2', source: 'side', target: 'r' },
+      { id: 'e3', source: 'r', target: 'blend-1', targetHandle: 'layer' },
+      { id: 'e4', source: 'blend-1', target: 'v' },
+    ];
+    const sideChain = resolveChain(nodes, side, 'v');
+    expect(sideChain).not.toBeNull();
+    expect(sideChain!.formatter).toBeUndefined();
+
+    const main: Edge[] = [
+      { id: 'e1', source: 'base', target: 'r' },
+      { id: 'e2', source: 'r', target: 'blend-1' },
+      { id: 'e3', source: 'side', target: 'blend-1', targetHandle: 'layer' },
+      { id: 'e4', source: 'blend-1', target: 'v' },
+    ];
+    expect(resolveChain(nodes, main, 'v')!.formatter?.format).toBe('gif');
+  });
+
+  it('clamps render settings to what the format can do', () => {
+    const base = { format: 'mp4' as const, quality: 0.9, scale: 1, time: 0, duration: 120, fps: 60 };
+    expect(clampRenderData(base)).toBe(base);
+    const gif = clampRenderData({ ...base, format: 'gif' });
+    expect(gif.fps).toBe(RENDER_LIMITS.gif.maxFps);
+    expect(gif.duration).toBe(RENDER_LIMITS.gif.maxDuration);
+    // A still leaves timing alone, for when the format is switched back.
+    const still = clampRenderData({ ...base, format: 'png' });
+    expect(still.fps).toBe(60);
+    expect(still.duration).toBe(120);
   });
 });

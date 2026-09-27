@@ -15,10 +15,11 @@
  */
 import type { Edge } from '@xyflow/react';
 import { dropImage, getImage, shareImage } from '../engine/imageStore';
-import { dropVideo, getVideo, shareVideo } from '../engine/videoStore';
-import type { AppNode } from './graph';
+import { configureVideo, dropVideo, getVideo, pauseVideo, shareVideo } from '../engine/videoStore';
+import { clampRenderData, type AppNode } from './graph';
 import { serializeGraph } from './document';
 import { isDragging, onDragEnd, useGraph } from './store';
+import { useRenderJobs } from './renderJobs';
 
 const SETTLE_MS = 300;
 const MAX_STEPS = 100;
@@ -61,7 +62,12 @@ const take = (nodes: AppNode[], edges: Edge[]): Snapshot => {
     }
   }
   return {
-    nodes: structuredClone(nodes),
+    // A Render node's data is its recipe only; anything else found on it --
+    // a baked blob written by an older component, say -- is not history's to
+    // keep, and would come back on undo if it were.
+    nodes: structuredClone(
+      nodes.map((node) => (node.type === 'render' ? { ...node, data: clampRenderData(node.data) } : node)),
+    ),
     edges: structuredClone(edges),
     key: documentKey(nodes, edges),
     images,
@@ -124,8 +130,16 @@ const restore = (snapshot: Snapshot): void => {
   const kept = new Set(snapshot.nodes.map((node) => node.id));
 
   for (const node of live) {
-    if (node.type === 'image' && !kept.has(node.id)) dropImage(node.id);
-    if (node.type === 'video' && !kept.has(node.id)) dropVideo(node.id);
+    if (kept.has(node.id)) continue;
+    if (node.type === 'image') dropImage(node.id);
+    if (node.type === 'video') {
+      // Paused, not just dropped: another snapshot may hold the same element
+      // and keep it alive, and it must not go on playing unseen.
+      pauseVideo(node.id);
+      dropVideo(node.id);
+    }
+    // A render undone out of the graph takes its baked file with it.
+    if (node.type === 'render') useRenderJobs.getState().clear(node.id);
   }
   for (const node of snapshot.nodes) {
     if (node.type === 'image') {
@@ -134,17 +148,23 @@ const restore = (snapshot: Snapshot): void => {
       else dropImage(node.id);
     } else if (node.type === 'video') {
       const held = snapshot.videos.get(node.id);
-      if (held) shareVideo(held, node.id);
-      else dropVideo(node.id);
+      if (held) {
+        shareVideo(held, node.id);
+        // The element may have been changed since the snapshot was taken;
+        // put it back to the settings the restored node says it has. The
+        // viewers start it playing again when they next draw it.
+        configureVideo(node.id, { loop: node.data.loop, speed: node.data.speed });
+      } else dropVideo(node.id);
     }
   }
 
   restoring = true;
   useGraph.setState({
     // Selection is not part of the document, and restoring an old one would
-    // leave the user operating on nodes they did not pick.
-    nodes: snapshot.nodes.map((node) => (node.selected ? { ...node, selected: false } : node)),
-    edges: snapshot.edges.map((edge) => (edge.selected ? { ...edge, selected: false } : edge)),
+    // leave the user operating on nodes they did not pick. Copied, so the
+    // live graph never aliases what history keeps.
+    nodes: structuredClone(snapshot.nodes).map((node) => (node.selected ? { ...node, selected: false } : node)),
+    edges: structuredClone(snapshot.edges).map((edge) => (edge.selected ? { ...edge, selected: false } : edge)),
     insertTargetEdgeId: null,
   });
   restoring = false;

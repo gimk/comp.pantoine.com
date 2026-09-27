@@ -23,7 +23,10 @@ export const signalRot: EffectDef = {
   ],
   fragment: `
   // Scanline sync slippage & tear
-  float scanline = floor(v_uv.y * u_resolution.y);
+  // Scanlines and snow are counted in source pixels, so a reduced preview
+  // tears the same rows as the full-size export.
+  float pxScale = max(u_pixel_scale, 0.001);
+  float scanline = floor(v_uv.y * u_resolution.y / pxScale);
   float lineStep = floor(u_phase_rate * 9.0);
   float lineSeed = hash12(vec2(scanline * 0.13, lineStep * 1.71 + u_seed * 23.4));
 
@@ -39,7 +42,7 @@ export const signalRot: EffectDef = {
 
   // High-frequency smear & overshoot ringing
   float px = 1.0 / u_resolution.x;
-  float smearDist = u_smear * u_decay * 20.0;
+  float smearDist = u_smear * u_decay * 20.0 * u_pixel_scale;
 
   vec4 smeared = baseCol * 0.35;
   smeared += texture(u_src, clamp(uv - vec2(px * smearDist * 0.3, 0.0), 0.0, 1.0)) * 0.25;
@@ -55,8 +58,8 @@ export const signalRot: EffectDef = {
 
   // Multipath RF ghosting echoes
   if (u_ghosting > 0.0) {
-    vec2 ghostUv1 = clamp(uv + vec2(px * 16.0 * u_ghosting, 0.0), 0.0, 1.0);
-    vec2 ghostUv2 = clamp(uv + vec2(px * 36.0 * u_ghosting, 0.0), 0.0, 1.0);
+    vec2 ghostUv1 = clamp(uv + vec2(px * 16.0 * u_pixel_scale * u_ghosting, 0.0), 0.0, 1.0);
+    vec2 ghostUv2 = clamp(uv + vec2(px * 36.0 * u_pixel_scale * u_ghosting, 0.0), 0.0, 1.0);
     vec4 g1 = texture(u_src, ghostUv1);
     vec4 g2 = texture(u_src, ghostUv2);
     col = col + (g1 * 0.35 - g2 * 0.15) * (u_ghosting * u_decay);
@@ -65,13 +68,15 @@ export const signalRot: EffectDef = {
   // NTSC Subcarrier Hue Drift
   if (abs(u_colorDrift) > 0.0) {
     float driftAngle = u_colorDrift * 3.14159 * 0.4 * u_decay;
-    driftAngle += sin(v_uv.y * 24.0 + u_phase_rate * 2.5) * (u_decay * 0.15);
+    // 398 whole cycles per 1000 phase units (~2.5 rad each): the phase
+    // wraps at 1000, and this keeps the wobble seamless across the wrap.
+    driftAngle += sin(v_uv.y * 24.0 + u_phase_rate * (398.0 * TAU / 1000.0)) * (u_decay * 0.15);
     col.rgb = hueRotate(col.rgb, driftAngle);
   }
 
   // RF Carrier Noise / Snow
   if (u_noise > 0.0) {
-    float rfNoise = hash22(v_uv * u_resolution + vec2(u_phase_rate * 149.3, u_seed * 51.7)).x;
+    float rfNoise = hash22(v_uv * u_resolution / pxScale + vec2(u_phase_rate * 149.3, u_seed * 51.7)).x;
     float noiseWeight = u_noise * u_decay * 0.35;
     if (lineSeed < u_syncLoss * 0.25) {
       noiseWeight += u_syncLoss * 0.35;

@@ -1,9 +1,9 @@
 import type { ParamValue } from './effects';
 import { createProgramWithShaders, drawQuad, uniform, VERTEX_SOURCE, type UniformCache } from './gl';
-import { createTarget, type RenderTarget } from './targets';
-import { particleManager, PARTICLE_SIM_SIZE, MAX_PARTICLES } from './particleStore';
+import { createTarget, deleteTarget, feedbackFormat, type RenderTarget } from './targets';
+import { DRIVER_GRID_SIZE, MAX_PARTICLES, PARTICLE_SIM_SIZE, ParticleSimulation } from './particleStore';
 
-const SIM_POINT_VERT = `#version 300 es
+export const SIM_POINT_VERT = `#version 300 es
 precision highp float;
 
 uniform sampler2D u_particles;
@@ -39,7 +39,7 @@ void main() {
 }
 `;
 
-const SIM_POINT_FRAG = `#version 300 es
+export const SIM_POINT_FRAG = `#version 300 es
 precision highp float;
 
 uniform vec3 u_color;
@@ -72,7 +72,16 @@ void main() {
 }
 `;
 
-const SIM_DECAY_FRAG = `#version 300 es
+/*
+ * Fade towards the backdrop -- black for phosphor, cream for ink.
+ *
+ * The clamp keeps additive points from banking brightness above white the
+ * way an eight-bit buffer never could, so a trail lasts as long in half
+ * float as it always did. `u_floor` is for the eight-bit fallback: there,
+ * `prev * fade` rounds back to `prev` a few steps above the backdrop and
+ * the fade stalls, so every frame also takes a little over half a step off.
+ */
+export const SIM_DECAY_FRAG = `#version 300 es
 precision highp float;
 
 in vec2 v_uv;
@@ -80,22 +89,18 @@ out vec4 fragColor;
 
 uniform sampler2D u_decay;
 uniform float u_fade;
-uniform int u_mode;
+uniform float u_floor;
+uniform vec3 u_backdrop;
 
 void main() {
-  vec4 prev = texture(u_decay, v_uv);
-  if (u_mode == 2) {
-    // Inverted ink fades back to clean paper
-    vec3 paper = vec3(0.96, 0.95, 0.93);
-    fragColor = vec4(mix(paper, prev.rgb, u_fade), 1.0);
-  } else {
-    // Phosphor fades down to pitch black
-    fragColor = vec4(prev.rgb * u_fade, 1.0);
-  }
+  vec3 prev = clamp(texture(u_decay, v_uv).rgb, 0.0, 1.0);
+  vec3 d = prev - u_backdrop;
+  d = sign(d) * max(abs(d) * u_fade - u_floor, 0.0);
+  fragColor = vec4(u_backdrop + d, 1.0);
 }
 `;
 
-const SIM_COMPOSITE_FRAG = `#version 300 es
+export const SIM_COMPOSITE_FRAG = `#version 300 es
 precision highp float;
 
 in vec2 v_uv;
@@ -108,7 +113,7 @@ uniform int u_mode;
 uniform float u_mix;
 
 void main() {
-  vec4 particles = texture(u_decay, v_uv);
+  vec4 particles = clamp(texture(u_decay, v_uv), 0.0, 1.0);
   vec4 src = texture(u_src, v_uv);
   vec4 orig = texture(u_orig, v_uv);
 
@@ -135,50 +140,129 @@ void main() {
 }
 `;
 
+/*
+ * The input shrunk to the driver grid, for reading back to the CPU. Four
+ * bilinear taps a quarter-cell apart average most of what each cell covers,
+ * so fine texture in a large frame does not alias into the driver.
+ */
+export const SIM_DRIVER_FRAG = `#version 300 es
+precision highp float;
+
+in vec2 v_uv;
+out vec4 fragColor;
+
+uniform sampler2D u_src;
+uniform vec2 u_cell;
+
+void main() {
+  vec2 q = u_cell * 0.25;
+  fragColor = 0.25 * (
+    texture(u_src, v_uv + vec2(-q.x, -q.y)) +
+    texture(u_src, v_uv + vec2( q.x, -q.y)) +
+    texture(u_src, v_uv + vec2(-q.x,  q.y)) +
+    texture(u_src, v_uv + vec2( q.x,  q.y)));
+}
+`;
+
+/** Every particle program, as [vertex, fragment], for the static shader checks. */
+export const PARTICLE_PROGRAMS: Record<'point' | 'decay' | 'composite' | 'driver', [string, string]> = {
+  point: [SIM_POINT_VERT, SIM_POINT_FRAG],
+  decay: [VERTEX_SOURCE, SIM_DECAY_FRAG],
+  composite: [VERTEX_SOURCE, SIM_COMPOSITE_FRAG],
+  driver: [VERTEX_SOURCE, SIM_DRIVER_FRAG],
+};
+
+const PAPER: [number, number, number] = [0.96, 0.95, 0.93];
+const BLACK: [number, number, number] = [0, 0, 0];
+
 type CompiledPass = {
   program: WebGLProgram;
   uniforms: UniformCache;
 };
 
 type NodeSimState = {
+  sim: ParticleSimulation;
   stateTex: WebGLTexture;
-  decayTargetA: RenderTarget;
-  decayTargetB: RenderTarget;
-  decayIsA: boolean;
-  decayWidth: number;
-  decayHeight: number;
+  /** `sim.version` last uploaded to `stateTex`. */
+  uploadedVersion: number;
+  decay: [RenderTarget, RenderTarget];
+  /** Which of `decay` holds the last frame drawn. */
+  current: 0 | 1;
+  /** The fade the last frame was drawn with, for redrawing it in place. */
+  lastFade: number;
+  /** The decay buffers hold nothing worth keeping (new, resized, reset). */
+  stale: boolean;
 };
 
+export type ParticleRenderRequest = {
+  nodeId: string;
+  seed: number;
+  input: WebGLTexture;
+  width: number;
+  height: number;
+  params: Record<string, ParamValue>;
+  /** Clock time of the frame; the simulation is advanced to it. */
+  time: number;
+  /** Working pixels per source pixel -- `u_pixel_scale` -- for sizing points. */
+  pixelScale: number;
+  target: RenderTarget;
+};
+
+/**
+ * Draws particleFlow nodes: a CPU simulation per node, rendered as points
+ * into a pair of decaying buffers.
+ *
+ * Each engine -- one per Pipeline -- owns its simulations and advances them
+ * to the time each frame asks for. They are deterministic in that time,
+ * which is what lets an export step its own copy frame by frame, and two
+ * viewers showing the same moment agree without sharing anything.
+ */
 export class ParticleEngine {
   private gl: WebGL2RenderingContext;
   private pointPass: CompiledPass;
   private decayPass: CompiledPass;
   private compositePass: CompiledPass;
+  private driverPass: CompiledPass;
   private nodes = new Map<string, NodeSimState>();
   private dummyVao: WebGLVertexArrayObject | null = null;
+  private format: RenderTarget['format'];
+  private driverTarget: RenderTarget | null = null;
+  private driverPixels = new Uint8Array(DRIVER_GRID_SIZE * DRIVER_GRID_SIZE * 4);
 
   constructor(gl: WebGL2RenderingContext) {
     this.gl = gl;
-
-    this.pointPass = {
-      program: createProgramWithShaders(gl, SIM_POINT_VERT, SIM_POINT_FRAG),
+    const compile = ([vertex, fragment]: [string, string]): CompiledPass => ({
+      program: createProgramWithShaders(gl, vertex, fragment),
       uniforms: new Map(),
-    };
-    this.decayPass = {
-      program: createProgramWithShaders(gl, VERTEX_SOURCE, SIM_DECAY_FRAG),
-      uniforms: new Map(),
-    };
-    this.compositePass = {
-      program: createProgramWithShaders(gl, VERTEX_SOURCE, SIM_COMPOSITE_FRAG),
-      uniforms: new Map(),
-    };
-
+    });
+    this.pointPass = compile(PARTICLE_PROGRAMS.point);
+    this.decayPass = compile(PARTICLE_PROGRAMS.decay);
+    this.compositePass = compile(PARTICLE_PROGRAMS.composite);
+    this.driverPass = compile(PARTICLE_PROGRAMS.driver);
+    this.format = feedbackFormat(gl);
     this.dummyVao = gl.createVertexArray();
   }
 
-  private getNodeState(nodeId: string, width: number, height: number): NodeSimState {
+  private createDecay(width: number, height: number): [RenderTarget, RenderTarget] {
+    return [createTarget(this.gl, width, height, this.format), createTarget(this.gl, width, height, this.format)];
+  }
+
+  private disposeState(state: NodeSimState): void {
+    this.gl.deleteTexture(state.stateTex);
+    deleteTarget(this.gl, state.decay[0]);
+    deleteTarget(this.gl, state.decay[1]);
+  }
+
+  private getNodeState(nodeId: string, seed: number, width: number, height: number): NodeSimState {
     const gl = this.gl;
     let state = this.nodes.get(nodeId);
+
+    // A different seed is a different simulation, not a tweak to this one.
+    if (state && state.sim.seed !== seed) {
+      this.disposeState(state);
+      this.nodes.delete(nodeId);
+      state = undefined;
+    }
 
     if (!state) {
       const tex = gl.createTexture();
@@ -190,64 +274,50 @@ export class ParticleEngine {
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
-      const decayA = createTarget(gl, width, height);
-      const decayB = createTarget(gl, width, height);
-      gl.bindFramebuffer(gl.FRAMEBUFFER, decayA.framebuffer);
-      gl.clearColor(0, 0, 0, 0);
-      gl.clear(gl.COLOR_BUFFER_BIT);
-      gl.bindFramebuffer(gl.FRAMEBUFFER, decayB.framebuffer);
-      gl.clearColor(0, 0, 0, 0);
-      gl.clear(gl.COLOR_BUFFER_BIT);
-      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-
       state = {
+        sim: new ParticleSimulation(seed),
         stateTex: tex,
-        decayTargetA: decayA,
-        decayTargetB: decayB,
-        decayIsA: true,
-        decayWidth: width,
-        decayHeight: height,
+        uploadedVersion: -1,
+        decay: this.createDecay(width, height),
+        current: 0,
+        lastFade: 0,
+        stale: true,
       };
       this.nodes.set(nodeId, state);
       return state;
     }
 
-    if (state.decayWidth !== width || state.decayHeight !== height) {
-      gl.deleteFramebuffer(state.decayTargetA.framebuffer);
-      gl.deleteTexture(state.decayTargetA.texture);
-      gl.deleteFramebuffer(state.decayTargetB.framebuffer);
-      gl.deleteTexture(state.decayTargetB.texture);
-
-      state.decayTargetA = createTarget(gl, width, height);
-      state.decayTargetB = createTarget(gl, width, height);
-      state.decayWidth = width;
-      state.decayHeight = height;
-
-      gl.bindFramebuffer(gl.FRAMEBUFFER, state.decayTargetA.framebuffer);
-      gl.clearColor(0, 0, 0, 0);
-      gl.clear(gl.COLOR_BUFFER_BIT);
-      gl.bindFramebuffer(gl.FRAMEBUFFER, state.decayTargetB.framebuffer);
-      gl.clearColor(0, 0, 0, 0);
-      gl.clear(gl.COLOR_BUFFER_BIT);
-      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    if (state.decay[0].width !== width || state.decay[0].height !== height) {
+      deleteTarget(gl, state.decay[0]);
+      deleteTarget(gl, state.decay[1]);
+      state.decay = this.createDecay(width, height);
+      state.stale = true;
     }
 
     return state;
   }
 
-  public render(
-    nodeId: string,
-    inputTexture: WebGLTexture,
-    origTexture: WebGLTexture,
-    width: number,
-    height: number,
-    params: Record<string, ParamValue>,
-    _time: number,
-    delta: number,
-    seed: number,
-    outTarget: RenderTarget,
-  ): void {
+  /** Shrink the input to the driver grid and read it back for the CPU. */
+  private readDriver(input: WebGLTexture, sim: ParticleSimulation): void {
     const gl = this.gl;
+    const n = DRIVER_GRID_SIZE;
+    if (!this.driverTarget) this.driverTarget = createTarget(gl, n, n);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.driverTarget.framebuffer);
+    gl.viewport(0, 0, n, n);
+    const { program, uniforms } = this.driverPass;
+    gl.useProgram(program);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, input);
+    gl.uniform1i(uniform(gl, program, uniforms, 'u_src'), 0);
+    gl.uniform2f(uniform(gl, program, uniforms, 'u_cell'), 1 / n, 1 / n);
+    drawQuad(gl);
+    gl.readPixels(0, 0, n, n, gl.RGBA, gl.UNSIGNED_BYTE, this.driverPixels);
+    sim.driverGrid.update(this.driverPixels, sim.params.driver);
+  }
+
+  public render(request: ParticleRenderRequest): void {
+    const gl = this.gl;
+    const { nodeId, seed, input, width, height, params, time, pixelScale, target } = request;
     const quantity = Math.max(10, Math.min(MAX_PARTICLES, Math.round((params.quantity as number) ?? 20000)));
     const size = (params.size as number) ?? 1.0;
     const shape = (params.shape as number) ?? 0;
@@ -257,39 +327,64 @@ export class ParticleEngine {
     const mode = (params.mode as number) ?? 0;
     const mixVal = (params.mix as number) ?? 1.0;
 
-    const state = this.getNodeState(nodeId, width, height);
-
-    // 1. Synchronize with central simulation store for this node
-    const sim = particleManager.getSimulation(nodeId, seed);
+    const state = this.getNodeState(nodeId, seed, width, height);
+    const { sim } = state;
     sim.setParams(params);
 
-    // Upload central particle positions to GPU
-    gl.bindTexture(gl.TEXTURE_2D, state.stateTex);
-    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, PARTICLE_SIM_SIZE, PARTICLE_SIM_SIZE, gl.RGBA, gl.FLOAT, sim.data);
+    // 1. Simulate up to this frame's time. The driver is read from the
+    // input -- whatever it is: image, video, generator, another effect --
+    // only when the particles are actually about to move.
+    const frameTime = Math.max(0, time);
+    if (sim.time === null || Math.abs(frameTime - sim.time) > 1e-9) this.readDriver(input, sim);
+    const { advanced, restarted } = sim.advanceTo(frameTime);
+    if (restarted) state.stale = true;
 
-    // 2. Decay / accumulation pass
-    const decayRead = state.decayIsA ? state.decayTargetA : state.decayTargetB;
-    const decayWrite = state.decayIsA ? state.decayTargetB : state.decayTargetA;
+    // Paused, nothing moved: the upload would be the same 1MB as last time.
+    if (state.uploadedVersion !== sim.version) {
+      gl.bindTexture(gl.TEXTURE_2D, state.stateTex);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, PARTICLE_SIM_SIZE, PARTICLE_SIM_SIZE, gl.RGBA, gl.FLOAT, sim.data);
+      state.uploadedVersion = sim.version;
+    }
+
+    /*
+     * 2. Decay / accumulation.
+     *
+     * A frame that moved on fades the last one into the other buffer and
+     * draws the particles over it. A redraw at the same moment -- paused,
+     * with a knob being turned -- must not do that, or every redraw adds
+     * another layer of points and the picture brightens on its own. It
+     * repeats the last frame's draw instead: same source buffer, same fade,
+     * into the same destination, with whatever the knobs now say.
+     */
+    let fade: number;
+    if (advanced > 0 || state.stale) {
+      fade = state.stale ? 0 : Math.pow(0.1, advanced / Math.max(trail * 1.5, 0.02));
+      state.current = state.current === 0 ? 1 : 0;
+      state.lastFade = fade;
+      state.stale = false;
+    } else {
+      fade = state.lastFade;
+    }
+    if (trail <= 0.001) fade = 0;
+    const decayWrite = state.decay[state.current];
+    const decayRead = state.decay[state.current === 0 ? 1 : 0];
+    const backdrop = mode === 2 ? PAPER : BLACK;
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, decayWrite.framebuffer);
     gl.viewport(0, 0, width, height);
 
-    if (trail > 0.001) {
-      gl.useProgram(this.decayPass.program);
+    if (fade > 0) {
+      const { program, uniforms } = this.decayPass;
+      gl.useProgram(program);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, decayRead.texture);
-      gl.uniform1i(uniform(gl, this.decayPass.program, this.decayPass.uniforms, 'u_decay'), 0);
-
-      const fade = Math.pow(0.1, delta / Math.max(trail * 1.5, 0.02));
-      gl.uniform1f(uniform(gl, this.decayPass.program, this.decayPass.uniforms, 'u_fade'), fade);
-      gl.uniform1i(uniform(gl, this.decayPass.program, this.decayPass.uniforms, 'u_mode'), mode);
+      gl.uniform1i(uniform(gl, program, uniforms, 'u_decay'), 0);
+      gl.uniform1f(uniform(gl, program, uniforms, 'u_fade'), fade);
+      gl.uniform1f(uniform(gl, program, uniforms, 'u_floor'), this.format === 'rgba8' ? 0.6 / 255 : 0);
+      gl.uniform3f(uniform(gl, program, uniforms, 'u_backdrop'), backdrop[0], backdrop[1], backdrop[2]);
       drawQuad(gl);
     } else {
-      if (mode === 2) {
-        gl.clearColor(0.96, 0.95, 0.93, 1.0);
-      } else {
-        gl.clearColor(0.0, 0.0, 0.0, 1.0);
-      }
+      gl.clearColor(backdrop[0], backdrop[1], backdrop[2], 1.0);
       gl.clear(gl.COLOR_BUFFER_BIT);
     }
 
@@ -301,91 +396,81 @@ export class ParticleEngine {
       gl.blendFunc(gl.ONE, gl.ONE);
     }
 
-    gl.useProgram(this.pointPass.program);
+    const point = this.pointPass;
+    gl.useProgram(point.program);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, state.stateTex);
-    gl.uniform1i(uniform(gl, this.pointPass.program, this.pointPass.uniforms, 'u_particles'), 0);
+    gl.uniform1i(uniform(gl, point.program, point.uniforms, 'u_particles'), 0);
 
     gl.activeTexture(gl.TEXTURE1);
-    gl.bindTexture(gl.TEXTURE_2D, inputTexture);
-    gl.uniform1i(uniform(gl, this.pointPass.program, this.pointPass.uniforms, 'u_src'), 1);
+    gl.bindTexture(gl.TEXTURE_2D, input);
+    gl.uniform1i(uniform(gl, point.program, point.uniforms, 'u_src'), 1);
 
-    gl.uniform2i(uniform(gl, this.pointPass.program, this.pointPass.uniforms, 'u_simSize'), PARTICLE_SIM_SIZE, PARTICLE_SIM_SIZE);
-    gl.uniform2f(uniform(gl, this.pointPass.program, this.pointPass.uniforms, 'u_resolution'), width, height);
-    gl.uniform1f(uniform(gl, this.pointPass.program, this.pointPass.uniforms, 'u_size'), size);
-    gl.uniform1i(uniform(gl, this.pointPass.program, this.pointPass.uniforms, 'u_shape'), shape);
-    gl.uniform3f(uniform(gl, this.pointPass.program, this.pointPass.uniforms, 'u_color'), color[0], color[1], color[2]);
-    gl.uniform1f(uniform(gl, this.pointPass.program, this.pointPass.uniforms, 'u_brightness'), brightness);
-    gl.uniform1i(uniform(gl, this.pointPass.program, this.pointPass.uniforms, 'u_mode'), mode);
+    gl.uniform2i(uniform(gl, point.program, point.uniforms, 'u_simSize'), PARTICLE_SIM_SIZE, PARTICLE_SIM_SIZE);
+    gl.uniform2f(uniform(gl, point.program, point.uniforms, 'u_resolution'), width, height);
+    // Size is in source pixels, like every other pixel-sized param, so a
+    // preview at reduced size and a full-size export draw the same dots.
+    gl.uniform1f(uniform(gl, point.program, point.uniforms, 'u_size'), size * pixelScale);
+    gl.uniform1i(uniform(gl, point.program, point.uniforms, 'u_shape'), shape);
+    gl.uniform3f(uniform(gl, point.program, point.uniforms, 'u_color'), color[0], color[1], color[2]);
+    gl.uniform1f(uniform(gl, point.program, point.uniforms, 'u_brightness'), brightness);
+    gl.uniform1i(uniform(gl, point.program, point.uniforms, 'u_mode'), mode);
 
     if (this.dummyVao) gl.bindVertexArray(this.dummyVao);
     gl.drawArrays(gl.POINTS, 0, quantity);
     if (this.dummyVao) gl.bindVertexArray(null);
 
     gl.disable(gl.BLEND);
-    state.decayIsA = !state.decayIsA;
-    const finalDecayTex = decayWrite.texture;
 
-    // 4. Composite to outTarget
-    gl.bindFramebuffer(gl.FRAMEBUFFER, outTarget.framebuffer);
+    // 4. Composite to the node's output
+    gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
     gl.viewport(0, 0, width, height);
-    gl.useProgram(this.compositePass.program);
+    const composite = this.compositePass;
+    gl.useProgram(composite.program);
 
     gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, finalDecayTex);
-    gl.uniform1i(uniform(gl, this.compositePass.program, this.compositePass.uniforms, 'u_decay'), 0);
+    gl.bindTexture(gl.TEXTURE_2D, decayWrite.texture);
+    gl.uniform1i(uniform(gl, composite.program, composite.uniforms, 'u_decay'), 0);
 
     gl.activeTexture(gl.TEXTURE1);
-    gl.bindTexture(gl.TEXTURE_2D, inputTexture);
-    gl.uniform1i(uniform(gl, this.compositePass.program, this.compositePass.uniforms, 'u_src'), 1);
+    gl.bindTexture(gl.TEXTURE_2D, input);
+    gl.uniform1i(uniform(gl, composite.program, composite.uniforms, 'u_src'), 1);
 
     gl.activeTexture(gl.TEXTURE2);
-    gl.bindTexture(gl.TEXTURE_2D, origTexture);
-    gl.uniform1i(uniform(gl, this.compositePass.program, this.compositePass.uniforms, 'u_orig'), 2);
+    gl.bindTexture(gl.TEXTURE_2D, input);
+    gl.uniform1i(uniform(gl, composite.program, composite.uniforms, 'u_orig'), 2);
 
-    gl.uniform1i(uniform(gl, this.compositePass.program, this.compositePass.uniforms, 'u_mode'), mode);
-    gl.uniform1f(uniform(gl, this.compositePass.program, this.compositePass.uniforms, 'u_mix'), mixVal);
+    gl.uniform1i(uniform(gl, composite.program, composite.uniforms, 'u_mode'), mode);
+    gl.uniform1f(uniform(gl, composite.program, composite.uniforms, 'u_mix'), mixVal);
 
     drawQuad(gl);
     gl.activeTexture(gl.TEXTURE0);
   }
 
+  /** Start every simulation and trail over, as a reset of the clock should. */
   public reset(): void {
-    const gl = this.gl;
     for (const state of this.nodes.values()) {
-      gl.bindFramebuffer(gl.FRAMEBUFFER, state.decayTargetA.framebuffer);
-      gl.clearColor(0, 0, 0, 0);
-      gl.clear(gl.COLOR_BUFFER_BIT);
-      gl.bindFramebuffer(gl.FRAMEBUFFER, state.decayTargetB.framebuffer);
-      gl.clearColor(0, 0, 0, 0);
-      gl.clear(gl.COLOR_BUFFER_BIT);
-      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      state.sim.restart();
+      state.stale = true;
     }
   }
 
   public prune(liveNodes: Set<string>): void {
-    const gl = this.gl;
     for (const [nodeId, state] of this.nodes) {
       if (liveNodes.has(nodeId)) continue;
-      gl.deleteTexture(state.stateTex);
-      gl.deleteFramebuffer(state.decayTargetA.framebuffer);
-      gl.deleteTexture(state.decayTargetA.texture);
-      gl.deleteFramebuffer(state.decayTargetB.framebuffer);
-      gl.deleteTexture(state.decayTargetB.texture);
+      this.disposeState(state);
       this.nodes.delete(nodeId);
     }
   }
 
   public dispose(): void {
     const gl = this.gl;
-    for (const state of this.nodes.values()) {
-      gl.deleteTexture(state.stateTex);
-      gl.deleteFramebuffer(state.decayTargetA.framebuffer);
-      gl.deleteTexture(state.decayTargetA.texture);
-      gl.deleteFramebuffer(state.decayTargetB.framebuffer);
-      gl.deleteTexture(state.decayTargetB.texture);
-    }
+    for (const state of this.nodes.values()) this.disposeState(state);
     this.nodes.clear();
+    if (this.driverTarget) {
+      deleteTarget(gl, this.driverTarget);
+      this.driverTarget = null;
+    }
 
     if (this.dummyVao) {
       gl.deleteVertexArray(this.dummyVao);
@@ -395,5 +480,6 @@ export class ParticleEngine {
     gl.deleteProgram(this.pointPass.program);
     gl.deleteProgram(this.decayPass.program);
     gl.deleteProgram(this.compositePass.program);
+    gl.deleteProgram(this.driverPass.program);
   }
 }

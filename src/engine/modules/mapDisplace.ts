@@ -29,7 +29,7 @@ export const mapDisplace: EffectDef = {
     fragColor = texture(u_src, v_uv);
   } else {
     vec2 offset;
-    vec2 stepUv = 2.0 / u_resolution;
+    vec2 stepUv = 2.0 * u_pixel_scale / u_resolution;
 
     if (u_source == 0) {
       // Surface slope / normal gradient for optical refraction

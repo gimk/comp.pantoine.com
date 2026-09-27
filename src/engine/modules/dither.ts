@@ -46,7 +46,7 @@ export const dither: EffectDef = {
 
   if (u_matrix >= 10) {
     // Error diffusion: Floyd-Steinberg (10) and Atkinson (11)
-    ivec2 p = ivec2(max(floor((v_uv * u_resolution) / max(u_scale, 1.0)), vec2(0.0)));
+    ivec2 p = ivec2(max(floor((v_uv * u_resolution) / max(u_scale * u_pixel_scale, 1.0)), vec2(0.0)));
     ivec2 cell = p & 3;
     ivec2 origin = p - cell;
 
@@ -59,7 +59,7 @@ export const dither: EffectDef = {
 
     col = vec3(0.0);
     vec2 invRes = 1.0 / u_resolution;
-    float scale = max(u_scale, 1.0);
+    float scale = max(u_scale * u_pixel_scale, 1.0);
 
     for (int py = 0; py < 4; py++) {
       for (int px = 0; px < 4; px++) {
@@ -96,7 +96,7 @@ export const dither: EffectDef = {
       if (py == cell.y) break;
     }
   } else {
-    ivec2 p = ivec2(max(floor((v_uv * u_resolution) / max(u_scale, 1.0)), vec2(0.0)));
+    ivec2 p = ivec2(max(floor((v_uv * u_resolution) / max(u_scale * u_pixel_scale, 1.0)), vec2(0.0)));
     ivec2 p8 = p & 7;
     ivec2 p4 = p & 3;
 
@@ -112,8 +112,13 @@ export const dither: EffectDef = {
       threshold = (float(b4) + 0.5) / 16.0;
     } else if (u_matrix == 2) {
       // Bayer 8x8: recursive 8x8 ordered dither for smooth cross-hatch stippling
-      int b4 = 4 * (((p8.x & 1) ^ (p8.y & 1)) * 2 + (p8.y & 1)) + (((p8.x >> 1) ^ (p8.y >> 1)) * 2 + (p8.y >> 1));
-      int b8 = 4 * b4 + (((p8.x >> 2) ^ (p8.y >> 2)) * 2 + (p8.y >> 2));
+      // One 2x2 Bayer digit per bit of the cell position, least significant
+      // bit weighted most: 0..63, each value exactly once.
+      ivec2 q1 = (p8 >> 1) & 1;
+      ivec2 q2 = (p8 >> 2) & 1;
+      int b8 = 16 * (((p8.x & 1) ^ (p8.y & 1)) * 2 + (p8.y & 1))
+             + 4 * ((q1.x ^ q1.y) * 2 + q1.y)
+             + ((q2.x ^ q2.y) * 2 + q2.y);
       threshold = (float(b8) + 0.5) / 64.0;
     } else if (u_matrix == 3) {
       // Cluster Dot 4x4: halftone screen with dots growing concentrically outward

@@ -5,10 +5,12 @@ import type { EffectDef } from '../effects';
  * whipped into licking tongues by convective turbulence, and cooled through
  * a blackbody thermal gradient.
  *
- * Like Echo, it reads its own previous output to build a receding stack of
- * ghost frames. Frame Step sets the pixel spacing between successive flame
+ * Like Echo, it reads its own previous flame field (not the composite) to
+ * build a receding stack of ghost frames. Frame Step sets the pixel spacing between successive flame
  * frames: a small step stacks frames densely into a continuous fluid plume,
  * while a large step separates them into distinct, stepped flame echoes.
+ * The step is measured per 1/60 s rather than per frame, so the rise speed
+ * does not depend on the frame rate, and a paused redraw does not move it.
  *
  * Smoothness controls the neighborhood heat diffusion: dialed down to 0, each
  * flame ghost retains crisp contours; dialed up, heat diffuses across
@@ -36,11 +38,23 @@ export const flames: EffectDef = {
     { kind: 'enum', key: 'palette', label: 'Palette', options: ['Inferno', 'Blue', 'Acid', 'Ghost'], default: 0 },
     { kind: 'enum', key: 'blend', label: 'Blend', options: ['Max', 'Add', 'Flame Only'], default: 0 },
   ],
-  fragment: `  float dt = clamp(u_delta, 0.001, 0.05);
+  // Pass 0 is the flame field alone, and it is what is kept as history, so
+  // the fire feeds on its own heat only. Compositing in a later pass keeps
+  // the live picture out of the loop: with it fed back, Add re-added the
+  // source every frame until the frame blew out to white, and Max sent the
+  // picture itself rising up the frame as if it were fire.
+  feedbackPass: 0,
+  fragment: [
+    `  // Seconds this frame, 0 on a paused redraw. Everything that advances the
+  // plume -- rise, turbulence, diffusion, cooling -- is scaled by it, so the
+  // fire holds still while paused and moves at the same speed at any frame
+  // rate. The per-step knobs were tuned at 60 fps, hence the 60.
+  float dt = clamp(u_delta, 0.0, 0.05);
+  float frames = dt * 60.0;
 
-  // Upward frame step and wind drift in pixel units, scaled to UV
+  // Upward frame step and wind drift in source pixels, scaled to UV
   vec2 px = 1.0 / max(u_resolution, vec2(1.0));
-  vec2 stepPx = vec2(u_wind * u_step, u_step);
+  vec2 stepPx = vec2(u_wind * u_step, u_step) * u_pixel_scale * frames;
   vec2 shift = stepPx * px;
 
   // Convective noise field (animated by phase)
@@ -48,34 +62,44 @@ export const flames: EffectDef = {
   float phase = u_phase_speed;
   vec2 noiseP = turbCoord + vec2(-u_wind * phase * 0.5, -phase * 2.0) + u_seed * 23.1;
 
-  float n1 = valueNoise(noiseP);
-  float n2 = valueNoise(noiseP * 2.1 + vec2(17.3, -phase * 0.7));
+  // Periodic in y by exactly what the phase moves the field in one wrap
+  // (2 and 4.9 lattice units per phase unit), so the turbulence carries on
+  // seamlessly when the phase goes from 1000 back to 0.
+  vec2 wrap1 = vec2(0.0, PHASE_WRAP * 2.0);
+  vec2 wrap2 = vec2(0.0, PHASE_WRAP * 4.9);
+  float n1 = valueNoisePeriodic(noiseP, wrap1);
+  float n2 = valueNoisePeriodic(noiseP * 2.1 + vec2(17.3, -phase * 0.7), wrap2);
   float turbX = (n1 * 0.65 + n2 * 0.35) - 0.5;
 
-  float n3 = valueNoise(noiseP + vec2(43.7, 19.1));
+  float n3 = valueNoisePeriodic(noiseP + vec2(43.7, 19.1), wrap1);
   float turbY = n3 - 0.5;
 
   // Licking flame displacement in pixel units (scaled to UV)
-  vec2 turbPx = vec2(turbX * 1.5, turbY * 0.5) * (u_turbulence * 12.0);
+  vec2 turbPx = vec2(turbX * 1.5, turbY * 0.5) * (u_turbulence * 12.0) * u_pixel_scale * frames;
   vec2 sampleUv = v_uv - (shift + turbPx * px);
 
   // Heat diffusion: at smoothness 0, sample only center tap (sharp discrete echo frames);
   // at higher smoothness, blur with neighbors to melt into continuous fluid fire.
-  float spreadPx = u_smoothness * 3.5;
+  float spreadPx = u_smoothness * 3.5 * u_pixel_scale;
   vec2 spread = px * spreadPx;
 
+  vec2 uvL = sampleUv - vec2(spread.x, 0.0);
+  vec2 uvR = sampleUv + vec2(spread.x, 0.0);
+  vec2 uvD = sampleUv - vec2(0.0, spread.y);
   vec4 prevC = sampleEdge(u_prev, sampleUv, 2);
-  vec4 prevL = sampleEdge(u_prev, sampleUv - vec2(spread.x, 0.0), 2);
-  vec4 prevR = sampleEdge(u_prev, sampleUv + vec2(spread.x, 0.0), 2);
-  vec4 prevD = sampleEdge(u_prev, sampleUv - vec2(0.0, spread.y), 2);
+  vec4 prevL = sampleEdge(u_prev, uvL, 2);
+  vec4 prevR = sampleEdge(u_prev, uvR, 2);
+  vec4 prevD = sampleEdge(u_prev, uvD, 2);
 
-  float centerW = mix(1.0, 0.35, u_smoothness);
+  // The share kept at the centre compounds per 60 fps step, so a paused
+  // frame (0 steps) does not diffuse at all.
+  float centerW = pow(mix(1.0, 0.35, u_smoothness), frames);
   float neighborW = (1.0 - centerW) / 3.0;
   vec4 prev = prevC * centerW + (prevL + prevR + prevD) * neighborW;
 
   // Differential cooling per channel
   float k = pow(0.1, dt / max(u_persistence, 0.001));
-  float cool = sat(1.0 - u_turbulence * 0.15 * abs(turbX));
+  float cool = pow(sat(1.0 - u_turbulence * 0.15 * abs(turbX)), frames);
   float decay = k * cool;
 
   vec3 cooled;
@@ -111,8 +135,12 @@ export const flames: EffectDef = {
   }
 
   vec3 flame = max(ignition, cooled);
+  fragColor = vec4(flame, 1.0);`,
 
-  // Composite with live picture
+    // Composite the flame field (u_src here) over the live picture.
+    `  vec4 src = texture(u_orig, v_uv);
+  vec3 flame = texture(u_src, v_uv).rgb;
+
   vec3 outRgb;
   if (u_blend == 1) {
     outRgb = src.rgb + flame;
@@ -126,4 +154,5 @@ export const flames: EffectDef = {
   float outAlpha = max(src.a, flameAlpha);
 
   fragColor = vec4(outRgb, outAlpha);`,
+  ],
 };

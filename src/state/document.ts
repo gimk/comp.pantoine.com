@@ -21,24 +21,42 @@ import {
   DEFAULT_BACKGROUND_DATA,
   DEFAULT_PREVIEW_WIDTH,
   DEFAULT_RENDER_DATA,
+  clampRenderData,
   hasTargetPort,
+  samePort,
   type AppNode,
   type ExportFormat,
 } from './graph';
+import { isValidConnection, wouldCreateCycle } from './connections';
 
 /**
  * Bumped when the shape changes in a way older documents cannot satisfy.
  *
  * 2 added modulator nodes and named ports on edges. A version 1 document
  * is still read: it has neither, and without them it means exactly what it
- * meant before -- every wire into the one input a node had. A version 2
- * document is not readable by a build that only knows 1, which is what the
- * number is for.
+ * meant before -- every wire into the one input a node had.
+ *
+ * 3 added video, generator, render, export and background nodes, and the
+ * mark on a video's speed helper. They arrived while the number still said
+ * 2, so a version 2 document may already hold any of them and is read the
+ * same way; the one real migration is the render node's old name,
+ * 'formatter'. The bump is for the other direction: a build that only knows
+ * 2 would drop every node kind it has not heard of and save the remains
+ * over the document, where the version stops it at the door instead.
  */
-export const DOCUMENT_VERSION = 2;
+export const DOCUMENT_VERSION = 3;
 
-/** Older versions this build still reads as they are. */
-const READABLE_VERSIONS = new Set([1, DOCUMENT_VERSION]);
+/** Older versions this build still reads, migrated on the way in. */
+const READABLE_VERSIONS = new Set([1, 2, DOCUMENT_VERSION]);
+
+/*
+ * The largest things a document may ask for. Anything outside is a
+ * hand-edited or damaged document, and is put back to the default rather
+ * than handed to the renderer to allocate.
+ */
+const MAX_GENERATOR_SIZE = 8192;
+const MIN_VIDEO_SPEED = 0.0625;
+const MAX_VIDEO_SPEED = 16;
 
 type SerializedNode =
   | { id: string; type: 'image'; position: XYPosition; name: string; width: number; height: number }
@@ -77,10 +95,11 @@ type SerializedNode =
       position: XYPosition;
       modulatorId: string;
       params: Record<string, ParamValue>;
+      helperFor?: string;
     }
   | {
       id: string;
-      type: 'render' | 'formatter';
+      type: 'render';
       position: XYPosition;
       format: ExportFormat;
       quality: number;
@@ -177,9 +196,10 @@ export const serializeGraph = (nodes: AppNode[], edges: Edge[]): SerializedGraph
         position,
         modulatorId: node.data.modulatorId,
         params: node.data.params,
+        ...(node.data.helperFor ? { helperFor: node.data.helperFor } : {}),
       };
     }
-    if (node.type === 'render' || node.type === 'formatter') {
+    if (node.type === 'render') {
       return {
         id: node.id,
         type: 'render',
@@ -275,6 +295,18 @@ const outputNode = (id: string, position: XYPosition, width: unknown): AppNode =
   data: { width: isNumber(width) ? width : DEFAULT_PREVIEW_WIDTH },
 });
 
+/** A positive finite number, or the fallback. */
+const positive = (value: unknown, fallback: number): number => (isNumber(value) && value > 0 ? value : fallback);
+
+/** A generator's pixel size: a positive whole number within what a texture can be. */
+const pixelSize = (value: unknown, fallback: number): number =>
+  isNumber(value) && value > 0 ? Math.min(MAX_GENERATOR_SIZE, Math.max(1, Math.round(value))) : fallback;
+
+const videoSpeed = (value: unknown): number =>
+  isNumber(value) && value > 0 ? Math.min(MAX_VIDEO_SPEED, Math.max(MIN_VIDEO_SPEED, value)) : 1;
+
+const RENDER_FORMATS: ExportFormat[] = ['jpg', 'png', 'gif', 'mp4', 'webm'];
+
 /**
  * Rebuild a graph from a parsed document, or null if it is not one.
  *
@@ -290,9 +322,17 @@ export const deserializeGraph = (raw: unknown): { nodes: AppNode[]; edges: Edge[
   if (!Array.isArray(doc.nodes) || !Array.isArray(doc.edges)) return null;
 
   const nodes: AppNode[] = [];
+  // Two nodes under one id would be one node to the graph and the renderer,
+  // and there is no telling which one a wire meant. The first is kept.
+  const taken = new Set<string>();
   for (const entry of doc.nodes) {
     if (!entry || typeof entry.id !== 'string' || !isPosition(entry.position)) continue;
+    if (taken.has(entry.id)) continue;
+    const before = nodes.length;
     const position = { x: entry.position.x, y: entry.position.y };
+    // Read as a plain string: 'formatter' is no longer a type a document
+    // can name, only one an old document might.
+    const type = entry.type as string;
 
     if (entry.type === 'image') {
       nodes.push({
@@ -308,10 +348,7 @@ export const deserializeGraph = (raw: unknown): { nodes: AppNode[]; edges: Edge[
           height: isNumber(entry.height) ? entry.height : 0,
         },
       });
-      continue;
-    }
-
-    if (entry.type === 'video') {
+    } else if (entry.type === 'video') {
       nodes.push({
         id: entry.id,
         type: 'video',
@@ -321,17 +358,14 @@ export const deserializeGraph = (raw: unknown): { nodes: AppNode[]; edges: Edge[
           name: typeof entry.name === 'string' ? entry.name : '',
           width: isNumber(entry.width) ? entry.width : 0,
           height: isNumber(entry.height) ? entry.height : 0,
-          duration: isNumber(entry.duration) ? entry.duration : 0,
-          speed: isNumber(entry.speed) ? entry.speed : 1,
+          duration: isNumber(entry.duration) && entry.duration >= 0 ? entry.duration : 0,
+          speed: videoSpeed(entry.speed),
           loop: typeof entry.loop === 'boolean' ? entry.loop : true,
           muted: typeof entry.muted === 'boolean' ? entry.muted : true,
-          playbackRate: isNumber(entry.playbackRate) ? entry.playbackRate : 1,
+          playbackRate: videoSpeed(entry.playbackRate),
         },
       });
-      continue;
-    }
-
-    if (entry.type === 'generator') {
+    } else if (entry.type === 'generator') {
       if (typeof entry.generatorId !== 'string') continue;
       const def = getGenerator(entry.generatorId) ?? getEffect(entry.generatorId);
       nodes.push({
@@ -340,15 +374,15 @@ export const deserializeGraph = (raw: unknown): { nodes: AppNode[]; edges: Edge[
         position,
         data: {
           generatorId: entry.generatorId,
-          width: isNumber(entry.width) ? entry.width : 1280,
-          height: isNumber(entry.height) ? entry.height : 720,
-          params: def ? reconcileParams(paramsOf(def), entry.params) : ((entry.params as Record<string, ParamValue>) ?? {}),
+          width: pixelSize(entry.width, 1280),
+          height: pixelSize(entry.height, 720),
+          // Unknown, it keeps its node but not its params -- the same as an
+          // unknown effect, and for the same reason: nothing can say what
+          // shape they should be.
+          params: def ? reconcileParams(paramsOf(def), entry.params) : {},
         },
       });
-      continue;
-    }
-
-    if (entry.type === 'effect') {
+    } else if (entry.type === 'effect') {
       if (typeof entry.effectId !== 'string') continue;
       const def = getEffect(entry.effectId);
       nodes.push({
@@ -363,10 +397,7 @@ export const deserializeGraph = (raw: unknown): { nodes: AppNode[]; edges: Edge[
           params: def ? reconcileParams(paramsOf(def), entry.params) : {},
         },
       });
-      continue;
-    }
-
-    if (entry.type === 'modulator') {
+    } else if (entry.type === 'modulator') {
       if (typeof entry.modulatorId !== 'string') continue;
       const def = getModulator(entry.modulatorId);
       // Kept when unknown, for the same reason as an unknown effect.
@@ -377,38 +408,34 @@ export const deserializeGraph = (raw: unknown): { nodes: AppNode[]; edges: Edge[
         data: {
           modulatorId: entry.modulatorId,
           params: def ? reconcileParams(modulatorParamsOf(def), entry.params) : {},
+          ...(typeof entry.helperFor === 'string' ? { helperFor: entry.helperFor } : {}),
         },
       });
-      continue;
-    }
-
-    if (entry.type === 'render' || entry.type === 'formatter') {
-      const validFormats: ExportFormat[] = ['jpg', 'png', 'gif', 'mp4', 'webm'];
+    } else if (type === 'render' || type === 'formatter') {
+      // 'formatter' is what the Render node was called before version 3.
+      const saved = entry as Extract<SerializedNode, { type: 'render' }>;
       const format =
-        typeof entry.format === 'string' && validFormats.includes(entry.format as ExportFormat)
-          ? (entry.format as ExportFormat)
+        typeof saved.format === 'string' && RENDER_FORMATS.includes(saved.format)
+          ? saved.format
           : DEFAULT_RENDER_DATA.format;
+      // Only the recipe is read: a baked file never belonged in the
+      // document, and whatever an old build left beside it is ignored.
       nodes.push({
         id: entry.id,
         type: 'render',
         position,
-        data: {
+        data: clampRenderData({
           format,
-          quality: isNumber(entry.quality) ? entry.quality : DEFAULT_RENDER_DATA.quality,
-          scale: isNumber(entry.scale) ? entry.scale : DEFAULT_RENDER_DATA.scale,
-          time: isNumber(entry.time) ? entry.time : DEFAULT_RENDER_DATA.time,
-          duration: isNumber(entry.duration) ? entry.duration : DEFAULT_RENDER_DATA.duration,
-          fps: isNumber(entry.fps) ? entry.fps : DEFAULT_RENDER_DATA.fps,
+          quality: positive(saved.quality, DEFAULT_RENDER_DATA.quality),
+          scale: positive(saved.scale, DEFAULT_RENDER_DATA.scale),
+          time: isNumber(saved.time) && saved.time >= 0 ? saved.time : DEFAULT_RENDER_DATA.time,
+          duration: positive(saved.duration, DEFAULT_RENDER_DATA.duration),
+          fps: positive(saved.fps, DEFAULT_RENDER_DATA.fps),
           loopPreview:
-            typeof entry.loopPreview === 'boolean'
-              ? entry.loopPreview
-              : DEFAULT_RENDER_DATA.loopPreview,
-        },
+            typeof saved.loopPreview === 'boolean' ? saved.loopPreview : DEFAULT_RENDER_DATA.loopPreview,
+        }),
       });
-      continue;
-    }
-
-    if (entry.type === 'export') {
+    } else if (entry.type === 'export') {
       nodes.push({
         id: entry.id,
         type: 'export',
@@ -417,10 +444,7 @@ export const deserializeGraph = (raw: unknown): { nodes: AppNode[]; edges: Edge[
           filenamePrefix: typeof entry.filenamePrefix === 'string' ? entry.filenamePrefix : '',
         },
       });
-      continue;
-    }
-
-    if (entry.type === 'backgroundOutput') {
+    } else if (entry.type === 'backgroundOutput') {
       const fit = entry.fit === 'fit' || entry.fit === 'contain' ? 'fit' : 'fill';
       nodes.push({
         id: entry.id,
@@ -429,22 +453,32 @@ export const deserializeGraph = (raw: unknown): { nodes: AppNode[]; edges: Edge[
         data: {
           enabled: typeof entry.enabled === 'boolean' ? entry.enabled : DEFAULT_BACKGROUND_DATA.enabled,
           fit,
-          opacity: typeof entry.opacity === 'number' && Number.isFinite(entry.opacity) ? entry.opacity : DEFAULT_BACKGROUND_DATA.opacity,
+          opacity: isNumber(entry.opacity) ? Math.min(1, Math.max(0, entry.opacity)) : DEFAULT_BACKGROUND_DATA.opacity,
         },
       });
-      continue;
+    } else if (entry.type === 'renderOutput') {
+      nodes.push(outputNode(entry.id, position, entry.width));
     }
 
-    if (entry.type === 'renderOutput') nodes.push(outputNode(entry.id, position, entry.width));
+    if (nodes.length > before) taken.add(entry.id);
   }
 
   // A document with no viewer is left with none. There can be several, and
   // deleting them all is a deliberate act -- the Output menu puts one back.
 
   const byId = new Map(nodes.map((node) => [node.id, node]));
+
+  // A helper's mark only means something while the video it names is here.
+  for (const node of nodes) {
+    if (node.type === 'modulator' && node.data.helperFor && byId.get(node.data.helperFor)?.type !== 'video') {
+      delete node.data.helperFor;
+    }
+  }
+
   const edges: Edge[] = [];
+  const edgeIds = new Set<string>();
   for (const entry of doc.edges) {
-    if (!entry || typeof entry.id !== 'string') continue;
+    if (!entry || typeof entry.id !== 'string' || edgeIds.has(entry.id)) continue;
     // A wire to a node that did not survive would be a link to nothing.
     const target = byId.get(entry.target);
     if (!byId.has(entry.source) || !target) continue;
@@ -453,10 +487,25 @@ export const deserializeGraph = (raw: unknown): { nodes: AppNode[]; edges: Edge[
     // Nor would one into a port the module no longer has -- a param that
     // was renamed, an input that was taken away.
     if (!hasTargetPort(target, targetHandle)) continue;
-    edges.push({ id: entry.id, source: entry.source, target: entry.target, sourceHandle, targetHandle, type: 'link' });
+    // An input takes one wire; a second into the same port is dropped.
+    if (edges.some((edge) => edge.target === entry.target && samePort(edge.targetHandle, targetHandle))) continue;
+    const edge: Edge = { id: entry.id, source: entry.source, target: entry.target, sourceHandle, targetHandle, type: 'link' };
+    // Nor is a wire that closes a loop. Builds before the editor refused
+    // them could save one -- two viewers fed into each other -- and every
+    // reload then went round it forever. The wire that closes the loop is
+    // the one dropped, and the rest of the document loads.
+    if (wouldCreateCycle(edges, edge)) continue;
+    edgeIds.add(entry.id);
+    edges.push(edge);
   }
 
-  return { nodes, edges };
+  // Then the same rules the editor applies when a wire is drawn -- a baked
+  // file into an effect, a live picture into an exporter. Checked against
+  // the whole set rather than in file order, since whether a wire carries a
+  // baked file depends on the wires upstream of it.
+  const valid = edges.filter((edge) => isValidConnection(nodes, edges, edge));
+
+  return { nodes, edges: valid };
 };
 
 /**
@@ -479,7 +528,24 @@ export const highestIdSuffix = (ids: string[]): number => {
 
 const STORAGE_KEY = 'comp.graph';
 
+/*
+ * Set when the saved document was written by a newer build than this one.
+ *
+ * This build cannot read it, and it opens on a fresh graph -- but it must
+ * not autosave that fresh graph over the newer work, which is what used to
+ * happen: an old tab left open, or a cached build, would quietly wipe the
+ * document the moment anything changed. So for the rest of the session
+ * nothing is written. Losing this session's edits on close is the lesser
+ * surprise: the document the user actually made is still there when they
+ * reopen the current build.
+ */
+let newerDocumentOnDisk = false;
+
+/** Whether autosave is off because the stored document is newer than this build. */
+export const autosaveBlocked = (): boolean => newerDocumentOnDisk;
+
 export const saveGraph = (nodes: AppNode[], edges: Edge[]): void => {
+  if (newerDocumentOnDisk) return;
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(serializeGraph(nodes, edges)));
   } catch {
@@ -492,7 +558,18 @@ export const saveGraph = (nodes: AppNode[], edges: Edge[]): void => {
 export const loadGraph = (): { nodes: AppNode[]; edges: Edge[] } | null => {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? deserializeGraph(JSON.parse(raw)) : null;
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    const version = (parsed as Partial<SerializedGraph> | null)?.version;
+    if (typeof version === 'number' && version > DOCUMENT_VERSION) {
+      newerDocumentOnDisk = true;
+      console.warn(
+        `The saved document is version ${version}; this build reads up to ${DOCUMENT_VERSION}. ` +
+          'It has been left untouched, and changes made here will not be saved.',
+      );
+      return null;
+    }
+    return deserializeGraph(parsed);
   } catch {
     return null;
   }

@@ -7,13 +7,14 @@ import type { EffectDef } from '../effects';
  * anti-halation backing, creating a warm, red-orange bloom around specular
  * edges and high-contrast silhouettes.
  */
-const THRESHOLD = `  vec3 src = texture(u_src, v_uv).rgb;
-  float l = luma(src);
-  float keep = smoothstep(u_threshold, u_threshold + max(u_knee, 0.001), l);
-  fragColor = vec4(src * u_tint * keep, 1.0);`;
+const THRESHOLD = `  vec4 src = texture(u_src, v_uv);
+  float l = luma(src.rgb);
+  // Alpha-weighted: a keyed-out pixel still has colour, but must not glow.
+  float keep = smoothstep(u_threshold, u_threshold + max(u_knee, 0.001), l) * src.a;
+  fragColor = vec4(src.rgb * u_tint * keep, 1.0);`;
 
 const AXIS = `  vec2 dir = (u_pass == 1) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
-  fragColor = blurAxis(u_src, v_uv, u_resolution, dir, u_radius);`;
+  fragColor = blurAxis(u_src, v_uv, u_resolution, dir, u_radius * u_pixel_scale);`;
 
 const COMBINE = `  vec4 base = texture(u_orig, v_uv);
   vec3 halo = texture(u_src, v_uv).rgb;

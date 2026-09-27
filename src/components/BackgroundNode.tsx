@@ -2,32 +2,32 @@ import React, { useCallback } from 'react';
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
 import { Wallpaper } from 'lucide-react';
 import { useGraph } from '../state/store';
-import {
-  findUpstreamRenderNode,
-  generatorsForPlan,
-  resolveChain,
-  type BackgroundNodeData,
-} from '../state/graph';
+import { generatorsForPlan, type BackgroundNodeData } from '../state/graph';
 import { getImage } from '../engine/imageStore';
 import { getVideo } from '../engine/videoStore';
 import { isPlaying, subscribeClock } from '../engine/clock';
 import { Slider } from './controlPrimitives';
+import { useResolvedChain, useUpstreamRender } from './viewerPipeline';
+import { formatLabel } from './format';
 
 export const BackgroundNode: React.FC<NodeProps<Node<BackgroundNodeData, 'backgroundOutput'>>> = ({
   id,
   data,
 }) => {
-  const nodes = useGraph((state) => state.nodes);
-  const edges = useGraph((state) => state.edges);
   const setBackgroundData = useGraph((state) => state.setBackgroundData);
   const backgroundFps = useGraph((state) => state.backgroundFps);
 
-  const upstreamRenderNode = findUpstreamRenderNode(nodes, edges, id);
-  const isRenderMode = !!upstreamRenderNode;
-  const renderAssetData = upstreamRenderNode?.data;
-  const hasRenderedAsset = !!renderAssetData?.renderedBlob && !!renderAssetData?.renderedUrl;
+  const { renderId, settings: renderSettings, job } = useUpstreamRender(id);
+  const isRenderMode = !!renderId;
+  const asset = job.asset;
+  const hasRenderedAsset = !!asset;
+  const assetLabel = asset
+    ? formatLabel(asset.extension)
+    : renderSettings
+      ? formatLabel(renderSettings.format)
+      : undefined;
 
-  const chain = resolveChain(nodes, edges, id);
+  const { chain } = useResolvedChain(id);
   const primarySource = chain
     ? getImage(chain.sourceNodeId) ?? getVideo(chain.sourceNodeId) ?? generatorsForPlan(chain.plan).get(chain.sourceNodeId)
     : undefined;
@@ -49,11 +49,9 @@ export const BackgroundNode: React.FC<NodeProps<Node<BackgroundNodeData, 'backgr
 
   // Dimension / Resolution info
   const infoText = isRenderMode
-    ? renderAssetData?.renderedDimensions
-      ? `${renderAssetData.renderedDimensions.width} × ${renderAssetData.renderedDimensions.height}`
-      : renderAssetData
-        ? renderAssetData.format.toUpperCase()
-        : '—'
+    ? asset
+      ? `${asset.width} × ${asset.height}`
+      : assetLabel ?? '—'
     : primarySource
       ? `${primarySource.width} × ${primarySource.height}`
       : '—';
@@ -155,7 +153,7 @@ export const BackgroundNode: React.FC<NodeProps<Node<BackgroundNodeData, 'backgr
             ) : !isConnected ? (
               <span>Wire an image or effect in</span>
             ) : isRenderMode ? (
-              <span>Full-screen rendered {renderAssetData?.format.toUpperCase()}</span>
+              <span>Full-screen rendered {assetLabel}</span>
             ) : (
               <span>
                 Full-screen {(data.fit ?? 'fill') === 'fit' ? 'Fit' : 'Fill'} · {Math.round((data.opacity ?? 1) * 100)}%
@@ -181,7 +179,7 @@ export const BackgroundNode: React.FC<NodeProps<Node<BackgroundNodeData, 'backgr
               ? 'Idle'
               : isRenderMode
                 ? hasRenderedAsset
-                  ? `Asset (${renderAssetData?.format.toUpperCase()})`
+                  ? `Asset (${assetLabel})`
                   : 'Awaiting Render'
                 : isPlayingNow
                   ? 'Playing'

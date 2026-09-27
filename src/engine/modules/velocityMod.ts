@@ -58,7 +58,7 @@ export const velocityMod: EffectDef = {
     float mn = min(srcCol.r, min(srcCol.g, srcCol.b));
     b = (mx > 0.001) ? (mx - mn) / mx : 0.0;
   } else if (u_driver == 3) {
-    vec2 px = 1.5 / u_resolution;
+    vec2 px = 1.5 * u_pixel_scale / u_resolution;
     float lx = luma(sampleEdge(u_src, v_uv + vec2(px.x, 0.0), 0).rgb) - luma(sampleEdge(u_src, v_uv - vec2(px.x, 0.0), 0).rgb);
     float ly = luma(sampleEdge(u_src, v_uv + vec2(0.0, px.y), 0).rgb) - luma(sampleEdge(u_src, v_uv - vec2(0.0, px.y), 0).rgb);
     b = clamp(length(vec2(lx, ly)) * 6.0, 0.0, 1.0);
@@ -76,7 +76,9 @@ export const velocityMod: EffectDef = {
   }
 
   // Carrier wave ripple modulated by local driver signal
-  float carrier = sin(v_uv.x * u_frequency + u_phase_speed * 0.8);
+  // 127 whole cycles per 1000 phase units (~0.8 rad each), so the carrier
+  // stays continuous when the phase wraps at 1000.
+  float carrier = sin(v_uv.x * u_frequency + u_phase_speed * (127.0 * TAU / 1000.0));
   float ripple = carrier * u_ripple * b;
 
   // 3D vertical deflection
@@ -89,11 +91,16 @@ export const velocityMod: EffectDef = {
   float linePhase = yEff * lineDensity - u_phase_speed;
 
   // Distance to rolling line in screen pixels (exact Euclidean distance)
+  //
+  // The phase-per-pixel is the analytic slope of the raster term alone.
+  // fwidth(linePhase) would also pick up the image-driven deflection and
+  // density, which jump at every hard edge in the picture -- the width then
+  // balloons there and draws a bright outline around everything.
   float dPhase = abs(fract(linePhase + 0.5) - 0.5);
-  float fw = max(fwidth(linePhase), 0.001);
+  float fw = max(lineDensity / max(u_resolution.y, 1.0), 0.0001);
   float distPx = dPhase / fw;
 
-  float hw = max(u_lineWidth * 0.5, 0.4);
+  float hw = max(u_lineWidth * 0.5 * u_pixel_scale, 0.4);
   float lineBeam = exp(-0.5 * (distPx * distPx) / (hw * hw));
 
   // Dot modulation along the line (staggered on alternating lines to avoid vertical banding)
@@ -103,7 +110,8 @@ export const velocityMod: EffectDef = {
     float effDensity = u_dotDensity * max(1.0 + u_slowdown * b, 0.1);
     float dotPhase = v_uv.x * effDensity + lineIndex * 0.5 - u_phase_speed * 1.2;
     float dotP = abs(fract(dotPhase + 0.5) - 0.5);
-    float dotFw = max(fwidth(dotPhase), 0.001);
+    // Analytic as above: fwidth would spike at the lineIndex step and at edges.
+    float dotFw = max(effDensity / max(u_resolution.x, 1.0), 0.0001);
     float dotDistPx = dotP / dotFw;
     float dotMask = exp(-0.5 * (dotDistPx * dotDistPx) / (hw * hw));
 

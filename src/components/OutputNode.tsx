@@ -1,118 +1,15 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Handle, Position, useReactFlow, useUpdateNodeInternals, type Node, type NodeProps } from '@xyflow/react';
 import { useGraph } from '../state/store';
-import {
-  DEFAULT_PREVIEW_WIDTH,
-  chainIsAnimated,
-  findUpstreamRenderNode,
-  generatorsForPlan,
-  resolveChain,
-  type OutputNodeData,
-} from '../state/graph';
-import { Pipeline } from '../engine/pipeline';
-import { createContext } from '../engine/gl';
-import { clockSeconds, isPlaying, resetCount, subscribeClock } from '../engine/clock';
-import { getImage, type LoadedImage } from '../engine/imageStore';
-import { getVideo, type LoadedVideo } from '../engine/videoStore';
-import type { RenderPlan } from '../engine/pipeline';
-import { evaluateSignal, signalKey, type Signal } from '../engine/modulators';
-
-/**
- * Every image a plan reads, or null if one has gone since it was resolved
- * -- the chain is held in a ref between renders, and an image node can be
- * deleted in that gap.
- */
-const imagesFor = (plan: RenderPlan): Map<string, LoadedImage> | null => {
-  const images = new Map<string, LoadedImage>();
-  for (const step of plan.steps) {
-    if (step.kind !== 'image') continue;
-    const image = getImage(step.nodeId);
-    if (!image) return null;
-    images.set(step.nodeId, image);
-  }
-  return images;
-};
-
-const videosFor = (plan: RenderPlan): Map<string, LoadedVideo> | null => {
-  const videos = new Map<string, LoadedVideo>();
-  for (const step of plan.steps) {
-    if (step.kind !== 'video') continue;
-    const video = getVideo(step.nodeId);
-    if (!video) return null;
-    videos.set(step.nodeId, video);
-  }
-  return videos;
-};
-
-/**
- * What the picture depends on, as a string that changes when it does.
- *
- * Built by hand rather than by stringifying the plan: a pass carries its
- * whole effect definition, shader source included, and serializing that on
- * every render of every viewer would be the slowest thing on the canvas.
- * Image versions are in it so that loading a new picture into the same
- * node redraws.
- */
-const signatureOf = (plan: RenderPlan, videoModulation?: Map<string, Record<string, Signal>>): string =>
-  JSON.stringify([
-    plan.output,
-    plan.steps.map((step) =>
-      step.kind === 'image'
-        ? [step.nodeId, getImage(step.nodeId)?.version]
-        : step.kind === 'video'
-          ? [
-              step.nodeId,
-              getVideo(step.nodeId)?.version,
-              videoModulation?.get(step.nodeId)
-                ? Object.entries(videoModulation.get(step.nodeId)!).map(([k, s]) => [k, signalKey(s)])
-                : null,
-            ]
-          : step.kind === 'generator'
-            ? [
-                step.nodeId,
-                step.pass.def.id,
-                step.pass.params,
-                step.width,
-                step.height,
-                Object.entries(step.pass.modulation).map(([key, signal]) => [key, signalKey(signal)]),
-              ]
-            : [
-                step.pass.def.id,
-                step.pass.params,
-                step.input,
-                step.extras,
-                Object.entries(step.pass.modulation).map(([key, signal]) => [key, signalKey(signal)]),
-              ],
-    ),
-  ]);
-
-/** Retina is worth it; beyond 2x is pixels nobody can see. */
-const MAX_DPR = 2;
+import { DEFAULT_PREVIEW_WIDTH, generatorsForPlan, type OutputNodeData } from '../state/graph';
+import { isRendering } from '../state/renderJobs';
+import { getImage } from '../engine/imageStore';
+import { getVideo } from '../engine/videoStore';
+import { useResolvedChain, useUpstreamRender, useViewerPipeline } from './viewerPipeline';
+import { formatBytes, formatLabel, isMotionExtension } from './format';
 
 /** Shape of the empty frame, before there is a picture to take one from. */
 const DEFAULT_RATIO = 16 / 9;
-
-/**
- * Longest edge the effect chain runs at.
- *
- * Atomic modules mean long chains -- a CRT look is eight full-screen passes
- * -- so this is what keeps a large photo interactive. It caps the working
- * buffers only; the source image is untouched.
- */
-const MAX_WORKING_SIZE = 2048;
-
-/** Longest delta handed to a shader, so a backgrounded tab does not
- *  resume with a single multi-second step. */
-const MAX_DELTA = 0.1;
-
-/**
- * How often the frame rate readout is recalculated.
- *
- * Averaged over this window rather than taken from the last frame: a
- * per-frame figure flickers through a range of values too fast to read, and
- * the point of the number is to be read.
- */
-const FPS_WINDOW_MS = 500;
 
 const MIN_PREVIEW_WIDTH = 160;
 const MAX_PREVIEW_WIDTH = 880;
@@ -126,10 +23,11 @@ const MAX_PREVIEW_WIDTH = 880;
  */
 const MAX_PREVIEW_HEIGHT = 520;
 
-const formatBytes = (bytes: number): string => {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+const assetMediaStyle: React.CSSProperties = {
+  objectFit: 'contain',
+  width: '100%',
+  height: '100%',
+  pointerEvents: 'none',
 };
 
 /**
@@ -148,346 +46,49 @@ const formatBytes = (bytes: number): string => {
  * The loop runs continuously only when something in the chain is animated.
  * A graph of flat effects redraws on change and then sits idle, which is
  * what keeps a laptop fan quiet while nodes are being arranged.
+ *
+ * Wired to a Render node along purple wires, it shows the baked file
+ * instead, and its canvas -- and with it the GL context -- goes away.
  */
 export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>>> = ({
   id,
   data,
 }) => {
-  const nodes = useGraph((state) => state.nodes);
-  const edges = useGraph((state) => state.edges);
   const setPreviewWidth = useGraph((state) => state.setPreviewWidth);
   const { getZoom } = useReactFlow();
   const updateNodeInternals = useUpdateNodeInternals();
 
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const pipelineRef = useRef<Pipeline | null>(null);
-  const lastFrameRef = useRef(performance.now());
-  const frameRef = useRef(0);
-  const [unsupported, setUnsupported] = useState(false);
-  const [contextLost, setContextLost] = useState(false);
+  const { renderId, settings: renderSettings, job } = useUpstreamRender(id);
+  const isRenderMode = !!renderId;
+  const asset = job.asset;
+  const rendering = isRendering(job);
+
+  const view = useResolvedChain(id);
+  const { chain } = view;
 
   const [fps, setFps] = useState<number | null>(null);
-  const fpsWindowRef = useRef({ frames: 0, since: 0 });
-  const animatedRef = useRef(false);
-  const lastLoopIndexRef = useRef<number | null>(null);
+  const onResize = useCallback(() => updateNodeInternals(id), [id, updateNodeInternals]);
 
-  // Check if connected to purple input (Render asset), including through any upstream pass-through viewers
-  const upstreamRenderNode = findUpstreamRenderNode(nodes, edges, id);
-  const isRenderMode = !!upstreamRenderNode;
-  const renderAssetData = upstreamRenderNode?.data;
-  const hasRenderedAsset = !!renderAssetData?.renderedBlob && !!renderAssetData?.renderedUrl;
-
-  const chain = resolveChain(nodes, edges, id);
-  const animated = chainIsAnimated(chain);
-  const playing = useSyncExternalStore(subscribeClock, isPlaying);
-  const resets = useSyncExternalStore(subscribeClock, resetCount);
-  const isStillFormatter =
-    chain?.formatter?.format === 'jpg' || chain?.formatter?.format === 'png';
-  // The frame loop runs only for a chain that moves, and only while the
-  // transport is playing (and not in rendered asset mode).
-  const looping = !isRenderMode && !isStillFormatter && animated && playing;
-
-  // Held in a ref so the draw callback can stay stable across node drags,
-  // which change the nodes array without changing what gets rendered.
-  const chainRef = useRef(chain);
-  chainRef.current = chain;
-
-  // Redraw when something the picture depends on changes, including upstream formatter settings.
-  const signature = chain
-    ? signatureOf(chain.plan, chain.videoModulation) + (chain.formatter ? JSON.stringify(chain.formatter) : '')
-    : 'empty';
-
-  const draw = useCallback(() => {
-    const canvas = canvasRef.current;
-    const pipeline = pipelineRef.current;
-    if (!canvas || !pipeline) return;
-
-    const current = chainRef.current;
-    const images = current ? imagesFor(current.plan) : null;
-    const videos = current ? videosFor(current.plan) : null;
-    if (!current || !images || !videos) {
-      pipeline.clear(canvas.width, canvas.height);
-      return;
-    }
-
-    const now = performance.now();
-    // Paused, no time passes: feedback effects hold their picture instead
-    // of carrying on fading every time a knob change redraws the frame.
-    const delta = isPlaying() ? Math.min((now - lastFrameRef.current) / 1000, MAX_DELTA) : 0;
-    lastFrameRef.current = now;
-    frameRef.current += 1;
-
-    if (animatedRef.current) {
-      const window = fpsWindowRef.current;
-      window.frames += 1;
-      const elapsed = now - window.since;
-      if (elapsed >= FPS_WINDOW_MS) {
-        setFps((window.frames * 1000) / elapsed);
-        window.frames = 0;
-        window.since = now;
-      }
-    }
-
-    const rawTime = clockSeconds(now);
-    let time = rawTime;
-
-    if (current.formatter) {
-      if (current.formatter.format === 'jpg' || current.formatter.format === 'png') {
-        time = current.formatter.time;
-      } else if (current.formatter.loopPreview) {
-        const dur = Math.max(0.1, current.formatter.duration);
-        const start = Math.max(0, current.formatter.time);
-        const fps = Math.max(1, current.formatter.fps);
-        const elapsed = Math.max(0, rawTime - start);
-        const loopIndex = Math.floor(elapsed / dur);
-        if (lastLoopIndexRef.current !== null && loopIndex !== lastLoopIndexRef.current) {
-          pipeline.resetFeedback();
-          if (videos.size > 0) {
-            for (const v of videos.values()) {
-              v.element.currentTime = start;
-            }
-          }
-        }
-        lastLoopIndexRef.current = loopIndex;
-
-        // Step time in increments of 1/fps so playback cadence matches the target FPS
-        const progressInLoop = elapsed % dur;
-        const steppedProgress = Math.floor(progressInLoop * fps) / fps;
-        time = start + steppedProgress;
-      }
-    }
-
-    const generators = generatorsForPlan(current.plan);
-    const primarySource =
-      getImage(current.sourceNodeId) ?? getVideo(current.sourceNodeId) ?? generators.get(current.sourceNodeId);
-    const maxDim = primarySource ? Math.max(primarySource.width, primarySource.height) : 2048;
-    const targetWorkingSize = current.formatter
-      ? Math.max(16, Math.round(maxDim * current.formatter.scale))
-      : MAX_WORKING_SIZE;
-
-    if (videos.size > 0) {
-      const graphNodes = useGraph.getState().nodes;
-      for (const [vId, v] of videos.entries()) {
-        const vMod = current.videoModulation?.get(vId);
-        const node = graphNodes.find((n) => n.id === vId);
-        const videoData = node?.type === 'video' ? node.data : undefined;
-        const duration = v.element.duration || videoData?.duration || 1;
-        const loop = videoData?.loop !== false;
-
-        let targetSpeed = 1;
-        if (vMod?.speed) {
-          targetSpeed = Math.max(0, evaluateSignal(vMod.speed, time));
-        } else if (typeof videoData?.speed === 'number') {
-          targetSpeed = Math.max(0, videoData.speed);
-        } else if (typeof videoData?.playbackRate === 'number') {
-          targetSpeed = Math.max(0, videoData.playbackRate);
-        }
-
-        if (targetSpeed <= 0.001) {
-          if (!v.element.paused) v.element.pause();
-        } else {
-          v.element.playbackRate = Math.min(16, Math.max(0.0625, targetSpeed));
-          if (isPlaying() && v.element.paused && !v.element.ended) {
-            void v.element.play().catch(() => {});
-          }
-        }
-
-        if (v.element.ended || (loop && duration > 0 && v.element.currentTime >= duration - 0.05)) {
-          if (loop) {
-            v.element.currentTime = 0;
-            if (isPlaying()) {
-              void v.element.play().catch(() => {});
-            }
-          }
-        }
-      }
-    }
-
-    pipeline.render({
-      plan: current.plan,
-      images,
-      videos,
-      generators,
-      primaryNodeId: current.sourceNodeId,
-      time,
-      delta,
-      frame: frameRef.current,
-      canvasWidth: canvas.width,
-      canvasHeight: canvas.height,
-      maxWorkingSize: targetWorkingSize,
-    });
-  }, []);
-
-  const drawRef = useRef(draw);
-  drawRef.current = draw;
-
-  // Context and pipeline, once for the life of the node.
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const gl = createContext(canvas);
-    if (!gl) {
-      setUnsupported(true);
-      return;
-    }
-    pipelineRef.current = new Pipeline(gl);
-
-    const onContextLost = (event: Event) => {
-      event.preventDefault();
-      setContextLost(true);
-      pipelineRef.current?.dispose();
-      pipelineRef.current = null;
-    };
-
-    const onContextRestored = () => {
-      setContextLost(false);
-      const newGl = createContext(canvas);
-      if (newGl) {
-        pipelineRef.current = new Pipeline(newGl);
-        drawRef.current();
-      }
-    };
-
-    canvas.addEventListener('webglcontextlost', onContextLost);
-    canvas.addEventListener('webglcontextrestored', onContextRestored);
-
-    return () => {
-      canvas.removeEventListener('webglcontextlost', onContextLost);
-      canvas.removeEventListener('webglcontextrestored', onContextRestored);
-      pipelineRef.current?.dispose();
-      pipelineRef.current = null;
-    };
-  }, []);
-
-  /*
-   * Match the drawing buffer to the canvas's layout size.
-   *
-   * `contentRect` rather than a bounding rect: the node sits inside React
-   * Flow's transformed viewport, so a bounding rect reports the zoomed size
-   * and every scroll of the wheel would reallocate the buffers. Layout size
-   * is stable across zoom, and the browser scales the result.
-   */
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const observer = new ResizeObserver((entries) => {
-      const box = entries[0]?.contentRect;
-      if (!box) return;
-      const dpr = Math.min(window.devicePixelRatio || 1, MAX_DPR);
-      const width = Math.max(1, Math.round(box.width * dpr));
-      const height = Math.max(1, Math.round(box.height * dpr));
-      if (canvas.width === width && canvas.height === height) return;
-      canvas.width = width;
-      canvas.height = height;
-      updateNodeInternals(id);
-      drawRef.current();
-    });
-    observer.observe(canvas);
-    return () => observer.disconnect();
-  }, [id, updateNodeInternals]);
-
-  useEffect(() => {
-    draw();
-  }, [draw, signature]);
-
-  // Synchronize video element playback with transport playing state
-  useEffect(() => {
-    if (!chain) return;
-    const vids = videosFor(chain.plan);
-    if (!vids || vids.size === 0) return;
-    for (const [, v] of vids.entries()) {
-      if (playing) {
-        if (v.element.paused && !v.element.ended) {
-          void v.element.play().catch(() => {});
-        }
-      } else {
-        if (!v.element.paused) {
-          v.element.pause();
-        }
-      }
-    }
-  }, [playing, signature]);
-
-  const lastResetsRef = useRef(resets);
-
-  // Back to zero: trails and echoes start again from nothing, as they did
-  // the first time, rather than carrying on over the reset.
-  useEffect(() => {
-    if (lastResetsRef.current === resets) return;
-    lastResetsRef.current = resets;
-    if (resets === 0) return;
-    lastLoopIndexRef.current = null;
-    pipelineRef.current?.resetFeedback();
-    if (chain) {
-      const vids = videosFor(chain.plan);
-      if (vids) {
-        for (const v of vids.values()) {
-          v.element.currentTime = 0;
-        }
-      }
-    }
-    frameRef.current = 0;
-    lastFrameRef.current = performance.now();
-    drawRef.current();
-  }, [resets, chain]);
-
-  // Paused or resumed: one draw either way, so the frame shown is the one
-  // at the paused moment rather than whichever the loop last reached.
-  useEffect(() => {
-    lastLoopIndexRef.current = null;
-    lastFrameRef.current = performance.now();
-    drawRef.current();
-  }, [playing]);
-
-  useEffect(() => {
-    animatedRef.current = looping;
-    if (!looping) {
-      // Clear it rather than leaving the last figure frozen on screen,
-      // which would read as a live measurement of a stopped renderer.
-      setFps(null);
-      return;
-    }
-
-    fpsWindowRef.current = { frames: 0, since: performance.now() };
-    let frame = 0;
-    const tick = () => {
-      drawRef.current();
-      frame = requestAnimationFrame(tick);
-    };
-    frame = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frame);
-  }, [looping]);
+  const { canvasRef, unsupported, contextLost, animated, still, playing, looping } = useViewerPipeline({
+    view,
+    live: !isRenderMode,
+    onFps: setFps,
+    onResize,
+  });
 
   const planGenerators = useMemo(() => (chain ? generatorsForPlan(chain.plan) : new Map()), [chain]);
   const source = chain
     ? getImage(chain.sourceNodeId) ?? getVideo(chain.sourceNodeId) ?? planGenerators.get(chain.sourceNodeId)
     : undefined;
-  const renderedRatio = renderAssetData?.renderedDimensions
-    ? renderAssetData.renderedDimensions.width / renderAssetData.renderedDimensions.height
-    : null;
-  const ratio = isRenderMode
-    ? renderedRatio ?? (source ? source.width / source.height : DEFAULT_RATIO)
-    : source
-      ? source.width / source.height
-      : DEFAULT_RATIO;
+  const sourceRatio = source ? source.width / source.height : DEFAULT_RATIO;
+  const ratio = isRenderMode && asset ? asset.width / asset.height : sourceRatio;
 
-  const displayWidth = isRenderMode
-    ? renderAssetData?.renderedDimensions?.width ??
-      (source ? Math.round(source.width * (renderAssetData?.scale ?? 1)) : 0)
-    : source
-      ? chain?.formatter
-        ? Math.max(1, Math.round(source.width * chain.formatter.scale))
-        : source.width
-      : 0;
-
-  const displayHeight = isRenderMode
-    ? renderAssetData?.renderedDimensions?.height ??
-      (source ? Math.round(source.height * (renderAssetData?.scale ?? 1)) : 0)
-    : source
-      ? chain?.formatter
-        ? Math.max(1, Math.round(source.height * chain.formatter.scale))
-        : source.height
-      : 0;
+  // In render mode, before anything is baked, the size the Render node is
+  // about to produce; live, the size the chain works at.
+  const scale = isRenderMode ? renderSettings?.scale ?? 1 : chain?.formatter?.scale ?? 1;
+  const displayWidth = isRenderMode && asset ? asset.width : source ? Math.max(1, Math.round(source.width * scale)) : 0;
+  const displayHeight =
+    isRenderMode && asset ? asset.height : source ? Math.max(1, Math.round(source.height * scale)) : 0;
 
   // Width is the only stored dimension; the height follows from the ratio,
   // and the ratio is also what caps how wide the card may get.
@@ -549,6 +150,7 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
   }, [id, updateNodeInternals]);
 
   const stageStyle = { '--stage-ratio': ratio } as React.CSSProperties;
+  const requestedLabel = renderSettings ? formatLabel(renderSettings.format) : null;
 
   return (
     <div className="node node-output" style={{ width }}>
@@ -556,11 +158,9 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
         <span className="render-title">Viewer</span>
         <span className="render-info">
           {isRenderMode
-            ? renderAssetData?.renderedDimensions
-              ? `${renderAssetData.renderedDimensions.width} × ${renderAssetData.renderedDimensions.height}${renderAssetData.renderedSize ? ` · ${formatBytes(renderAssetData.renderedSize)}` : ''}`
-              : renderAssetData
-                ? renderAssetData.format.toUpperCase()
-                : '—'
+            ? asset
+              ? `${asset.width} × ${asset.height} · ${formatBytes(asset.blob.size)}`
+              : requestedLabel ?? '—'
             : source
               ? `${displayWidth} × ${displayHeight}`
               : '—'}
@@ -569,29 +169,29 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
 
       <div className="render-stage" style={stageStyle}>
         {isRenderMode ? (
-          hasRenderedAsset ? (
-            renderAssetData.format === 'mp4' || renderAssetData.format === 'webm' ? (
+          asset ? (
+            isMotionExtension(asset.extension) ? (
               <video
-                key={renderAssetData.renderedUrl}
-                src={renderAssetData.renderedUrl!}
+                key={asset.url}
+                src={asset.url}
                 autoPlay
                 loop
                 muted
                 playsInline
                 className="render-canvas"
-                style={{ objectFit: 'contain', width: '100%', height: '100%', pointerEvents: 'none' }}
+                style={assetMediaStyle}
               />
             ) : (
               <img
-                key={renderAssetData.renderedUrl}
-                src={renderAssetData.renderedUrl!}
+                key={asset.url}
+                src={asset.url}
                 alt="Rendered Preview"
                 className="render-canvas"
-                style={{ objectFit: 'contain', width: '100%', height: '100%', pointerEvents: 'none' }}
+                style={assetMediaStyle}
               />
             )
-          ) : renderAssetData?.rendering ? (
-            <p className="render-empty">Rendering {renderAssetData.format.toUpperCase()} asset…</p>
+          ) : rendering ? (
+            <p className="render-empty">Rendering {requestedLabel} asset…</p>
           ) : (
             <p className="render-empty">
               Click <strong>Render</strong> on upstream node.
@@ -611,27 +211,20 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
 
       <div className="render-foot">
         <span
-          className={
-            'render-dot' +
-            (isRenderMode
-              ? hasRenderedAsset
-                ? ' is-live'
-                : ''
-              : chain
-                ? ' is-live'
-                : '')
-          }
-          style={isRenderMode && hasRenderedAsset ? { background: 'var(--port-render)' } : undefined}
+          className={'render-dot' + ((isRenderMode ? asset : chain) ? ' is-live' : '')}
+          style={isRenderMode && asset ? { background: 'var(--port-render)' } : undefined}
         />
         <span>
           {isRenderMode
-            ? hasRenderedAsset
-              ? `Asset (${renderAssetData?.format.toUpperCase()})`
-              : renderAssetData?.rendering
-                ? 'Rendering…'
+            ? rendering
+              ? asset
+                ? 'Re-rendering…'
+                : 'Rendering…'
+              : asset
+                ? `Asset (${formatLabel(asset.extension)})`
                 : 'Awaiting Render'
             : chain
-              ? isStillFormatter
+              ? still
                 ? 'Still'
                 : animated
                   ? playing
@@ -640,9 +233,9 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
                   : 'Live'
               : 'Idle'}
         </span>
-        {isRenderMode && renderAssetData?.renderedSize && (
+        {isRenderMode && asset && (
           <span className="render-fps" style={{ color: 'var(--port-render)', fontWeight: 600 }}>
-            {formatBytes(renderAssetData.renderedSize)}
+            {formatBytes(asset.blob.size)}
           </span>
         )}
         {!isRenderMode && looping && (

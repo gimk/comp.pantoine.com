@@ -22,8 +22,11 @@ export const radialBlur: EffectDef = {
   if (u_mode == 0) {
     delta = p * u_amount;
   } else {
-    // Tangential direction for spin
-    delta = vec2(-p.y, p.x) * u_amount;
+    // Tangential direction for spin, taken in square units so the arc is a
+    // circle rather than an ellipse stretched to the frame's aspect.
+    float aspect = u_resolution.x / max(u_resolution.y, 1.0);
+    vec2 q = p * vec2(aspect, 1.0);
+    delta = vec2(-q.y, q.x) * u_amount / vec2(aspect, 1.0);
   }
 
   vec4 sum = vec4(0.0);

@@ -13,15 +13,16 @@ import type { EffectDef } from '../effects';
  * the glow pop into existence along a contour as the slider moves, and that
  * contour is visible in the result.
  */
-const THRESHOLD = `  vec3 src = texture(u_src, v_uv).rgb;
-  float l = luma(src);
+const THRESHOLD = `  vec4 src = texture(u_src, v_uv);
+  float l = luma(src.rgb);
   // Smoothstep over a band around the threshold, so highlights fade into
-  // the glow instead of switching on at an edge.
-  float keep = smoothstep(u_threshold, u_threshold + max(u_knee, 0.001), l);
-  fragColor = vec4(src * keep, 1.0);`;
+  // the glow instead of switching on at an edge. Weighted by alpha so a
+  // keyed-out pixel, whose colour is still there underneath, does not glow.
+  float keep = smoothstep(u_threshold, u_threshold + max(u_knee, 0.001), l) * src.a;
+  fragColor = vec4(src.rgb * keep, 1.0);`;
 
 const AXIS = `  vec2 dir = (u_pass == 1) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
-  fragColor = blurAxis(u_src, v_uv, u_resolution, dir, u_radius);`;
+  fragColor = blurAxis(u_src, v_uv, u_resolution, dir, u_radius * u_pixel_scale);`;
 
 const COMBINE = `  vec4 base = texture(u_orig, v_uv);
   vec3 glow = texture(u_src, v_uv).rgb;

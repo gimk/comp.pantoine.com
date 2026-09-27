@@ -23,7 +23,13 @@ export const reportShaderError = (effectId: string, message: string): void => {
   for (const listener of listeners) listener();
 };
 
-export const getShaderError = (effectId: string): string | undefined => errors.get(effectId);
+/** Forget a failure once the effect compiles again, e.g. after a hot reload. */
+export const clearShaderError = (effectId: string): void => {
+  if (!errors.delete(effectId)) return;
+  for (const listener of listeners) listener();
+};
+
+export const getShaderError =(effectId: string): string | undefined => errors.get(effectId);
 
 export const subscribeShaderErrors = (listener: () => void): (() => void) => {
   listeners.add(listener);

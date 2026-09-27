@@ -124,6 +124,19 @@ textarea,
    Layout
    -------------------------------------------------------------------------- */
 
+.autosave-notice {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 50;
+  max-width: min(560px, calc(100vw - 32px));
+  padding: 10px 16px;
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: center;
+}
+
 /* Full bleed. The only thing over the graph now is the toolbar, which
    fitView is given matching top padding to clear. */
 .canvas-area {
@@ -1558,6 +1571,10 @@ textarea,
 /*
  * Subtle flowing stream animation when the comp is playing.
  * Soft, elongated pulses travel quietly in the forward direction (source -> target).
+ *
+ * No filter here: a drop-shadow on a path whose dashes move every frame
+ * is re-rasterised every frame, on every wire at once. Only the dash
+ * offset animates, and repainting a bare stroke is cheap.
  */
 .link-edge-flow {
   fill: none;
@@ -1567,19 +1584,16 @@ textarea,
   stroke-dasharray: 24 96;
   pointer-events: none;
   animation: linkFlow 2.6s linear infinite;
-  filter: drop-shadow(0 0 1.5px rgba(47, 111, 214, 0.45));
 }
 
 .link-edge-flow-render {
   stroke: rgba(192, 132, 252, 0.7);
-  filter: drop-shadow(0 0 1.5px rgba(168, 85, 247, 0.45));
 }
 
 .link-edge-flow-mod {
   stroke: rgba(251, 146, 60, 0.7);
   stroke-dasharray: 16 64;
   animation: linkModFlow 1.8s linear infinite;
-  filter: drop-shadow(0 0 1.5px rgba(217, 122, 30, 0.45));
 }
 
 @keyframes linkFlow {
@@ -2505,3 +2519,75 @@ textarea,
 
 
 
+
+/* --------------------------------------------------------------------------
+   Busy spinner
+
+   For the Loader2 icons on the render and export nodes. With reduced
+   motion the icon simply sits still: the label beside it already says the
+   job is running.
+   -------------------------------------------------------------------------- */
+
+.spin {
+  animation: spin 0.9s linear infinite;
+  transform-origin: center;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spin {
+    animation: none;
+  }
+}
+
+/* The About dialog takes focus itself on open; a ring around the whole box
+   would only be noise. Its controls keep their own focus styles. */
+.about-modal:focus {
+  outline: none;
+}
+
+/* --------------------------------------------------------------------------
+   Crashed node (NodeBoundary)
+
+   What a module shows when it throws while rendering: the same card, a
+   quiet red note, and a way to try again. The rest of the graph carries on.
+   -------------------------------------------------------------------------- */
+
+.node-crashed .node-title {
+  color: #b02a2a;
+}
+
+.node-crashed-message {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.node-crashed-retry {
+  align-self: flex-start;
+  padding: 4px 12px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.5);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background 140ms ease;
+}
+
+.node-crashed-retry:hover {
+  background: rgba(255, 255, 255, 0.85);
+}

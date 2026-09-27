@@ -1,9 +1,10 @@
 import type { EffectDef, ParamSpec, ParamValue, Rgb, Vec2 } from './effects';
 import { FIRST_INPUT_UNIT, buildFragmentSource, inputsOf, isPhasedParam, paramsOf, passesOf, prelude } from './effects';
 import { createProgram, drawQuad, uniform, type UniformCache } from './gl';
-import { TargetPool, createTarget, type RenderTarget } from './targets';
-import { reportShaderError } from './shaderErrors';
-import { modulatedValue, type Signal } from './modulators';
+import { TargetPool, createTarget, deleteTarget, feedbackFormat, type RenderTarget, type TargetFormat } from './targets';
+import { clearShaderError, reportShaderError } from './shaderErrors';
+import { modulatedValue, signalIsMoving, signalKey, type Signal } from './modulators';
+import { PhaseIntegrator, constantPhase } from './phase';
 import type { LoadedImage } from './imageStore';
 import type { LoadedVideo } from './videoStore';
 import { ParticleEngine } from './particleSim';
@@ -67,7 +68,11 @@ export type RenderRequest = {
    * resolution and the shape of the frame; any other source is fitted to it.
    */
   primaryNodeId: string;
-  /** Seconds since the renderer started, wrapped. Fed to animated effects. */
+  /**
+   * Seconds since the renderer started, wrapped. Fed to animated effects,
+   * and the only thing phases and particle simulations depend on -- so the
+   * same time renders the same frame in any viewer or export.
+   */
   time: number;
   /** Seconds since the previous frame, clamped. */
   delta: number;
@@ -76,6 +81,12 @@ export type RenderRequest = {
   canvasHeight: number;
   /** Longest working-buffer edge; the chain runs scaled down past this. */
   maxWorkingSize: number;
+  /**
+   * Working pixels per source pixel, exactly -- overrides `maxWorkingSize`,
+   * and may be above 1. Export uses it to run the chain at the output size
+   * itself rather than rendering large and shrinking.
+   */
+  workingScale?: number;
   /** Fit mode: 'fit' / 'contain' letterboxes (default), 'fill' / 'cover' fills the canvas cropping overflow. */
   fitMode?: 'fill' | 'fit' | 'cover' | 'contain';
 };
@@ -85,7 +96,7 @@ export type RenderRequest = {
  * pass that cares about the canvas, so aspect fitting lives here and every
  * effect can assume a 1:1 pixel grid.
  */
-const PRESENT_FRAGMENT = prelude + `
+export const PRESENT_FRAGMENT = prelude + `
 void main() {
   fragColor = texture(u_src, v_uv);
 }
@@ -96,10 +107,22 @@ void main() {
  * cropped rather than stretched. `u_cover` is how much of the source each
  * axis shows, 1 on the axis that fits exactly.
  */
-const IMPORT_FRAGMENT = prelude + `
+export const IMPORT_FRAGMENT = prelude + `
 uniform vec2 u_cover;
 void main() {
   fragColor = texture(u_src, (v_uv - 0.5) * u_cover + 0.5);
+}
+`;
+
+/**
+ * Store a feedback node's frame for next time. History is half float where
+ * the GPU allows, so a fade can reach black instead of stalling a few
+ * eight-bit steps above it -- but clamped to the range an eight-bit buffer
+ * held, so an effect that leant on that clamp to stay bounded still does.
+ */
+export const HISTORY_FRAGMENT = prelude + `
+void main() {
+  fragColor = clamp(texture(u_src, v_uv), 0.0, 1.0);
 }
 `;
 
@@ -148,6 +171,7 @@ type VideoSourceTexture = {
   key: string;
   width: number;
   height: number;
+  /** `currentTime` of the frame last uploaded; NaN until a real frame is in. */
   lastTime: number;
 };
 
@@ -157,13 +181,18 @@ export class Pipeline {
   private programs = new Map<string, CompiledProgram>();
   private present: CompiledProgram;
   private importer: CompiledProgram;
+  private historyCopy: CompiledProgram;
   private particleEngine: ParticleEngine;
+  /** What feedback state is stored in on this GPU: half float if it can. */
+  private feedbackFormat: TargetFormat;
   /** What an unwired extra input samples: one transparent black texel. */
   private blank: WebGLTexture;
   /** One uploaded texture per image node the graph reads. */
   private sources = new Map<string, SourceTexture>();
   /** One uploaded texture per video node the graph reads. */
   private videoSources = new Map<string, VideoSourceTexture>();
+  /** Working pixels per source pixel for the frame being drawn: `u_pixel_scale`. */
+  private pixelScale = 1;
 
   /**
    * One frame of output kept per feedback node.
@@ -178,30 +207,24 @@ export class Pipeline {
   private historyWidth = 0;
   private historyHeight = 0;
   /**
-   * Accumulated phase per node and parameter key (e.g. speed/rate/roll).
-   *
-   * Integrated over dt each frame so modulating speed with an LFO speeds up
-   * or slows down the movement smoothly, rather than oscillating wildly
-   * against absolute elapsed time.
+   * Phase per node and speed-like param (speed/rate/roll), as a function of
+   * time -- see phase.ts. Keyed `nodeId:paramKey`.
    */
-  private nodePhases = new Map<string, Map<string, number>>();
+  private phases = new PhaseIntegrator();
 
   private historyFor(nodeId: string, width: number, height: number): RenderTarget {
     let target = this.history.get(nodeId);
     if (!target) {
       // Fresh texture storage is zero-filled, so a trail's first frame
       // reads black rather than whatever was in that memory.
-      target = createTarget(this.gl, width, height);
+      target = createTarget(this.gl, width, height, this.feedbackFormat);
       this.history.set(nodeId, target);
     }
     return target;
   }
 
   private disposeHistory(): void {
-    for (const target of this.history.values()) {
-      this.gl.deleteFramebuffer(target.framebuffer);
-      this.gl.deleteTexture(target.texture);
-    }
+    for (const target of this.history.values()) deleteTarget(this.gl, target);
     this.history.clear();
   }
 
@@ -210,7 +233,9 @@ export class Pipeline {
     this.pool = new TargetPool(gl);
     this.present = this.compile('__present__', PRESENT_FRAGMENT);
     this.importer = this.compile('__import__', IMPORT_FRAGMENT);
+    this.historyCopy = this.compile('__history__', HISTORY_FRAGMENT);
     this.particleEngine = new ParticleEngine(gl);
+    this.feedbackFormat = feedbackFormat(gl);
 
     const blank = gl.createTexture();
     if (!blank) throw new Error('Could not create blank texture');
@@ -224,6 +249,7 @@ export class Pipeline {
     if (existing && existing.source === source) return existing;
     if (existing) {
       this.gl.deleteProgram(existing.program);
+      this.programs.delete(key);
     }
     const compiled: CompiledProgram = {
       program: createProgram(this.gl, source),
@@ -240,26 +266,43 @@ export class Pipeline {
    * A shader that will not compile falls back to the pass-through, so the
    * stage carries on unchanged instead of the exception unwinding through
    * the frame loop and taking the editor down with it. The failure is
-   * recorded rather than retried: recompiling a broken shader every frame
-   * would turn one bad module into a stall.
+   * recorded against the source that failed rather than retried: compiling
+   * a broken shader every frame would turn one bad module into a stall. A
+   * different source -- the module edited and hot-reloaded -- gets a fresh
+   * attempt, so fixing a shader takes effect without a page reload.
    */
   private programFor(def: EffectDef, passIndex: number): CompiledProgram {
     const key = def.id + '#' + passIndex;
-    if (this.failed.has(key)) return this.present;
+    let source: string;
     try {
-      return this.compile(key, buildFragmentSource(def, passIndex));
+      source = buildFragmentSource(def, passIndex);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.failed.set(key, message);
-      // Surfaced on the node as well as logged: a module that silently does
-      // nothing is harder to diagnose than one that says it is broken.
-      reportShaderError(def.id, message);
-      console.error('Effect "' + def.id + '" pass ' + passIndex + ' failed to compile:\n' + message);
-      return this.present;
+      // Refused before it got to the GPU (a bad param key). Keyed by the
+      // message, since there is no source to key it by.
+      return this.fail(key, def, passIndex, '#refused:' + String(error), error);
+    }
+    if (this.failed.get(key) === source) return this.present;
+    try {
+      const compiled = this.compile(key, source);
+      if (this.failed.delete(key)) clearShaderError(def.id);
+      return compiled;
+    } catch (error) {
+      return this.fail(key, def, passIndex, source, error);
     }
   }
 
-  /** Programs that would not compile, and why. Reported once each. */
+  private fail(key: string, def: EffectDef, passIndex: number, failedOn: string, error: unknown): CompiledProgram {
+    if (this.failed.get(key) === failedOn) return this.present;
+    const message = error instanceof Error ? error.message : String(error);
+    this.failed.set(key, failedOn);
+    // Surfaced on the node as well as logged: a module that silently does
+    // nothing is harder to diagnose than one that says it is broken.
+    reportShaderError(def.id, message);
+    console.error('Effect "' + def.id + '" pass ' + passIndex + ' failed to compile:\n' + message);
+    return this.present;
+  }
+
+  /** Programs that would not compile, by key, with the source that failed. */
   private failed = new Map<string, string>();
 
   /**
@@ -289,12 +332,22 @@ export class Pipeline {
     return texture;
   }
 
+  /**
+   * The video's current frame as a texture, re-uploaded only when the
+   * element has moved to a different time.
+   *
+   * `lastTime` records a frame actually uploaded, never merely the time the
+   * texture was created at: a paused video that was not yet decodable when
+   * its texture was made would otherwise count as up to date, and show
+   * black until something moved its playhead.
+   */
   private videoTextureFor(nodeId: string, video: LoadedVideo): WebGLTexture {
     const gl = this.gl;
     const key = String(video.version);
     let existing = this.videoSources.get(nodeId);
-    const videoWidth = video.element.videoWidth || video.width;
-    const videoHeight = video.element.videoHeight || video.height;
+    const element = video.element;
+    const videoWidth = element.videoWidth || video.width;
+    const videoHeight = element.videoHeight || video.height;
 
     if (!existing || existing.key !== key || existing.width !== videoWidth || existing.height !== videoHeight) {
       if (existing) gl.deleteTexture(existing.texture);
@@ -306,28 +359,24 @@ export class Pipeline {
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
+      let lastTime = Number.NaN;
       gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-      if (video.element.readyState >= 2) {
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, video.element);
+      if (element.readyState >= 2) {
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, element);
+        lastTime = element.currentTime;
       } else {
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, videoWidth, videoHeight, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
       }
       gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
 
-      existing = {
-        texture,
-        key,
-        width: videoWidth,
-        height: videoHeight,
-        lastTime: video.element.currentTime,
-      };
+      existing = { texture, key, width: videoWidth, height: videoHeight, lastTime };
       this.videoSources.set(nodeId, existing);
-    } else if (video.element.readyState >= 2 && video.element.currentTime !== existing.lastTime) {
+    } else if (element.readyState >= 2 && element.currentTime !== existing.lastTime) {
       gl.bindTexture(gl.TEXTURE_2D, existing.texture);
       gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, video.element);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, element);
       gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-      existing.lastTime = video.element.currentTime;
+      existing.lastTime = element.currentTime;
     }
     return existing.texture;
   }
@@ -364,6 +413,7 @@ export class Pipeline {
     gl.uniform1i(uniform(gl, program, uniforms, 'u_frame'), request.frame);
     gl.uniform1f(uniform(gl, program, uniforms, 'u_seed'), seed);
     gl.uniform1i(uniform(gl, program, uniforms, 'u_pass'), passIndex);
+    gl.uniform1f(uniform(gl, program, uniforms, 'u_pixel_scale'), this.pixelScale);
   }
 
   /**
@@ -393,28 +443,65 @@ export class Pipeline {
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
-    this.display = { framebuffer, texture, width, height };
+    this.display = { framebuffer, texture, width, height, format: 'rgba8' };
     return this.display;
   }
 
   private disposeDisplay(): void {
     if (!this.display) return;
-    this.gl.deleteFramebuffer(this.display.framebuffer);
-    this.gl.deleteTexture(this.display.texture);
+    deleteTarget(this.gl, this.display);
     this.display = null;
   }
 
-  /** Copy a texture into a target, unchanged. */
-  private copy(from: WebGLTexture, to: RenderTarget, width: number, height: number, request: RenderRequest): void {
+  /** Copy a texture into a target, through `program` (unchanged by default). */
+  private copy(
+    from: WebGLTexture,
+    to: RenderTarget,
+    width: number,
+    height: number,
+    request: RenderRequest,
+    program: CompiledProgram = this.present,
+  ): void {
     const gl = this.gl;
     gl.bindFramebuffer(gl.FRAMEBUFFER, to.framebuffer);
-    this.bindShared(this.present, from, from, from, width, height, request, 0, 0);
+    this.bindShared(program, from, from, from, width, height, request, 0, 0);
     drawQuad(gl);
   }
 
   /**
+   * The phase uniforms for one node this frame: `u_phase_<key>` for each
+   * speed-like param, as a function of the frame's time alone.
+   *
+   * Unmodulated -- or modulated by something that cannot move -- the rate
+   * is constant and the phase is exact. A moving modulator is integrated
+   * (see phase.ts); its identity is everything the rate depends on, so a
+   * knob turned on the LFO recomputes the track rather than splicing two
+   * different histories together.
+   */
+  private phasesFor(pass: Pass, specs: ParamSpec[], time: number, live: Set<string>): [string, number][] {
+    const out: [string, number][] = [];
+    for (const spec of specs) {
+      if (!isPhasedParam(spec)) continue;
+      const key = pass.nodeId + ':' + spec.key;
+      live.add(key);
+      const base = pass.params[spec.key] ?? spec.default;
+      const signal = pass.modulation[spec.key];
+      let phase: number;
+      if (signal && signalIsMoving(signal)) {
+        const identity = JSON.stringify([signalKey(signal), base]);
+        phase = this.phases.integrate(key, time, identity, (t) => Number(modulatedValue(spec, base, signal, t)));
+      } else {
+        const value = signal ? modulatedValue(spec, base, signal, time) : base;
+        phase = constantPhase(time, Number(value));
+      }
+      out.push([spec.key, phase]);
+    }
+    return out;
+  }
+
+  /**
    * Run every sub-pass of one effect node and return the target holding
-   * its result.
+   * its result, and whether that target is the pool's to take back.
    *
    * The node's inputs stay alive in the pool until it has finished, so its
    * own input can be bound as `u_orig` for every sub-pass directly -- by the
@@ -433,7 +520,7 @@ export class Pipeline {
     liveFeedback: Set<string>,
     livePhases: Set<string>,
     liveParticleSims: Set<string>,
-  ): RenderTarget {
+  ): { target: RenderTarget; pooled: boolean } {
     const gl = this.gl;
     const specs = paramsOf(pass.def);
     const inputs = inputsOf(pass.def);
@@ -449,29 +536,14 @@ export class Pipeline {
       liveFeedback.add(pass.nodeId);
     }
 
-    livePhases.add(pass.nodeId);
-    let phases = this.nodePhases.get(pass.nodeId);
-    if (!phases) {
-      phases = new Map();
-      this.nodePhases.set(pass.nodeId, phases);
-    }
-
     // Evaluated once per node per frame, so every sub-pass of a multi-pass
     // effect sees the same modulated value.
     const values = specs.map((spec) => {
       const modulation = pass.modulation[spec.key];
       const base = pass.params[spec.key] ?? spec.default;
-      const val = modulation ? modulatedValue(spec, base, modulation, request.time) : base;
-
-      if (isPhasedParam(spec) && typeof val === 'number') {
-        // Integrate speed/rate over time delta: phase = (phase + dt * val) % 1000.
-        // Wrapping periodically keeps highp precision intact.
-        let cur = phases!.get(spec.key) ?? 0;
-        cur = (cur + request.delta * val) % 1000;
-        phases!.set(spec.key, cur);
-      }
-      return val;
+      return modulation ? modulatedValue(spec, base, modulation, request.time) : base;
     });
+    const phases = this.phasesFor(pass, specs, request.time, livePhases);
 
     if (pass.def.id === 'particleFlow') {
       liveParticleSims.add(pass.nodeId);
@@ -480,26 +552,37 @@ export class Pipeline {
         resolvedParams[spec.key] = values[k];
       });
       const target = this.pool.acquire();
-      this.particleEngine.render(
-        pass.nodeId,
-        input,
+      this.particleEngine.render({
+        nodeId: pass.nodeId,
+        seed: pass.seed,
         input,
         width,
         height,
-        resolvedParams,
-        request.time,
-        request.delta,
-        pass.seed,
+        params: resolvedParams,
+        time: request.time,
+        pixelScale: this.pixelScale,
         target,
-      );
-      return target;
+      });
+      return { target, pooled: true };
     }
+
+    /*
+     * Feedback effects draw into targets of the history's format, so the
+     * frame that becomes next frame's `u_prev` never passes through eight
+     * bits on the way. The pass whose output is kept is held back from the
+     * pool until the end, since later passes may still be drawing.
+     */
+    const format: TargetFormat = pass.def.feedback ? this.feedbackFormat : 'rgba8';
+    const keepIndex = pass.def.feedback
+      ? Math.min(bodies.length - 1, Math.max(0, Math.round(pass.def.feedbackPass ?? bodies.length - 1)))
+      : -1;
+    let kept: RenderTarget | null = null;
 
     let result = input;
     let current: RenderTarget | null = null;
 
     for (let i = 0; i < bodies.length; i += 1) {
-      const target = this.pool.acquire();
+      const target = this.pool.acquire(format);
       const compiled = this.programFor(pass.def, i);
       gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
       this.bindShared(compiled, result, input, previous, width, height, request, pass.seed, i);
@@ -517,24 +600,34 @@ export class Pipeline {
         const location = uniform(gl, compiled.program, compiled.uniforms, 'u_' + spec.key);
         setParamUniform(gl, location, spec, values[k]);
       });
-      phases.forEach((phaseVal, phaseKey) => {
+      for (const [phaseKey, phaseValue] of phases) {
         const loc = uniform(gl, compiled.program, compiled.uniforms, 'u_phase_' + phaseKey);
-        if (loc !== null) gl.uniform1f(loc, phaseVal);
-      });
+        if (loc !== null) gl.uniform1f(loc, phaseValue);
+      }
       drawQuad(gl);
 
       // The previous sub-pass's output has just been read for the last time.
-      if (current) this.pool.release(current);
+      if (current && current !== kept) this.pool.release(current);
       current = target;
       result = target.texture;
-    }
-
-    if (pass.def.feedback) {
-      this.copy(result, this.historyFor(pass.nodeId, width, height), width, height, request);
+      if (i === keepIndex) kept = target;
     }
 
     // Every effect has at least one body, so the loop always ran.
-    return current!;
+    const last = current!;
+    if (!kept) return { target: last, pooled: true };
+
+    const history = this.historyFor(pass.nodeId, width, height);
+    this.copy(kept.texture, history, width, height, request, this.historyCopy);
+    if (kept === last) {
+      // The usual case: the node's output is exactly what was stored, so
+      // hand the (clamped) history on downstream and free the scratch.
+      // Nothing writes the history again until this node's next frame.
+      this.pool.release(last);
+      return { target: history, pooled: false };
+    }
+    this.pool.release(kept);
+    return { target: last, pooled: true };
   }
 
   render(request: RenderRequest): void {
@@ -552,9 +645,15 @@ export class Pipeline {
      * the longest edge trades detail nobody can see in the preview for a
      * chain that stays interactive.
      */
-    const scale = Math.min(1, maxWorkingSize / Math.max(primary.width, primary.height));
+    const scale =
+      request.workingScale !== undefined && request.workingScale > 0
+        ? request.workingScale
+        : Math.min(1, maxWorkingSize / Math.max(primary.width, primary.height));
     const workWidth = Math.max(1, Math.round(primary.width * scale));
     const workHeight = Math.max(1, Math.round(primary.height * scale));
+    // Measured off the rounded size, so a pixel param lands on the grid
+    // the effects actually run on.
+    this.pixelScale = workWidth / primary.width;
 
     // Feedback buffers are tied to the working resolution, so a change of
     // size throws the stored frames away rather than stretching them.
@@ -647,7 +746,7 @@ export class Pipeline {
       }
 
       if (step.kind === 'generator') {
-        const target = this.runEffect(
+        const { target, pooled } = this.runEffect(
           step.pass,
           this.blank,
           [],
@@ -659,11 +758,11 @@ export class Pipeline {
           liveParticleSims,
         );
         textures[index] = target.texture;
-        owned[index] = target;
+        owned[index] = pooled ? target : null;
         return;
       }
 
-      const target = this.runEffect(
+      const { target, pooled } = this.runEffect(
         step.pass,
         textures[step.input],
         step.extras.map((extra) => (extra === null ? this.blank : textures[extra])),
@@ -675,7 +774,7 @@ export class Pipeline {
         liveParticleSims,
       );
       textures[index] = target.texture;
-      owned[index] = target;
+      owned[index] = pooled ? target : null;
 
       doneReading(step.input);
       for (const extra of step.extras) if (extra !== null) doneReading(extra);
@@ -686,8 +785,7 @@ export class Pipeline {
     // Buffers belonging to nodes that are no longer in the chain.
     for (const [nodeId, target] of this.history) {
       if (liveFeedback.has(nodeId)) continue;
-      gl.deleteFramebuffer(target.framebuffer);
-      gl.deleteTexture(target.texture);
+      deleteTarget(gl, target);
       this.history.delete(nodeId);
     }
     for (const [nodeId, source] of this.sources) {
@@ -700,11 +798,7 @@ export class Pipeline {
       gl.deleteTexture(source.texture);
       this.videoSources.delete(nodeId);
     }
-    for (const nodeId of this.nodePhases.keys()) {
-      if (!livePhases.has(nodeId)) {
-        this.nodePhases.delete(nodeId);
-      }
-    }
+    this.phases.prune(livePhases);
     this.particleEngine.prune(liveParticleSims);
 
     const isFill = request.fitMode === 'fill' || request.fitMode === 'cover';
@@ -761,7 +855,7 @@ export class Pipeline {
    */
   resetFeedback(): void {
     this.disposeHistory();
-    this.nodePhases.clear();
+    this.phases.clear();
     this.particleEngine.reset();
   }
 
@@ -779,7 +873,7 @@ export class Pipeline {
     this.pool.dispose();
     this.disposeHistory();
     this.disposeDisplay();
-    this.nodePhases.clear();
+    this.phases.clear();
     this.particleEngine.dispose();
     for (const compiled of this.programs.values()) gl.deleteProgram(compiled.program);
     this.programs.clear();

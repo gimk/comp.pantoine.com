@@ -2,7 +2,7 @@ import React, { useState, useSyncExternalStore } from 'react';
 import { BaseEdge, EdgeLabelRenderer, getBezierPath, type EdgeProps } from '@xyflow/react';
 import { X } from 'lucide-react';
 import { useGraph } from '../state/store';
-import { findUpstreamRenderNode, isParamPort, isRenderPort } from '../state/graph';
+import { carriesRenderAsset, isParamPort, isRenderPort } from '../state/graph';
 import { isPlaying, subscribeClock } from '../engine/clock';
 
 /**
@@ -32,8 +32,6 @@ export const LinkEdge: React.FC<EdgeProps> = ({
   sourceHandleId,
   targetHandleId,
 }) => {
-  const nodes = useGraph((state) => state.nodes);
-  const edges = useGraph((state) => state.edges);
   const removeEdge = useGraph((state) => state.removeEdge);
   const playing = useSyncExternalStore(subscribeClock, isPlaying);
   const [hovered, setHovered] = useState(false);
@@ -47,17 +45,17 @@ export const LinkEdge: React.FC<EdgeProps> = ({
     targetPosition,
   });
 
-  const isRender =
-    isRenderPort(targetHandleId) ||
-    isRenderPort(sourceHandleId) ||
-    (() => {
-      const srcNode = nodes.find((n) => n.id === source);
-      if (srcNode?.type === 'render' || srcNode?.type === 'formatter') return true;
-      if (srcNode?.type === 'renderOutput') return !!findUpstreamRenderNode(nodes, edges, srcNode.id);
-      return false;
-    })();
-
+  // Purple when the wire carries a baked file: straight off a Render node's
+  // port, or through any Viewer or Background passing one on. A boolean
+  // selector, so an edge re-renders when its colour changes and not on
+  // every store change. The graph walk is skipped outright for a wire whose
+  // ports already say what it carries.
   const isMod = isParamPort(targetHandleId);
+  const namesRenderPort = isRenderPort(targetHandleId) || isRenderPort(sourceHandleId);
+  const carriesAsset = useGraph((state) =>
+    namesRenderPort || isMod ? false : carriesRenderAsset(state.nodes, state.edges, source),
+  );
+  const isRender = namesRenderPort || carriesAsset;
 
   return (
     <>

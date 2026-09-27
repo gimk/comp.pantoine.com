@@ -78,6 +78,7 @@ export const GeneratorNode: React.FC<NodeProps<Node<GeneratorNodeData, 'generato
           </div>
           <select
             className="control-select nodrag"
+            aria-label="Resolution"
             value={currentResKey}
             onChange={handleResolutionChange}
           >

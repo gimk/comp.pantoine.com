@@ -133,6 +133,15 @@ export type EffectDef = {
    * that leaves the chain drops its own.
    */
   feedback?: boolean;
+  /**
+   * For a multi-pass feedback effect: which sub-pass's output is kept as
+   * next frame's `u_prev`. Defaults to the last. Lets an effect carry some
+   * internal state from frame to frame -- a flame field -- and composite it
+   * onto the picture in a later pass without the composite feeding back.
+   * Every pass sees last frame's history as `u_prev`; the store happens
+   * after the final pass.
+   */
+  feedbackPass?: number;
   params: ParamSpec[];
   /** Extra image inputs, in port order. Most effects have none. */
   inputs?: InputSpec[];
@@ -152,7 +161,9 @@ export type EffectDef = {
  * `u_src` is the previous stage's output, `u_resolution` the working
  * resolution in pixels. `u_time` is seconds, wrapped (see clock.ts) so it
  * stays precise. `u_seed` is stable per node, so two grain modules in one
- * chain do not produce the identical dirt.
+ * chain do not produce the identical dirt. `u_pixel_scale` is working pixels
+ * per source pixel: multiply pixel-sized params by it so a preview at reduced
+ * size and an export at full size look the same.
  */
 export const prelude = `#version 300 es
 precision highp float;
@@ -171,6 +182,7 @@ uniform float u_delta;
 uniform int u_frame;
 uniform float u_seed;
 uniform int u_pass;
+uniform float u_pixel_scale;
 `;
 
 const MIX_PARAM: ParamSpec = {
@@ -215,6 +227,7 @@ const RESERVED_PARAM_KEYS = new Set([
   'frame',
   'seed',
   'pass',
+  'pixel_scale',
 ]);
 
 /**

@@ -33,7 +33,7 @@ export const glitchMachine: EffectDef = {
   float burstEnv = burstActive * exp(-burstFrac * 3.2);
 
   // Macroblock coordinate space
-  float bSize = max(u_blockSize, 4.0);
+  float bSize = max(u_blockSize * u_pixel_scale, 1.0);
   vec2 blockCoord = floor(v_uv * u_resolution / bSize);
   float blockHash = hash12(blockCoord + vec2(burstStep * 29.3, u_pattern * 47.9 + u_seed * 11.7));
 
@@ -53,7 +53,7 @@ export const glitchMachine: EffectDef = {
 
   // Spatial bitcrush / downsampling inside corrupted blocks
   if (u_bitcrush > 0.0 && isCorrupt) {
-    float crushGrid = mix(1.0, 16.0, u_bitcrush);
+    float crushGrid = max(mix(1.0, 16.0, u_bitcrush) * u_pixel_scale, 0.5);
     uv = floor(uv * u_resolution / crushGrid) * crushGrid / u_resolution;
     uv = clamp(uv, 0.0, 1.0);
   }
@@ -79,7 +79,7 @@ export const glitchMachine: EffectDef = {
       }
 
       // Chromatic channel separation scaled by corruption amount
-      vec2 chromaOffset = vec2((hash11(blockHash * 23.7) - 0.5) * px.x * 24.0 * u_colorCorrupt, 0.0);
+      vec2 chromaOffset = vec2((hash11(blockHash * 23.7) - 0.5) * px.x * 24.0 * u_pixel_scale * u_colorCorrupt, 0.0);
       targetCol.r = texture(u_src, clamp(uv + chromaOffset, 0.0, 1.0)).r;
       targetCol.b = texture(u_src, clamp(uv - chromaOffset, 0.0, 1.0)).b;
 

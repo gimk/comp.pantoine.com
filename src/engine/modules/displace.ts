@@ -32,8 +32,11 @@ export const displace: EffectDef = {
 
   // fbm lands in roughly 0..1, so the halves are what centre the push on
   // zero -- without them the whole image would also drift bodily.
-  float dx = fbm(field + vec2(t, 0.0), u_octaves) - 0.5;
-  float dy = fbm(field + vec2(0.0, t) + 31.7, u_octaves) - 0.5;
+  //
+  // Periodic along the axis the phase scrolls, by exactly one phase wrap,
+  // so the field carries on seamlessly when the phase goes from 1000 to 0.
+  float dx = fbmPeriodic(field + vec2(t, 0.0), u_octaves, vec2(PHASE_WRAP, 0.0)) - 0.5;
+  float dy = fbmPeriodic(field + vec2(0.0, t) + 31.7, u_octaves, vec2(0.0, PHASE_WRAP)) - 0.5;
 
   fragColor = sampleEdge(u_src, v_uv + vec2(dx, dy) * u_amount, u_edge);`,
 };

@@ -33,18 +33,31 @@ export const ruttEtra: EffectDef = {
     { kind: 'color', key: 'color', label: 'Color', default: [1, 1, 1] },
   ],
   fragment: `  float numLines = max(u_lines, 10.0);
-  int kCenter = int(v_uv.y * numLines);
-  int kShift = int(clamp(-u_deflection * numLines * 0.5, -20.0, 20.0));
-  int kStart = kCenter + kShift - 32;
+  float hw = max(u_lineWidth * 0.5 * u_pixel_scale, 0.4);
+  float invHwSq = -0.5 / (hw * hw);
+
+  // Only the lines whose beam can land on this pixel are visited. A beam
+  // leaves line k at (k + 0.5) and moves by luma * deflection (luma 0..1)
+  // plus up to +-ripple, and is visible hw * 3.5 pixels either side, so
+  // the window is exactly that span -- in line units -- and grows with the
+  // deflection instead of losing beams past a fixed search radius.
+  float yLines = v_uv.y * numLines;
+  float deflLines = u_deflection * numLines;
+  float reach = abs(u_ripple) * numLines + hw * 3.5 * numLines / max(u_resolution.y, 1.0) + 1.0;
+  int kStart = int(floor(yLines - max(deflLines, 0.0) - reach - 0.5));
+  int kEnd = int(ceil(yLines - min(deflLines, 0.0) + reach - 0.5));
+  kStart = max(kStart, 0);
+  kEnd = min(kEnd, int(numLines) - 1);
 
   vec3 accumGlow = vec3(0.0);
   float accumDark = 0.0;
-  float hw = max(u_lineWidth * 0.5, 0.4);
-  float invHwSq = -0.5 / (hw * hw);
 
-  for (int step = 0; step < 64; step++) {
-    int k = kStart + step;
-    if (k < 0 || k >= int(numLines)) continue;
+  // The constant bound is a safety net only: full deflection at the most
+  // lines spans ~105 lines plus ripple and beam width.
+  const int MAX_TAPS = 192;
+  for (int i = 0; i < MAX_TAPS; i++) {
+    int k = kStart + i;
+    if (k > kEnd) break;
 
     float yk = (float(k) + 0.5) / numLines;
     vec4 srcSample = sampleEdge(u_src, vec2(v_uv.x, yk), 0);
@@ -52,7 +65,9 @@ export const ruttEtra: EffectDef = {
 
     // Carrier wave ripple modulated by local signal
     float signal = lumaVal;
-    float carrierPhase = v_uv.x * u_frequency + u_phase_speed + float(k) * (u_spread * TAU);
+    // 159 whole cycles per 1000 phase units (~1 rad each): seamless when the
+    // phase wraps at 1000.
+    float carrierPhase = v_uv.x * u_frequency + u_phase_speed * (159.0 * TAU / 1000.0) + float(k) * (u_spread * TAU);
     float ripple = sin(carrierPhase) * u_ripple * signal;
 
     // Total vertical deflection

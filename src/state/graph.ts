@@ -54,6 +54,12 @@ export type EffectNodeData = {
 export type ModulatorNodeData = {
   modulatorId: string;
   params: Record<string, ParamValue>;
+  /**
+   * Set on the Math node a video brings with it to drive its speed, naming
+   * that video. Only a mark: the helper is removed with the video when it is
+   * still wired to nothing else, and is an ordinary modulator otherwise.
+   */
+  helperFor?: string;
 };
 
 export type OutputNodeData = {
@@ -66,6 +72,11 @@ export type OutputNodeData = {
 
 export type ExportFormat = 'png' | 'jpg' | 'gif' | 'mp4' | 'webm';
 
+/**
+ * A Render node's recipe -- and only the recipe. What it has baked, and how
+ * far along a bake is, lives in `renderJobs`: it is session state, and here
+ * it would be saved, snapshotted by undo and copied with a duplicate.
+ */
 export type RenderNodeData = {
   format: ExportFormat;
   quality: number;
@@ -74,13 +85,6 @@ export type RenderNodeData = {
   duration: number;
   fps: number;
   loopPreview?: boolean;
-  renderedBlob?: Blob | null;
-  renderedUrl?: string | null;
-  renderedSize?: number | null;
-  renderedDimensions?: { width: number; height: number } | null;
-  rendering?: boolean;
-  progress?: { currentFrame: number; totalFrames: number; percent: number } | null;
-  error?: string | null;
 };
 
 export const DEFAULT_RENDER_DATA: RenderNodeData = {
@@ -93,8 +97,51 @@ export const DEFAULT_RENDER_DATA: RenderNodeData = {
   loopPreview: true,
 };
 
-export type FormatterNodeData = RenderNodeData;
-export const DEFAULT_FORMATTER_DATA: FormatterNodeData = DEFAULT_RENDER_DATA;
+/*
+ * What a render can sensibly be asked for. GIF stores frame delays in
+ * hundredths of a second and holds every frame in memory until it encodes,
+ * so it gets a lower frame rate and a shorter clip than the video
+ * containers (15-30 fps is the usual range). A still ignores frame rate and
+ * duration, so beyond the general sanity caps they are left alone, ready for
+ * when the format is switched back.
+ */
+export const RENDER_LIMITS = {
+  scale: { min: 0.05, max: 4 },
+  quality: { min: 0.01, max: 1 },
+  fps: { min: 1, max: 60 },
+  duration: { min: 0.1, max: 600 },
+  gif: { maxFps: 30, maxDuration: 30 },
+} as const;
+
+const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
+
+const isStillFormat = (format: ExportFormat): boolean => format === 'png' || format === 'jpg';
+
+/**
+ * Render settings brought within what their format can do. Returns `data`
+ * itself when nothing needed changing, so a no-op edit is not a new object.
+ */
+export const clampRenderData = (data: RenderNodeData): RenderNodeData => {
+  const gif = data.format === 'gif';
+  const still = isStillFormat(data.format);
+  const fpsMax = gif ? RENDER_LIMITS.gif.maxFps : RENDER_LIMITS.fps.max;
+  const durationMax = gif ? RENDER_LIMITS.gif.maxDuration : RENDER_LIMITS.duration.max;
+  const fixed: RenderNodeData = {
+    format: data.format,
+    quality: clamp(data.quality, RENDER_LIMITS.quality.min, RENDER_LIMITS.quality.max),
+    scale: clamp(data.scale, RENDER_LIMITS.scale.min, RENDER_LIMITS.scale.max),
+    time: Math.max(0, data.time),
+    duration: still
+      ? clamp(data.duration, RENDER_LIMITS.duration.min, RENDER_LIMITS.duration.max)
+      : clamp(data.duration, RENDER_LIMITS.duration.min, durationMax),
+    fps: Math.round(
+      still ? clamp(data.fps, RENDER_LIMITS.fps.min, RENDER_LIMITS.fps.max) : clamp(data.fps, RENDER_LIMITS.fps.min, fpsMax),
+    ),
+  };
+  if (data.loopPreview !== undefined) fixed.loopPreview = data.loopPreview;
+  const same = (Object.keys(fixed) as (keyof RenderNodeData)[]).every((key) => fixed[key] === data[key]);
+  return same && Object.keys(data).length === Object.keys(fixed).length ? data : fixed;
+};
 
 export type ExportNodeData = {
   filenamePrefix: string;
@@ -125,7 +172,6 @@ export type AppNode =
   | Node<OutputNodeData, 'renderOutput'>
   | Node<BackgroundNodeData, 'backgroundOutput'>
   | Node<RenderNodeData, 'render'>
-  | Node<FormatterNodeData, 'formatter'>
   | Node<ExportNodeData, 'export'>;
 
 /** Starting width of the output preview, in graph units. */
@@ -161,46 +207,53 @@ export const isModulationEdge = (edge: Pick<Edge, 'targetHandle'>): boolean =>
 export const isRenderEdge = (edge: Pick<Edge, 'sourceHandle' | 'targetHandle'>): boolean =>
   isRenderPort(edge.sourceHandle) || isRenderPort(edge.targetHandle);
 
+const isPassThrough = (node: AppNode | undefined): boolean =>
+  node?.type === 'renderOutput' || node?.type === 'backgroundOutput';
+
 /**
  * Walk backwards along purple edges through any intermediate pass-through viewers
  * to locate the upstream Render node producing the asset.
+ *
+ * One visited set for the whole walk, and no recursion: two viewers wired
+ * into each other are a loop a user can make (or an old save can hold), and
+ * the walk has to come back with an answer rather than blow the stack.
  */
 export const findUpstreamRenderNode = (
   nodes: AppNode[],
   edges: Edge[],
   startNodeId: string,
 ): Node<RenderNodeData, 'render'> | null => {
-  let currentId: string | undefined = startNodeId;
+  const byId = new Map(nodes.map((node) => [node.id, node]));
   const visited = new Set<string>();
+  const pending = [startNodeId];
 
-  while (currentId && !visited.has(currentId)) {
+  while (pending.length > 0) {
+    const currentId = pending.pop()!;
+    if (visited.has(currentId)) continue;
     visited.add(currentId);
-    const inEdges = edges.filter((e) => e.target === currentId);
-    if (inEdges.length === 0) return null;
 
-    const inEdge = inEdges.find((e) => {
-      if (isRenderPort(e.targetHandle) || isRenderPort(e.sourceHandle)) return true;
-      const src = nodes.find((n) => n.id === e.source);
-      if (src?.type === 'render' || src?.type === 'formatter') return true;
-      if (src?.type === 'renderOutput' || src?.type === 'backgroundOutput') {
-        return !!findUpstreamRenderNode(nodes, edges, src.id);
-      }
-      return false;
-    });
-
-    if (!inEdge) return null;
-    const srcNode = nodes.find((n) => n.id === inEdge.source);
-    if (!srcNode) return null;
-    if (srcNode.type === 'render' || srcNode.type === 'formatter') {
-      return srcNode as Node<RenderNodeData, 'render'>;
+    const through: string[] = [];
+    for (const edge of edges) {
+      if (edge.target !== currentId) continue;
+      const source = byId.get(edge.source);
+      if (source?.type === 'render') return source;
+      if (isPassThrough(source)) through.push(source!.id);
     }
-    if (srcNode.type === 'renderOutput' || srcNode.type === 'backgroundOutput') {
-      currentId = srcNode.id;
-      continue;
-    }
-    return null;
+    // Reversed so the first wire is the first one followed.
+    for (let i = through.length - 1; i >= 0; i -= 1) pending.push(through[i]);
   }
   return null;
+};
+
+/**
+ * Whether what comes out of a node is a baked file rather than a live
+ * picture: a Render node, or a viewer or background showing one. It decides
+ * a wire's colour and which ports it may go into.
+ */
+export const carriesRenderAsset = (nodes: AppNode[], edges: Edge[], nodeId: string): boolean => {
+  const node = nodes.find((candidate) => candidate.id === nodeId);
+  if (node?.type === 'render') return true;
+  return isPassThrough(node) && findUpstreamRenderNode(nodes, edges, nodeId) !== null;
 };
 
 /** Whether two ends name the same input port. Null and undefined both mean the main one. */
@@ -219,7 +272,7 @@ export const hasTargetPort = (node: AppNode, handle: string | null | undefined):
   if (node.type === 'export') {
     return isRenderPort(handle);
   }
-  if (node.type === 'render' || node.type === 'formatter') {
+  if (node.type === 'render') {
     return !handle;
   }
   if (node.type === 'modulator') {
@@ -339,8 +392,8 @@ export type ResolvedChain = {
   passes: Pass[];
   /** Modulation applied to video nodes in the graph (nodeId -> { speed?: Signal, time?: Signal }) */
   videoModulation?: Map<string, Record<string, Signal>>;
-  /** The recipe from the nearest upstream formatter node, if any. */
-  formatter?: FormatterNodeData;
+  /** The recipe from the nearest Render node on the main path, if any. */
+  formatter?: RenderNodeData;
 };
 
 /** Thrown to abandon a walk that has come back round to where it started. */
@@ -379,14 +432,30 @@ export const resolveChain = (
     (output.type !== 'renderOutput' &&
       output.type !== 'backgroundOutput' &&
       output.type !== 'export' &&
-      output.type !== 'render' &&
-      output.type !== 'formatter')
+      output.type !== 'render')
   ) {
     return null;
   }
 
-  let activeFormatter: RenderNodeData | undefined =
-    output.type === 'render' || output.type === 'formatter' ? output.data : undefined;
+  // The recipe comes from the main path only -- the output itself, or the
+  // first Render met walking back along main inputs. A Render feeding an
+  // effect's extra input is a side branch, and its format and timing say
+  // nothing about what this output is showing.
+  let activeFormatter: RenderNodeData | undefined;
+  {
+    const seen = new Set<string>();
+    let current: AppNode | undefined = output;
+    while (current && !seen.has(current.id)) {
+      seen.add(current.id);
+      if (current.type === 'render') {
+        activeFormatter = current.data;
+        break;
+      }
+      if (current.type !== 'effect' && !isPassThrough(current) && current.type !== 'export') break;
+      const upstream = sourceOf(current.id, null);
+      current = upstream === undefined ? undefined : byId.get(upstream);
+    }
+  }
 
   const steps: Step[] = [];
   const done = new Map<string, number | null>();
@@ -451,12 +520,8 @@ export const resolveChain = (
       node?.type === 'renderOutput' ||
       node?.type === 'backgroundOutput' ||
       node?.type === 'export' ||
-      node?.type === 'render' ||
-      node?.type === 'formatter'
+      node?.type === 'render'
     ) {
-      if ((node?.type === 'render' || node?.type === 'formatter') && !activeFormatter) {
-        activeFormatter = node.data;
-      }
       // A viewer, exporter, or render part-way along a chain is a tap, not a stage: it shows what
       // has reached it and passes the picture on untouched. Several strung
       // together is how you watch the same edit at different points.

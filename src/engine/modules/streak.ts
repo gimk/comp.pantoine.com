@@ -6,18 +6,19 @@ import type { EffectDef } from '../effects';
  * Simulates cylindrical anamorphic lens elements that stretch bright point
  * highlights into cinematic horizontal flare streaks with characteristic blue tint.
  */
-const THRESHOLD = `  vec3 src = texture(u_src, v_uv).rgb;
-  float l = luma(src);
-  float keep = smoothstep(u_threshold, u_threshold + 0.1, l);
-  fragColor = vec4(src * keep, 1.0);`;
+const THRESHOLD = `  vec4 src = texture(u_src, v_uv);
+  float l = luma(src.rgb);
+  // Alpha-weighted: a keyed-out pixel still has colour, but must not flare.
+  float keep = smoothstep(u_threshold, u_threshold + 0.1, l) * src.a;
+  fragColor = vec4(src.rgb * keep, 1.0);`;
 
 const STREAK_PASS_1 = `  float rad = radians(u_angle);
   vec2 dir = vec2(cos(rad), sin(rad));
-  fragColor = blurAxis(u_src, v_uv, u_resolution, dir, u_length * 0.35);`;
+  fragColor = blurAxis(u_src, v_uv, u_resolution, dir, u_length * 0.35 * u_pixel_scale);`;
 
 const STREAK_PASS_2 = `  float rad = radians(u_angle);
   vec2 dir = vec2(cos(rad), sin(rad));
-  fragColor = blurAxis(u_src, v_uv, u_resolution, dir, u_length);`;
+  fragColor = blurAxis(u_src, v_uv, u_resolution, dir, u_length * u_pixel_scale);`;
 
 const COMBINE = `  vec4 base = texture(u_orig, v_uv);
   vec3 flare = texture(u_src, v_uv).rgb * u_tint * u_intensity;
