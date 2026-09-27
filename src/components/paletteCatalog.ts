@@ -57,7 +57,13 @@ export const catalog: CatalogFolder[] = [
     id: 'input',
     label: 'Input',
     groups: [
-      { heading: 'Picture', entries: [{ key: 'image', label: 'Image', payload: { kind: 'image' } }] },
+      {
+        heading: 'Picture',
+        entries: [
+          { key: 'image', label: 'Image', payload: { kind: 'image' } },
+          { key: 'video', label: 'Video', payload: { kind: 'video' } },
+        ],
+      },
       {
         heading: 'Modulation',
         entries: modulatorRegistry.filter((def) => def.role === 'source').map(modulatorEntry),
@@ -97,6 +103,7 @@ export const addPaletteItem = (item: PaletteItem, position?: XYPosition): void =
   if (item.kind === 'effect') store.addEffectNode(item.effectId, position);
   else if (item.kind === 'modulator') store.addModulatorNode(item.modulatorId, position);
   else if (item.kind === 'image') store.addImageNode(position);
+  else if (item.kind === 'video') store.addVideoNode(position);
   else if (item.kind === 'render') store.addRenderNode(position);
   else if (item.kind === 'formatter') store.addFormatterNode(position);
   else if (item.kind === 'export') store.addExportNode(position);

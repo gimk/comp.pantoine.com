@@ -5,6 +5,7 @@ import { TargetPool, createTarget, type RenderTarget } from './targets';
 import { reportShaderError } from './shaderErrors';
 import { modulatedValue, type Signal } from './modulators';
 import type { LoadedImage } from './imageStore';
+import type { LoadedVideo } from './videoStore';
 import { ParticleEngine } from './particleSim';
 
 /** One effect node, resolved into everything a draw call needs. */
@@ -30,6 +31,7 @@ export type Pass = {
  */
 export type Step =
   | { kind: 'image'; nodeId: string }
+  | { kind: 'video'; nodeId: string }
   | {
       kind: 'effect';
       pass: Pass;
@@ -49,9 +51,11 @@ export type RenderRequest = {
   plan: RenderPlan;
   /** Every image the plan reads, by node id. */
   images: Map<string, LoadedImage>;
+  /** Every video the plan reads, by node id. */
+  videos?: Map<string, LoadedVideo>;
   /**
-   * The image at the head of the main input path. Its size sets the working
-   * resolution and the shape of the frame; any other image is fitted to it.
+   * The image or video at the head of the main input path. Its size sets the working
+   * resolution and the shape of the frame; any other source is fitted to it.
    */
   primaryNodeId: string;
   /** Seconds since the renderer started, wrapped. Fed to animated effects. */
@@ -130,6 +134,13 @@ const setParamUniform = (
 };
 
 type SourceTexture = { texture: WebGLTexture; key: string };
+type VideoSourceTexture = {
+  texture: WebGLTexture;
+  key: string;
+  width: number;
+  height: number;
+  lastTime: number;
+};
 
 export class Pipeline {
   private gl: WebGL2RenderingContext;
@@ -142,6 +153,8 @@ export class Pipeline {
   private blank: WebGLTexture;
   /** One uploaded texture per image node the graph reads. */
   private sources = new Map<string, SourceTexture>();
+  /** One uploaded texture per video node the graph reads. */
+  private videoSources = new Map<string, VideoSourceTexture>();
 
   /**
    * One frame of output kept per feedback node.
@@ -265,6 +278,49 @@ export class Pipeline {
 
     this.sources.set(nodeId, { texture, key });
     return texture;
+  }
+
+  private videoTextureFor(nodeId: string, video: LoadedVideo): WebGLTexture {
+    const gl = this.gl;
+    const key = String(video.version);
+    let existing = this.videoSources.get(nodeId);
+    const videoWidth = video.element.videoWidth || video.width;
+    const videoHeight = video.element.videoHeight || video.height;
+
+    if (!existing || existing.key !== key || existing.width !== videoWidth || existing.height !== videoHeight) {
+      if (existing) gl.deleteTexture(existing.texture);
+      const texture = gl.createTexture();
+      if (!texture) throw new Error('Could not create video texture');
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+      if (video.element.readyState >= 2) {
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, video.element);
+      } else {
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, videoWidth, videoHeight, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      }
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+
+      existing = {
+        texture,
+        key,
+        width: videoWidth,
+        height: videoHeight,
+        lastTime: video.element.currentTime,
+      };
+      this.videoSources.set(nodeId, existing);
+    } else if (video.element.readyState >= 2 && video.element.currentTime !== existing.lastTime) {
+      gl.bindTexture(gl.TEXTURE_2D, existing.texture);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, video.element);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+      existing.lastTime = video.element.currentTime;
+    }
+    return existing.texture;
   }
 
   private bindShared(
@@ -474,10 +530,10 @@ export class Pipeline {
 
   render(request: RenderRequest): void {
     const gl = this.gl;
-    const { plan, images, primaryNodeId, canvasWidth, canvasHeight, maxWorkingSize } = request;
+    const { plan, images, videos, primaryNodeId, canvasWidth, canvasHeight, maxWorkingSize } = request;
     if (canvasWidth === 0 || canvasHeight === 0) return;
 
-    const primary = images.get(primaryNodeId);
+    const primary = images.get(primaryNodeId) ?? videos?.get(primaryNodeId);
     if (!primary) return;
 
     /*
@@ -500,6 +556,7 @@ export class Pipeline {
     }
     const liveFeedback = new Set<string>();
     const liveSources = new Set<string>();
+    const liveVideoSources = new Set<string>();
     const livePhases = new Set<string>();
     const liveParticleSims = new Set<string>();
 
@@ -556,6 +613,30 @@ export class Pipeline {
         return;
       }
 
+      if (step.kind === 'video') {
+        const video = videos?.get(step.nodeId);
+        if (!video) return;
+        const texture = this.videoTextureFor(step.nodeId, video);
+        liveVideoSources.add(step.nodeId);
+
+        const frameRatio = workWidth / workHeight;
+        const ratio = video.width / video.height;
+        if (Math.abs(ratio - frameRatio) < 1e-3) {
+          textures[index] = texture;
+          owned[index] = null;
+          return;
+        }
+        const target = this.pool.acquire();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
+        this.bindShared(this.importer, texture, texture, texture, workWidth, workHeight, request, 0, 0);
+        const cover = ratio > frameRatio ? [frameRatio / ratio, 1] : [1, ratio / frameRatio];
+        gl.uniform2f(uniform(gl, this.importer.program, this.importer.uniforms, 'u_cover'), cover[0], cover[1]);
+        drawQuad(gl);
+        textures[index] = target.texture;
+        owned[index] = target;
+        return;
+      }
+
       const target = this.runEffect(
         step.pass,
         textures[step.input],
@@ -587,6 +668,11 @@ export class Pipeline {
       if (liveSources.has(nodeId)) continue;
       gl.deleteTexture(source.texture);
       this.sources.delete(nodeId);
+    }
+    for (const [nodeId, source] of this.videoSources) {
+      if (liveVideoSources.has(nodeId)) continue;
+      gl.deleteTexture(source.texture);
+      this.videoSources.delete(nodeId);
     }
     for (const nodeId of this.nodePhases.keys()) {
       if (!livePhases.has(nodeId)) {
@@ -673,6 +759,8 @@ export class Pipeline {
     this.programs.clear();
     for (const source of this.sources.values()) gl.deleteTexture(source.texture);
     this.sources.clear();
+    for (const source of this.videoSources.values()) gl.deleteTexture(source.texture);
+    this.videoSources.clear();
     gl.deleteTexture(this.blank);
   }
 }

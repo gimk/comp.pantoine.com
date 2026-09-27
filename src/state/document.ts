@@ -43,6 +43,18 @@ type SerializedNode =
   | { id: string; type: 'image'; position: XYPosition; name: string; width: number; height: number }
   | {
       id: string;
+      type: 'video';
+      position: XYPosition;
+      name: string;
+      width: number;
+      height: number;
+      duration: number;
+      loop?: boolean;
+      muted?: boolean;
+      playbackRate?: number;
+    }
+  | {
+      id: string;
       type: 'effect';
       position: XYPosition;
       effectId: string;
@@ -110,6 +122,20 @@ export const serializeGraph = (nodes: AppNode[], edges: Edge[]): SerializedGraph
         name: node.data.name,
         width: node.data.width,
         height: node.data.height,
+      };
+    }
+    if (node.type === 'video') {
+      return {
+        id: node.id,
+        type: 'video',
+        position,
+        name: node.data.name,
+        width: node.data.width,
+        height: node.data.height,
+        duration: node.data.duration,
+        loop: node.data.loop,
+        muted: node.data.muted,
+        playbackRate: node.data.playbackRate,
       };
     }
     if (node.type === 'effect') {
@@ -257,6 +283,25 @@ export const deserializeGraph = (raw: unknown): { nodes: AppNode[]; edges: Edge[
           name: typeof entry.name === 'string' ? entry.name : '',
           width: isNumber(entry.width) ? entry.width : 0,
           height: isNumber(entry.height) ? entry.height : 0,
+        },
+      });
+      continue;
+    }
+
+    if (entry.type === 'video') {
+      nodes.push({
+        id: entry.id,
+        type: 'video',
+        position,
+        data: {
+          src: null,
+          name: typeof entry.name === 'string' ? entry.name : '',
+          width: isNumber(entry.width) ? entry.width : 0,
+          height: isNumber(entry.height) ? entry.height : 0,
+          duration: isNumber(entry.duration) ? entry.duration : 0,
+          loop: typeof entry.loop === 'boolean' ? entry.loop : true,
+          muted: typeof entry.muted === 'boolean' ? entry.muted : true,
+          playbackRate: isNumber(entry.playbackRate) ? entry.playbackRate : 1,
         },
       });
       continue;

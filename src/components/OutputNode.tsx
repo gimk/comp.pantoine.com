@@ -12,6 +12,7 @@ import { Pipeline } from '../engine/pipeline';
 import { createContext } from '../engine/gl';
 import { clockSeconds, isPlaying, resetCount, subscribeClock } from '../engine/clock';
 import { getImage, type LoadedImage } from '../engine/imageStore';
+import { getVideo, type LoadedVideo } from '../engine/videoStore';
 import type { RenderPlan } from '../engine/pipeline';
 import { signalKey } from '../engine/modulators';
 
@@ -31,6 +32,17 @@ const imagesFor = (plan: RenderPlan): Map<string, LoadedImage> | null => {
   return images;
 };
 
+const videosFor = (plan: RenderPlan): Map<string, LoadedVideo> | null => {
+  const videos = new Map<string, LoadedVideo>();
+  for (const step of plan.steps) {
+    if (step.kind !== 'video') continue;
+    const video = getVideo(step.nodeId);
+    if (!video) return null;
+    videos.set(step.nodeId, video);
+  }
+  return videos;
+};
+
 /**
  * What the picture depends on, as a string that changes when it does.
  *
@@ -46,13 +58,15 @@ const signatureOf = (plan: RenderPlan): string =>
     plan.steps.map((step) =>
       step.kind === 'image'
         ? [step.nodeId, getImage(step.nodeId)?.version]
-        : [
-            step.pass.def.id,
-            step.pass.params,
-            step.input,
-            step.extras,
-            Object.entries(step.pass.modulation).map(([key, signal]) => [key, signalKey(signal)]),
-          ],
+        : step.kind === 'video'
+          ? [step.nodeId, getVideo(step.nodeId)?.version]
+          : [
+              step.pass.def.id,
+              step.pass.params,
+              step.input,
+              step.extras,
+              Object.entries(step.pass.modulation).map(([key, signal]) => [key, signalKey(signal)]),
+            ],
     ),
   ]);
 
@@ -174,7 +188,8 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
 
     const current = chainRef.current;
     const images = current ? imagesFor(current.plan) : null;
-    if (!current || !images) {
+    const videos = current ? videosFor(current.plan) : null;
+    if (!current || !images || !videos) {
       pipeline.clear(canvas.width, canvas.height);
       return;
     }
@@ -211,6 +226,11 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
         const loopIndex = Math.floor(elapsed / dur);
         if (lastLoopIndexRef.current !== null && loopIndex !== lastLoopIndexRef.current) {
           pipeline.resetFeedback();
+          if (videos.size > 0) {
+            for (const v of videos.values()) {
+              v.element.currentTime = start;
+            }
+          }
         }
         lastLoopIndexRef.current = loopIndex;
 
@@ -221,8 +241,8 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
       }
     }
 
-    const primaryImage = getImage(current.sourceNodeId);
-    const maxDim = primaryImage ? Math.max(primaryImage.width, primaryImage.height) : 2048;
+    const primarySource = getImage(current.sourceNodeId) ?? getVideo(current.sourceNodeId);
+    const maxDim = primarySource ? Math.max(primarySource.width, primarySource.height) : 2048;
     const targetWorkingSize = current.formatter
       ? Math.max(16, Math.round(maxDim * current.formatter.scale))
       : MAX_WORKING_SIZE;
@@ -230,6 +250,7 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
     pipeline.render({
       plan: current.plan,
       images,
+      videos,
       primaryNodeId: current.sourceNodeId,
       time,
       delta,
@@ -312,16 +333,46 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
     draw();
   }, [draw, signature]);
 
+  // Synchronize video element playback with transport playing state
+  useEffect(() => {
+    if (!chain) return;
+    const vids = videosFor(chain.plan);
+    if (!vids || vids.size === 0) return;
+    for (const v of vids.values()) {
+      if (playing) {
+        if (v.element.paused && !v.element.ended) {
+          void v.element.play().catch(() => {});
+        }
+      } else {
+        if (!v.element.paused) {
+          v.element.pause();
+        }
+      }
+    }
+  }, [playing, signature]);
+
+  const lastResetsRef = useRef(resets);
+
   // Back to zero: trails and echoes start again from nothing, as they did
   // the first time, rather than carrying on over the reset.
   useEffect(() => {
+    if (lastResetsRef.current === resets) return;
+    lastResetsRef.current = resets;
     if (resets === 0) return;
     lastLoopIndexRef.current = null;
     pipelineRef.current?.resetFeedback();
+    if (chain) {
+      const vids = videosFor(chain.plan);
+      if (vids) {
+        for (const v of vids.values()) {
+          v.element.currentTime = 0;
+        }
+      }
+    }
     frameRef.current = 0;
     lastFrameRef.current = performance.now();
     drawRef.current();
-  }, [resets]);
+  }, [resets, chain]);
 
   // Paused or resumed: one draw either way, so the frame shown is the one
   // at the paused moment rather than whichever the loop last reached.
@@ -350,32 +401,32 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
     return () => cancelAnimationFrame(frame);
   }, [looping]);
 
-  const image = chain ? getImage(chain.sourceNodeId) : undefined;
+  const source = chain ? getImage(chain.sourceNodeId) ?? getVideo(chain.sourceNodeId) : undefined;
   const renderedRatio = renderAssetData?.renderedDimensions
     ? renderAssetData.renderedDimensions.width / renderAssetData.renderedDimensions.height
     : null;
   const ratio = isRenderMode
-    ? renderedRatio ?? (image ? image.width / image.height : DEFAULT_RATIO)
-    : image
-      ? image.width / image.height
+    ? renderedRatio ?? (source ? source.width / source.height : DEFAULT_RATIO)
+    : source
+      ? source.width / source.height
       : DEFAULT_RATIO;
 
   const displayWidth = isRenderMode
     ? renderAssetData?.renderedDimensions?.width ??
-      (image ? Math.round(image.width * (renderAssetData?.scale ?? 1)) : 0)
-    : image
+      (source ? Math.round(source.width * (renderAssetData?.scale ?? 1)) : 0)
+    : source
       ? chain?.formatter
-        ? Math.max(1, Math.round(image.width * chain.formatter.scale))
-        : image.width
+        ? Math.max(1, Math.round(source.width * chain.formatter.scale))
+        : source.width
       : 0;
 
   const displayHeight = isRenderMode
     ? renderAssetData?.renderedDimensions?.height ??
-      (image ? Math.round(image.height * (renderAssetData?.scale ?? 1)) : 0)
-    : image
+      (source ? Math.round(source.height * (renderAssetData?.scale ?? 1)) : 0)
+    : source
       ? chain?.formatter
-        ? Math.max(1, Math.round(image.height * chain.formatter.scale))
-        : image.height
+        ? Math.max(1, Math.round(source.height * chain.formatter.scale))
+        : source.height
       : 0;
 
   // Width is the only stored dimension; the height follows from the ratio,
@@ -450,7 +501,7 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
               : renderAssetData
                 ? renderAssetData.format.toUpperCase()
                 : '—'
-            : image
+            : source
               ? `${displayWidth} × ${displayHeight}`
               : '—'}
         </span>

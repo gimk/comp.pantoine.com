@@ -3,6 +3,7 @@ import type { ExportFormat, RenderNodeData, ResolvedChain } from '../state/graph
 import { Pipeline, type RenderPlan } from './pipeline';
 import { createContext } from './gl';
 import { getImage, type LoadedImage } from './imageStore';
+import { getVideo, type LoadedVideo } from './videoStore';
 
 export type ExportProgress = {
   currentFrame: number;
@@ -22,6 +23,43 @@ export const imagesForPlan = (plan: RenderPlan): Map<string, LoadedImage> | null
     images.set(step.nodeId, img);
   }
   return images;
+};
+
+/** Collect all loaded videos required by the plan. */
+export const videosForPlan = (plan: RenderPlan): Map<string, LoadedVideo> | null => {
+  const videos = new Map<string, LoadedVideo>();
+  for (const step of plan.steps) {
+    if (step.kind !== 'video') continue;
+    const vid = getVideo(step.nodeId);
+    if (!vid) return null;
+    videos.set(step.nodeId, vid);
+  }
+  return videos;
+};
+
+const seekVideo = (video: HTMLVideoElement, time: number): Promise<void> => {
+  return new Promise((resolve) => {
+    if (!Number.isFinite(video.duration) || video.duration <= 0) {
+      resolve();
+      return;
+    }
+    const target = time % video.duration;
+    if (Math.abs(video.currentTime - target) < 0.01) {
+      resolve();
+      return;
+    }
+    const onSeeked = () => {
+      video.removeEventListener('seeked', onSeeked);
+      resolve();
+    };
+    video.addEventListener('seeked', onSeeked);
+    video.currentTime = target;
+  });
+};
+
+const seekAllVideos = async (videos: Map<string, LoadedVideo>, time: number): Promise<void> => {
+  if (videos.size === 0) return;
+  await Promise.all(Array.from(videos.values()).map((v) => seekVideo(v.element, time)));
 };
 
 /** Trigger a browser file download for a Blob. */
@@ -89,11 +127,12 @@ export const exportStill = async (options: {
   data: RenderNodeData;
 }): Promise<{ blob: Blob; extension: string }> => {
   const { chain, data } = options;
-  const primary = getImage(chain.sourceNodeId);
-  if (!primary) throw new Error('Source image not loaded');
+  const primary = getImage(chain.sourceNodeId) ?? getVideo(chain.sourceNodeId);
+  if (!primary) throw new Error('Source media not loaded');
 
   const images = imagesForPlan(chain.plan);
-  if (!images) throw new Error('Missing input images in chain');
+  const videos = videosForPlan(chain.plan);
+  if (!images || !videos) throw new Error('Missing input media in chain');
 
   const width = Math.max(1, Math.round(primary.width * data.scale));
   const height = Math.max(1, Math.round(primary.height * data.scale));
@@ -108,9 +147,11 @@ export const exportStill = async (options: {
 
   try {
     pipeline.resetFeedback();
+    await seekAllVideos(videos, data.time);
     pipeline.render({
       plan: chain.plan,
       images,
+      videos,
       primaryNodeId: chain.sourceNodeId,
       time: data.time,
       delta: 0.016,
@@ -150,11 +191,12 @@ export const exportGif = async (options: {
   signal?: AbortSignal;
 }): Promise<{ blob: Blob; extension: string }> => {
   const { chain, data, onProgress, signal } = options;
-  const primary = getImage(chain.sourceNodeId);
-  if (!primary) throw new Error('Source image not loaded');
+  const primary = getImage(chain.sourceNodeId) ?? getVideo(chain.sourceNodeId);
+  if (!primary) throw new Error('Source media not loaded');
 
   const images = imagesForPlan(chain.plan);
-  if (!images) throw new Error('Missing input images in chain');
+  const videos = videosForPlan(chain.plan);
+  if (!images || !videos) throw new Error('Missing input media in chain');
 
   const width = Math.max(1, Math.round(primary.width * data.scale));
   const height = Math.max(1, Math.round(primary.height * data.scale));
@@ -182,9 +224,11 @@ export const exportGif = async (options: {
       if (signal?.aborted) throw new Error('Export cancelled');
 
       const currentTime = data.time + f * dt;
+      await seekAllVideos(videos, currentTime);
       pipeline.render({
         plan: chain.plan,
         images,
+        videos,
         primaryNodeId: chain.sourceNodeId,
         time: currentTime,
         delta: dt,
@@ -240,11 +284,12 @@ export const exportVideo = async (options: {
   signal?: AbortSignal;
 }): Promise<{ blob: Blob; extension: string }> => {
   const { chain, data, onProgress, signal } = options;
-  const primary = getImage(chain.sourceNodeId);
-  if (!primary) throw new Error('Source image not loaded');
+  const primary = getImage(chain.sourceNodeId) ?? getVideo(chain.sourceNodeId);
+  if (!primary) throw new Error('Source media not loaded');
 
   const images = imagesForPlan(chain.plan);
-  if (!images) throw new Error('Missing input images in chain');
+  const videos = videosForPlan(chain.plan);
+  if (!images || !videos) throw new Error('Missing input media in chain');
 
   const supported = getSupportedVideoMimeType(data.format === 'mp4' ? 'mp4' : 'webm');
   if (!supported) {
@@ -302,9 +347,11 @@ export const exportVideo = async (options: {
       }
 
       const currentTime = data.time + f * dt;
+      await seekAllVideos(videos, currentTime);
       pipeline.render({
         plan: chain.plan,
         images,
+        videos,
         primaryNodeId: chain.sourceNodeId,
         time: currentTime,
         delta: dt,

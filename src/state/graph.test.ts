@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { putVideo, dropVideo } from '../engine/videoStore';
 import {
   RENDER_PORT,
   findUpstreamRenderNode,
@@ -345,5 +346,55 @@ describe('graph ports and chain resolution', () => {
       passes: [{ ...chain.passes[0], modulation: { speed: zeroMathSignal } }],
     };
     expect(chainIsAnimated(zeroChain)).toBe(false);
+  });
+
+  it('resolves chain with a video node and marks chain as animated', () => {
+    const mockVideo = { pause: () => {}, removeAttribute: () => {}, load: () => {} } as unknown as HTMLVideoElement;
+    putVideo('vid-1', mockVideo, 'blob:test', 'test.mp4', 1920, 1080, 10);
+
+    const nodes: AppNode[] = [
+      {
+        id: 'vid-1',
+        type: 'video',
+        position: { x: 0, y: 0 },
+        data: { src: 'blob:test', name: 'test.mp4', width: 1920, height: 1080, duration: 10 },
+      },
+      {
+        id: 'output-1',
+        type: 'renderOutput',
+        position: { x: 400, y: 0 },
+        data: { width: 360 },
+      },
+    ];
+
+    const edges: Edge[] = [
+      { id: 'e1', source: 'vid-1', target: 'output-1', type: 'link' },
+    ];
+
+    const chain = resolveChain(nodes, edges, 'output-1');
+    expect(chain).not.toBeNull();
+    expect(chain?.sourceNodeId).toBe('vid-1');
+    expect(chain?.plan.steps).toHaveLength(1);
+    expect(chain?.plan.steps[0]).toEqual({ kind: 'video', nodeId: 'vid-1' });
+    expect(chainIsAnimated(chain)).toBe(true);
+
+    dropVideo('vid-1');
+  });
+
+  it('supports loop property on video node data', () => {
+    const videoNode: AppNode = {
+      id: 'vid-loop',
+      type: 'video',
+      position: { x: 0, y: 0 },
+      data: {
+        src: 'blob:test',
+        name: 'clip.mp4',
+        width: 1280,
+        height: 720,
+        duration: 15,
+        loop: false,
+      },
+    };
+    expect(videoNode.data.loop).toBe(false);
   });
 });

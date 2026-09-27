@@ -10,6 +10,7 @@ import {
   type Signal,
 } from '../engine/modulators';
 import { getImage } from '../engine/imageStore';
+import { getVideo } from '../engine/videoStore';
 import type { Pass, RenderPlan, Step } from '../engine/pipeline';
 
 export type ImageNodeData = {
@@ -18,6 +19,20 @@ export type ImageNodeData = {
   name: string;
   width: number;
   height: number;
+  /** Error message if decoding or loading failed. */
+  error?: string | null;
+};
+
+export type VideoNodeData = {
+  /** Object URL for the video source, or null while empty. */
+  src: string | null;
+  name: string;
+  width: number;
+  height: number;
+  duration: number;
+  loop?: boolean;
+  muted?: boolean;
+  playbackRate?: number;
   /** Error message if decoding or loading failed. */
   error?: string | null;
 };
@@ -94,6 +109,7 @@ export const DEFAULT_BACKGROUND_DATA: BackgroundNodeData = {
 
 export type AppNode =
   | Node<ImageNodeData, 'image'>
+  | Node<VideoNodeData, 'video'>
   | Node<EffectNodeData, 'effect'>
   | Node<ModulatorNodeData, 'modulator'>
   | Node<OutputNodeData, 'renderOutput'>
@@ -372,6 +388,8 @@ export const resolveChain = (
 
     if (node?.type === 'image') {
       if (getImage(node.id)) index = steps.push({ kind: 'image', nodeId: node.id }) - 1;
+    } else if (node?.type === 'video') {
+      if (getVideo(node.id)) index = steps.push({ kind: 'video', nodeId: node.id }) - 1;
     } else if (
       node?.type === 'renderOutput' ||
       node?.type === 'backgroundOutput' ||
@@ -417,7 +435,7 @@ export const resolveChain = (
   }
   if (outputIndex === null) return null;
 
-  // Follow main inputs back up to the image that sets the frame.
+  // Follow main inputs back up to the image or video that sets the frame.
   let head = steps[outputIndex];
   while (head.kind === 'effect') head = steps[head.input];
 
@@ -433,13 +451,14 @@ export const resolveChain = (
 /** Whether anything in the chain needs a continuous frame loop. */
 export const chainIsAnimated = (chain: ResolvedChain | null): boolean =>
   chain !== null &&
-  chain.passes.some((pass) => {
-    const params = { ...pass.params };
-    for (const [key, signal] of Object.entries(pass.modulation)) {
-      const spec = paramsOf(pass.def).find((p) => p.key === key);
-      if (spec) {
-        params[key] = modulatedValue(spec, pass.params[key], signal, 0);
+  (chain.plan.steps.some((step) => step.kind === 'video') ||
+    chain.passes.some((pass) => {
+      const params = { ...pass.params };
+      for (const [key, signal] of Object.entries(pass.modulation)) {
+        const spec = paramsOf(pass.def).find((p) => p.key === key);
+        if (spec) {
+          params[key] = modulatedValue(spec, pass.params[key], signal, 0);
+        }
       }
-    }
-    return isAnimated(pass.def, params) || Object.values(pass.modulation).some(signalIsMoving);
-  });
+      return isAnimated(pass.def, params) || Object.values(pass.modulation).some(signalIsMoving);
+    }));

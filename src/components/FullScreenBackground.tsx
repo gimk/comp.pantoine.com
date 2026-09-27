@@ -11,6 +11,7 @@ import { Pipeline, type RenderPlan } from '../engine/pipeline';
 import { createContext } from '../engine/gl';
 import { clockSeconds, isPlaying, resetCount, subscribeClock } from '../engine/clock';
 import { getImage, type LoadedImage } from '../engine/imageStore';
+import { getVideo, type LoadedVideo } from '../engine/videoStore';
 import { signalKey } from '../engine/modulators';
 
 const MAX_DPR = 2;
@@ -29,19 +30,32 @@ const imagesFor = (plan: RenderPlan): Map<string, LoadedImage> | null => {
   return images;
 };
 
+const videosFor = (plan: RenderPlan): Map<string, LoadedVideo> | null => {
+  const videos = new Map<string, LoadedVideo>();
+  for (const step of plan.steps) {
+    if (step.kind !== 'video') continue;
+    const video = getVideo(step.nodeId);
+    if (!video) return null;
+    videos.set(step.nodeId, video);
+  }
+  return videos;
+};
+
 const signatureOf = (plan: RenderPlan): string =>
   JSON.stringify([
     plan.output,
     plan.steps.map((step) =>
       step.kind === 'image'
         ? [step.nodeId, getImage(step.nodeId)?.version]
-        : [
-            step.pass.def.id,
-            step.pass.params,
-            step.input,
-            step.extras,
-            Object.entries(step.pass.modulation).map(([key, signal]) => [key, signalKey(signal)]),
-          ],
+        : step.kind === 'video'
+          ? [step.nodeId, getVideo(step.nodeId)?.version]
+          : [
+              step.pass.def.id,
+              step.pass.params,
+              step.input,
+              step.extras,
+              Object.entries(step.pass.modulation).map(([key, signal]) => [key, signalKey(signal)]),
+            ],
     ),
   ]);
 
@@ -102,7 +116,8 @@ export const FullScreenBackground: React.FC = () => {
 
     const current = chainRef.current;
     const images = current ? imagesFor(current.plan) : null;
-    if (!current || !images) {
+    const videos = current ? videosFor(current.plan) : null;
+    if (!current || !images || !videos) {
       pipeline.clear(canvas.width, canvas.height);
       return;
     }
@@ -137,6 +152,11 @@ export const FullScreenBackground: React.FC = () => {
         const loopIndex = Math.floor(elapsed / dur);
         if (lastLoopIndexRef.current !== null && loopIndex !== lastLoopIndexRef.current) {
           pipeline.resetFeedback();
+          if (videos.size > 0) {
+            for (const v of videos.values()) {
+              v.element.currentTime = start;
+            }
+          }
         }
         lastLoopIndexRef.current = loopIndex;
 
@@ -146,8 +166,8 @@ export const FullScreenBackground: React.FC = () => {
       }
     }
 
-    const primaryImage = getImage(current.sourceNodeId);
-    const maxDim = primaryImage ? Math.max(primaryImage.width, primaryImage.height) : 2048;
+    const primarySource = getImage(current.sourceNodeId) ?? getVideo(current.sourceNodeId);
+    const maxDim = primarySource ? Math.max(primarySource.width, primarySource.height) : 2048;
     const targetWorkingSize = current.formatter
       ? Math.max(16, Math.round(maxDim * current.formatter.scale))
       : Math.max(MAX_WORKING_SIZE, Math.min(canvas.width, 2560));
@@ -155,6 +175,7 @@ export const FullScreenBackground: React.FC = () => {
     pipeline.render({
       plan: current.plan,
       images,
+      videos,
       primaryNodeId: current.sourceNodeId,
       time,
       delta,
@@ -238,14 +259,44 @@ export const FullScreenBackground: React.FC = () => {
     }
   }, [draw, isEnabled, isRenderMode, signature]);
 
+  // Synchronize video element playback with transport playing state
   useEffect(() => {
+    if (!chain || !isEnabled || isRenderMode) return;
+    const vids = videosFor(chain.plan);
+    if (!vids || vids.size === 0) return;
+    for (const v of vids.values()) {
+      if (playing) {
+        if (v.element.paused && !v.element.ended) {
+          void v.element.play().catch(() => {});
+        }
+      } else {
+        if (!v.element.paused) {
+          v.element.pause();
+        }
+      }
+    }
+  }, [chain, isEnabled, isRenderMode, playing, signature]);
+
+  const lastResetsRef = useRef(resets);
+
+  useEffect(() => {
+    if (lastResetsRef.current === resets) return;
+    lastResetsRef.current = resets;
     if (resets === 0) return;
     lastLoopIndexRef.current = null;
     pipelineRef.current?.resetFeedback();
+    if (chain) {
+      const vids = videosFor(chain.plan);
+      if (vids) {
+        for (const v of vids.values()) {
+          v.element.currentTime = 0;
+        }
+      }
+    }
     frameRef.current = 0;
     lastFrameRef.current = performance.now();
     drawRef.current();
-  }, [resets]);
+  }, [resets, chain]);
 
   useEffect(() => {
     lastLoopIndexRef.current = null;

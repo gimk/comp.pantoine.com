@@ -62,6 +62,42 @@ describe('document serialization & deserialization', () => {
     });
   });
 
+  it('round-trips a video node through serialization and deserialization', () => {
+    const nodes: AppNode[] = [
+      {
+        id: 'video-1',
+        type: 'video',
+        position: { x: 50, y: 100 },
+        data: {
+          src: 'blob:http://localhost/video',
+          name: 'clip.mp4',
+          width: 1280,
+          height: 720,
+          duration: 15.5,
+          loop: true,
+          muted: true,
+          playbackRate: 1,
+        },
+      },
+    ];
+    const serialized = serializeGraph(nodes, []);
+    const deserialized = deserializeGraph(serialized);
+    expect(deserialized).not.toBeNull();
+    const restoredVideo = deserialized!.nodes.find((n) => n.id === 'video-1');
+    expect(restoredVideo).toBeDefined();
+    expect(restoredVideo?.type).toBe('video');
+    expect(restoredVideo?.data).toEqual({
+      src: null,
+      name: 'clip.mp4',
+      width: 1280,
+      height: 720,
+      duration: 15.5,
+      loop: true,
+      muted: true,
+      playbackRate: 1,
+    });
+  });
+
   it('safely rejects corrupt or invalid graph payloads', () => {
     expect(deserializeGraph(null)).toBeNull();
     expect(deserializeGraph(undefined)).toBeNull();

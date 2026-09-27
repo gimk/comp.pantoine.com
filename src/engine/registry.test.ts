@@ -99,5 +99,31 @@ describe('effect registry and module definitions', () => {
       });
     }
   });
+
+  it('configures dither module with notorious dithering patterns', () => {
+    const ditherDef = getEffect('dither');
+    expect(ditherDef).toBeDefined();
+
+    const patternParam = ditherDef?.params.find((p) => p.key === 'matrix');
+    expect(patternParam).toBeDefined();
+    expect(patternParam?.kind).toBe('enum');
+
+    if (patternParam && patternParam.kind === 'enum') {
+      expect(patternParam.options).toEqual([
+        'Bayer 2x2',
+        'Bayer 4x4',
+        'Bayer 8x8',
+        'Cluster Dot 4x4',
+        'Cluster Dot 8x8',
+        'Blue Noise',
+        'IGN (Jimenez)',
+        'White Noise',
+        'Diagonal Lines',
+        'Horizontal Lines',
+        'Floyd-Steinberg',
+        'Atkinson',
+      ]);
+    }
+  });
 });
 

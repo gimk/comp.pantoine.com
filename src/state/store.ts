@@ -14,6 +14,7 @@ import { getEffect } from '../engine/registry';
 import { defaultParams, type ParamValue } from '../engine/effects';
 import { defaultModulatorParams, getModulator } from '../engine/modulators';
 import { decodeImage, dropImage, putImage, shareImage, swapImages } from '../engine/imageStore';
+import { createVideoElementFromFile, dropVideo, getVideo, putVideo, shareVideo, swapVideos } from '../engine/videoStore';
 import {
   DEFAULT_BACKGROUND_DATA,
   DEFAULT_EXPORT_DATA,
@@ -27,6 +28,7 @@ import {
   type ExportNodeData,
   type FormatterNodeData,
   type RenderNodeData,
+  type VideoNodeData,
 } from './graph';
 import { highestIdSuffix, loadGraph, saveGraph } from './document';
 import { snapDrag, type Box, type SnapGuide } from './snapping';
@@ -58,6 +60,7 @@ const idPrefixFor = (node: AppNode): string => {
   if (node.type === 'render' || node.type === 'formatter') return 'render';
   if (node.type === 'export') return 'export';
   if (node.type === 'backgroundOutput') return 'background';
+  if (node.type === 'video') return 'video';
   return node.type === 'image' ? 'image' : 'output';
 };
 
@@ -91,6 +94,7 @@ const copySubgraph = (
   const nodes = picked.map((node): AppNode => {
     const id = ids.get(node.id)!;
     if (node.type === 'image') shareImage(imageFrom(node.id), id);
+    if (node.type === 'video') shareVideo(imageFrom(node.id), id);
     return {
       ...node,
       id,
@@ -181,6 +185,7 @@ const cancelAltDuplicate = (): void => {
   for (const standIn of standIns) {
     identityAliases.delete(standIn);
     dropImage(standIn);
+    dropVideo(standIn);
   }
   useGraph.setState({ nodes: useGraph.getState().nodes.filter((node) => !standIns.has(node.id)) });
 };
@@ -246,6 +251,7 @@ type GraphStore = {
   addEffectNode: (effectId: string, position?: XYPosition) => void;
   addModulatorNode: (modulatorId: string, position?: XYPosition) => void;
   addImageNode: (position?: XYPosition) => void;
+  addVideoNode: (position?: XYPosition) => void;
   addOutputNode: (position?: XYPosition) => void;
   addRenderNode: (position?: XYPosition) => void;
   addFormatterNode: (position?: XYPosition) => void;
@@ -259,7 +265,9 @@ type GraphStore = {
   setRenderData: (nodeId: string, patch: Partial<RenderNodeData>) => void;
   setFormatterData: (nodeId: string, patch: Partial<FormatterNodeData>) => void;
   setExportData: (nodeId: string, patch: Partial<ExportNodeData>) => void;
+  setVideoData: (nodeId: string, patch: Partial<VideoNodeData>) => void;
   loadImage: (nodeId: string, file: File) => Promise<void>;
+  loadVideo: (nodeId: string, file: File) => Promise<void>;
   beginDrag: (dragged: AppNode[]) => void;
   endDrag: () => void;
   beginAltDuplicate: (ids: string[]) => void;
@@ -379,7 +387,10 @@ export const useGraph = create<GraphStore>((set, get) => ({
     // Free the bitmap and its object URL as the node goes, so repeatedly
     // importing and deleting does not leak the decoded pixels.
     for (const change of changes) {
-      if (change.type === 'remove') dropImage(change.id);
+      if (change.type === 'remove') {
+        dropImage(change.id);
+        dropVideo(change.id);
+      }
     }
     // Shift held mid-drag: pull the dragged nodes onto the nearest
     // centre line of another module. The correction is added on top of where
@@ -482,6 +493,16 @@ export const useGraph = create<GraphStore>((set, get) => ({
     set({ nodes: [...get().nodes, node] });
   },
 
+  addVideoNode: (position) => {
+    const node: AppNode = {
+      id: nextId('video'),
+      type: 'video',
+      position: position ?? { x: 40, y: 100 + (get().nodes.length % 6) * 40 },
+      data: { src: null, name: '', width: 0, height: 0, duration: 0, loop: true, muted: true, playbackRate: 1 },
+    };
+    set({ nodes: [...get().nodes, node] });
+  },
+
   addOutputNode: (position) => {
     const node: AppNode = {
       id: nextId('output'),
@@ -575,6 +596,19 @@ export const useGraph = create<GraphStore>((set, get) => ({
     });
   },
 
+  setVideoData: (nodeId, patch) => {
+    const video = getVideo(nodeId);
+    if (video && patch.loop !== undefined) {
+      video.element.loop = patch.loop;
+    }
+    set({
+      nodes: get().nodes.map((node) => {
+        if (node.id !== nodeId || node.type !== 'video') return node;
+        return { ...node, data: { ...node.data, ...patch } };
+      }),
+    });
+  },
+
   loadImage: async (nodeId, file) => {
     try {
       const bitmap = await decodeImage(file);
@@ -594,6 +628,45 @@ export const useGraph = create<GraphStore>((set, get) => ({
       set({
         nodes: get().nodes.map((node) => {
           if (node.id !== nodeId || node.type !== 'image') return node;
+          return {
+            ...node,
+            data: { ...node.data, error: message },
+          };
+        }),
+      });
+    }
+  },
+
+  loadVideo: async (nodeId, file) => {
+    try {
+      const { element, url, width, height, duration } = await createVideoElementFromFile(file);
+      const targetNode = get().nodes.find((n) => n.id === nodeId);
+      const isLoop = targetNode?.type === 'video' && targetNode.data.loop !== undefined ? targetNode.data.loop : true;
+      element.loop = isLoop;
+      const loaded = putVideo(nodeId, element, url, file.name, width, height, duration);
+      set({
+        nodes: get().nodes.map((node) => {
+          if (node.id !== nodeId || node.type !== 'video') return node;
+          return {
+            ...node,
+            data: {
+              ...node.data,
+              src: loaded.url,
+              name: loaded.name,
+              width: loaded.width,
+              height: loaded.height,
+              duration: loaded.duration,
+              loop: isLoop,
+              error: null,
+            },
+          };
+        }),
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Could not decode video file';
+      set({
+        nodes: get().nodes.map((node) => {
+          if (node.id !== nodeId || node.type !== 'video') return node;
           return {
             ...node,
             data: { ...node.data, error: message },
@@ -635,6 +708,7 @@ export const useGraph = create<GraphStore>((set, get) => ({
     const standIns = picked.map((node): AppNode => {
       const id = pairs.get(node.id)!;
       if (node.type === 'image') shareImage(node.id, id);
+      if (node.type === 'video') shareVideo(node.id, id);
       identityAliases.set(id, node.id);
       return {
         ...node,
@@ -673,6 +747,7 @@ export const useGraph = create<GraphStore>((set, get) => ({
       swap.set(original, standIn);
       swap.set(standIn, original);
       swapImages(original, standIn);
+      swapVideos(original, standIn);
       identityAliases.delete(standIn);
     }
     const rename = (id: string): string => swap.get(id) ?? id;
@@ -702,10 +777,14 @@ export const useGraph = create<GraphStore>((set, get) => ({
     if (picked.length === 0) return false;
 
     if (clipboard) {
-      for (const node of clipboard.nodes) dropImage(CLIPBOARD_PREFIX + node.id);
+      for (const node of clipboard.nodes) {
+        dropImage(CLIPBOARD_PREFIX + node.id);
+        dropVideo(CLIPBOARD_PREFIX + node.id);
+      }
     }
     for (const node of picked) {
       if (node.type === 'image') shareImage(node.id, CLIPBOARD_PREFIX + node.id);
+      if (node.type === 'video') shareVideo(node.id, CLIPBOARD_PREFIX + node.id);
     }
     const ids = new Set(picked.map((node) => node.id));
     clipboard = {
@@ -748,7 +827,10 @@ export const useGraph = create<GraphStore>((set, get) => ({
     // leaving the chain broken.
     get().detachFromChain(ids);
     const gone = new Set(ids);
-    for (const id of gone) dropImage(id);
+    for (const id of gone) {
+      dropImage(id);
+      dropVideo(id);
+    }
     set({
       nodes: get().nodes.filter((node) => !gone.has(node.id)),
       edges: get().edges.filter((edge) => !gone.has(edge.source) && !gone.has(edge.target)),

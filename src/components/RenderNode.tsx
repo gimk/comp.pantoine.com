@@ -9,6 +9,7 @@ import {
   type RenderNodeData,
 } from '../state/graph';
 import { getImage } from '../engine/imageStore';
+import { getVideo } from '../engine/videoStore';
 import { clockSeconds } from '../engine/clock';
 import { NumberField, Slider } from './controlPrimitives';
 import {
@@ -40,7 +41,8 @@ export const RenderNode: React.FC<NodeProps<Node<RenderNodeData, 'render'>>> = (
   const setRenderData = useGraph((state) => state.setRenderData);
 
   const chain = resolveChain(nodes, edges, id);
-  const primaryImage = chain ? getImage(chain.sourceNodeId) : undefined;
+  const primaryVideo = chain ? getVideo(chain.sourceNodeId) : undefined;
+  const primarySource = chain ? getImage(chain.sourceNodeId) ?? primaryVideo : undefined;
 
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -55,8 +57,14 @@ export const RenderNode: React.FC<NodeProps<Node<RenderNodeData, 'render'>>> = (
     update({ time: Math.round(clockSeconds() * 100) / 100 });
   }, [update]);
 
-  const outputWidth = primaryImage ? Math.max(1, Math.round(primaryImage.width * data.scale)) : 0;
-  const outputHeight = primaryImage ? Math.max(1, Math.round(primaryImage.height * data.scale)) : 0;
+  const useFullVideo = useCallback(() => {
+    if (primaryVideo && primaryVideo.duration > 0) {
+      update({ time: 0, duration: Math.round(primaryVideo.duration * 100) / 100 });
+    }
+  }, [primaryVideo, update]);
+
+  const outputWidth = primarySource ? Math.max(1, Math.round(primarySource.width * data.scale)) : 0;
+  const outputHeight = primarySource ? Math.max(1, Math.round(primarySource.height * data.scale)) : 0;
 
   const cancelRender = useCallback(() => {
     if (abortControllerRef.current) {
@@ -70,7 +78,7 @@ export const RenderNode: React.FC<NodeProps<Node<RenderNodeData, 'render'>>> = (
   }, [update]);
 
   const handleRender = useCallback(async () => {
-    if (!chain || !primaryImage || data.rendering) return;
+    if (!chain || !primarySource || data.rendering) return;
 
     // Revoke old URL if existing to free memory
     if (data.renderedUrl) {
@@ -131,7 +139,7 @@ export const RenderNode: React.FC<NodeProps<Node<RenderNodeData, 'render'>>> = (
     } finally {
       abortControllerRef.current = null;
     }
-  }, [chain, data, id, outputHeight, outputWidth, primaryImage, update]);
+  }, [chain, data, id, outputHeight, outputWidth, primarySource, update]);
 
   // Clean up object URL on unmount
   useEffect(() => {
@@ -161,7 +169,7 @@ export const RenderNode: React.FC<NodeProps<Node<RenderNodeData, 'render'>>> = (
           className="render-info"
           style={{ marginLeft: 'auto', textTransform: 'none', fontWeight: 400 }}
         >
-          {primaryImage ? `${outputWidth} × ${outputHeight}` : '—'}
+          {primarySource ? `${outputWidth} × ${outputHeight}` : '—'}
         </span>
       </div>
 
@@ -250,13 +258,23 @@ export const RenderNode: React.FC<NodeProps<Node<RenderNodeData, 'render'>>> = (
               >
                 Current
               </button>
+              {primaryVideo && (
+                <button
+                  type="button"
+                  className="export-now-btn nodrag"
+                  onClick={useFullVideo}
+                  title="Match full duration of upstream video"
+                >
+                  Full
+                </button>
+              )}
             </div>
             <Slider
               label="Length (s)"
               value={data.duration}
               defaultValue={2}
               min={0.2}
-              max={10}
+              max={Math.max(10, primaryVideo?.duration ? Math.min(30, Math.ceil(primaryVideo.duration)) : 10)}
               step={0.2}
               onChange={(val) => update({ duration: val })}
             />
@@ -298,13 +316,23 @@ export const RenderNode: React.FC<NodeProps<Node<RenderNodeData, 'render'>>> = (
               >
                 Current
               </button>
+              {primaryVideo && (
+                <button
+                  type="button"
+                  className="export-now-btn nodrag"
+                  onClick={useFullVideo}
+                  title="Match full duration of upstream video"
+                >
+                  Full
+                </button>
+              )}
             </div>
             <Slider
               label="Length (s)"
               value={data.duration}
               defaultValue={3}
               min={0.5}
-              max={30}
+              max={Math.max(30, primaryVideo?.duration ? Math.ceil(primaryVideo.duration) : 30)}
               step={0.5}
               onChange={(val) => update({ duration: val })}
             />
@@ -369,10 +397,10 @@ export const RenderNode: React.FC<NodeProps<Node<RenderNodeData, 'render'>>> = (
           type="button"
           className="render-action-btn nodrag"
           onClick={handleRender}
-          disabled={!chain || !primaryImage || data.rendering}
+          disabled={!chain || !primarySource || data.rendering}
           title={
-            !chain || !primaryImage
-              ? 'Connect an image chain to render'
+            !chain || !primarySource
+              ? 'Connect an image or video chain to render'
               : data.rendering
                 ? 'Rendering in progress…'
                 : 'Bake media file asset'

@@ -15,6 +15,7 @@
  */
 import type { Edge } from '@xyflow/react';
 import { dropImage, getImage, shareImage } from '../engine/imageStore';
+import { dropVideo, getVideo, shareVideo } from '../engine/videoStore';
 import type { AppNode } from './graph';
 import { serializeGraph } from './document';
 import { isDragging, onDragEnd, useGraph } from './store';
@@ -29,38 +30,48 @@ type Snapshot = {
   key: string;
   /** Node id to the image-store key this snapshot holds that node's image under. */
   images: Map<string, string>;
+  /** Node id to the video-store key this snapshot holds that node's video under. */
+  videos: Map<string, string>;
 };
 
 let snapshotCounter = 0;
 
 /*
- * The saved form, plus each image's source: loading a different picture
+ * The saved form, plus each image's/video's source: loading a different picture
  * into a node changes neither its name slot nor anything else serialized
  * when the file happens to share a name, but it is still an edit.
  */
 const documentKey = (nodes: AppNode[], edges: Edge[]): string =>
   JSON.stringify(serializeGraph(nodes, edges)) +
-  nodes.map((node) => (node.type === 'image' ? node.data.src ?? '' : '')).join('|');
+  nodes.map((node) => (node.type === 'image' || node.type === 'video' ? node.data.src ?? '' : '')).join('|');
 
 const take = (nodes: AppNode[], edges: Edge[]): Snapshot => {
   snapshotCounter += 1;
   const images = new Map<string, string>();
+  const videos = new Map<string, string>();
   for (const node of nodes) {
-    if (node.type !== 'image' || !getImage(node.id)) continue;
-    const key = 'history:' + snapshotCounter + ':' + node.id;
-    shareImage(node.id, key);
-    images.set(node.id, key);
+    if (node.type === 'image' && getImage(node.id)) {
+      const key = 'history:img:' + snapshotCounter + ':' + node.id;
+      shareImage(node.id, key);
+      images.set(node.id, key);
+    } else if (node.type === 'video' && getVideo(node.id)) {
+      const key = 'history:vid:' + snapshotCounter + ':' + node.id;
+      shareVideo(node.id, key);
+      videos.set(node.id, key);
+    }
   }
   return {
     nodes: structuredClone(nodes),
     edges: structuredClone(edges),
     key: documentKey(nodes, edges),
     images,
+    videos,
   };
 };
 
 const release = (snapshot: Snapshot): void => {
   for (const key of snapshot.images.values()) dropImage(key);
+  for (const key of snapshot.videos.values()) dropVideo(key);
 };
 
 const initial = useGraph.getState();
@@ -114,12 +125,18 @@ const restore = (snapshot: Snapshot): void => {
 
   for (const node of live) {
     if (node.type === 'image' && !kept.has(node.id)) dropImage(node.id);
+    if (node.type === 'video' && !kept.has(node.id)) dropVideo(node.id);
   }
   for (const node of snapshot.nodes) {
-    if (node.type !== 'image') continue;
-    const held = snapshot.images.get(node.id);
-    if (held) shareImage(held, node.id);
-    else dropImage(node.id);
+    if (node.type === 'image') {
+      const held = snapshot.images.get(node.id);
+      if (held) shareImage(held, node.id);
+      else dropImage(node.id);
+    } else if (node.type === 'video') {
+      const held = snapshot.videos.get(node.id);
+      if (held) shareVideo(held, node.id);
+      else dropVideo(node.id);
+    }
   }
 
   restoring = true;
