@@ -12,6 +12,7 @@ import { displace } from './modules/displace';
 import { dither } from './modules/dither';
 import { dropouts } from './modules/dropouts';
 import { echo } from './modules/echo';
+import { flames } from './modules/flames';
 import { edgeDetect } from './modules/edgeDetect';
 import { gradientMap } from './modules/gradientMap';
 import { grain } from './modules/grain';
@@ -108,6 +109,7 @@ export const registry: EffectDef[] = [
   // Temporal
   trails,
   echo,
+  flames,
 
   // Composite
   blend,

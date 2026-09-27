@@ -93,6 +93,7 @@ void main() {
 type CompiledProgram = {
   program: WebGLProgram;
   uniforms: UniformCache;
+  source?: string;
 };
 
 /** Push one param to the GPU as whatever type its kind declared. */
@@ -198,10 +199,14 @@ export class Pipeline {
 
   private compile(key: string, source: string): CompiledProgram {
     const existing = this.programs.get(key);
-    if (existing) return existing;
+    if (existing && existing.source === source) return existing;
+    if (existing) {
+      this.gl.deleteProgram(existing.program);
+    }
     const compiled: CompiledProgram = {
       program: createProgram(this.gl, source),
       uniforms: new Map(),
+      source,
     };
     this.programs.set(key, compiled);
     return compiled;
@@ -390,7 +395,7 @@ export class Pipeline {
     // effect sees the same modulated value.
     const values = specs.map((spec) => {
       const modulation = pass.modulation[spec.key];
-      const base = pass.params[spec.key];
+      const base = pass.params[spec.key] ?? spec.default;
       const val = modulation ? modulatedValue(spec, base, modulation, request.time) : base;
 
       if (isPhasedParam(spec) && typeof val === 'number') {

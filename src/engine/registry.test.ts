@@ -35,6 +35,7 @@ describe('effect registry and module definitions', () => {
       'ruttEtra',
       'velocityMod',
       'particleFlow',
+      'flames',
     ];
 
     for (const id of expectedNewModules) {
