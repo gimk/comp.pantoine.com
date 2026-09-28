@@ -40,12 +40,13 @@
   /* A link that cannot carry what reaches it: a field into a single-value port. */
   --port-invalid: #d6453a;
 
-  /* The glass itself: a milky white fill over a bright top edge. Kept well
-     below opaque on purpose -- on a flat ground the blur only shows where
-     something passes behind a surface, so the fill has to stay thin enough
-     for the dot grid, the wires and the nodes to come through. */
-  --glass-fill: rgba(255, 255, 255, 0.45);
-  --glass-fill-strong: rgba(255, 255, 255, 0.58);
+  /* The glass itself: a milky white fill over a bright top edge. Near-opaque
+     rather than thin: every surface carries text, and a Background can put a
+     dark picture behind them, which turned a thinner sheet mid-grey and the
+     secondary labels with it. The blur still shows at the edges and through
+     the remaining fifth. */
+  --glass-fill: rgba(255, 255, 255, 0.82);
+  --glass-fill-strong: rgba(255, 255, 255, 0.9);
   --glass-border: rgba(255, 255, 255, 0.8);
   --glass-blur: blur(24px) saturate(170%) brightness(1.05);
   /* Bright catchlight along the top edge and a softer one along the bottom,
@@ -205,13 +206,15 @@ textarea,
   transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
 }
 
+/* On a near-white sheet a white wash would not show, so hover is a tint of
+   ink and the open button is lifted to full white instead. */
 .toolbar-button:hover {
-  background: rgba(255, 255, 255, 0.7);
+  background: rgba(23, 23, 26, 0.07);
   color: var(--text-primary);
 }
 
 .toolbar-button.is-active {
-  background: rgba(255, 255, 255, 0.85);
+  background: #ffffff;
   border-color: var(--hairline);
   color: var(--text-primary);
 }
@@ -330,7 +333,7 @@ textarea,
 }
 
 .transport-button:hover {
-  background: rgba(255, 255, 255, 0.75);
+  background: rgba(23, 23, 26, 0.07);
   color: var(--text-primary);
 }
 
@@ -638,16 +641,15 @@ textarea,
 /* --------------------------------------------------------------------------
    Nodes
 
-   Same glass as the panels, but near-opaque: a card is read, not looked
-   through, and over a dark picture the thinner fill went mid-grey and took
-   the secondary labels with it. The faint grey is darkened to match, since
-   even the firmer sheet still dims a little over black.
+   Same glass as the panels. The faint grey is darkened inside a card, since
+   it carries the most small labels and even the firmer sheet still dims a
+   little over a black picture.
    -------------------------------------------------------------------------- */
 
 .node {
   --text-dim: #6e6e77;
   width: 196px;
-  background: rgba(255, 255, 255, 0.82);
+  background: var(--glass-fill);
   -webkit-backdrop-filter: var(--glass-blur);
   backdrop-filter: var(--glass-blur);
   border: 1px solid var(--glass-border);
@@ -1435,15 +1437,6 @@ textarea,
   border: 0;
   background: none;
   cursor: pointer;
-}
-
-/* Menus are read, not looked through: the plain glass fill lets a dark
-   picture turn the sheet mid-grey and the secondary labels vanish into it,
-   so the floating lists take a near-opaque fill. */
-.toolbar-menu.glass,
-.quick-add-panel.glass,
-.quick-add-sub.glass {
-  background: rgba(255, 255, 255, 0.82);
 }
 
 .toolbar-menu-group {
