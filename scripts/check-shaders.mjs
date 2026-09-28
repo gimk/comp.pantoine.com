@@ -72,9 +72,12 @@ const loadRegistry = async (dir) => {
   await build({
     stdin: {
       contents: [
-        "export { PRESENT_FRAGMENT, IMPORT_FRAGMENT, HISTORY_FRAGMENT } from './src/engine/pipeline.ts';",
+        "export { PRESENT_FRAGMENT, IMPORT_FRAGMENT, HISTORY_FRAGMENT, FILL_FRAGMENT } from './src/engine/pipeline.ts';",
         "export { PARTICLE_PROGRAMS } from './src/engine/particleSim.ts';",
         "export { VERTEX_SOURCE } from './src/engine/gl.ts';",
+        "export { modulatorRegistry, fieldOperatorBody } from './src/engine/modulators.ts';",
+        "export { STDLIB } from './src/engine/stdlib.ts';",
+        "export { prelude } from './src/engine/effects.ts';",
       ].join('\n'),
       resolveDir: process.cwd(),
       loader: 'ts',
@@ -98,6 +101,7 @@ const internalShaders = (internal) => {
     ['__present__', internal.PRESENT_FRAGMENT],
     ['__import__', internal.IMPORT_FRAGMENT],
     ['__history__', internal.HISTORY_FRAGMENT],
+    ['__fill__', internal.FILL_FRAGMENT],
     ['__vertex__', internal.VERTEX_SOURCE],
   ];
   for (const [name, [vertex, fragment]] of Object.entries(internal.PARTICLE_PROGRAMS)) {
@@ -127,6 +131,28 @@ try {
         console.error(`FAIL  ${label}  ${error.message}`);
       }
     });
+  }
+  // Every module again with each param that can take a field wired to
+  // one, so the per-pixel reads are checked for every param kind.
+  const { acceptsField, paramsOf } = effects;
+  for (const def of registry) {
+    const fields = paramsOf(def).filter((spec) => acceptsField(def, spec)).map((spec) => spec.key);
+    if (fields.length === 0) continue;
+    passesOf(def).forEach((_body, index) => {
+      const label = `${def.id}#${index}|fields`;
+      try {
+        sources.push([label, buildFragmentSource(def, index, fields)]);
+      } catch (error) {
+        failures += 1;
+        console.error(`FAIL  ${label}  ${error.message}`);
+      }
+    });
+  }
+  // Math and Map Range, per pixel.
+  for (const def of internal.modulatorRegistry) {
+    if (!def.field) continue;
+    const { uniforms, body } = internal.fieldOperatorBody(def);
+    sources.push([`__field__${def.id}`, `${internal.prelude}${internal.STDLIB}\n${uniforms}\n\nvoid main() {\n${body}\n}\n`]);
   }
   sources.push(...internalShaders(internal));
 

@@ -1,18 +1,19 @@
 import type { Edge, Node } from '@xyflow/react';
 import { getEffect } from '../engine/registry';
 import { getGenerator } from '../engine/generators';
-import { inputsOf, isAnimated, paramsOf, type ParamValue } from '../engine/effects';
+import { acceptsField, inputsOf, isAnimated, paramsOf, type EffectDef, type ParamValue } from '../engine/effects';
 import {
   getModulator,
-  isModulatable,
   modulatorPortsOf,
   modulatedValue,
+  signalBounds,
   signalIsMoving,
+  type Interval,
   type Signal,
 } from '../engine/modulators';
 import { getImage } from '../engine/imageStore';
 import { getVideo } from '../engine/videoStore';
-import type { Pass, RenderPlan, Step } from '../engine/pipeline';
+import type { FieldBinding, FieldPort, Pass, RenderPlan, Step } from '../engine/pipeline';
 
 export type ImageNodeData = {
   /** Object URL for the thumbnail, or null while the node is still empty. */
@@ -256,6 +257,90 @@ export const carriesRenderAsset = (nodes: AppNode[], edges: Edge[], nodeId: stri
   return isPassThrough(node) && findUpstreamRenderNode(nodes, edges, nodeId) !== null;
 };
 
+/** The frame a fill sets when nothing else in the chain does: a fresh generator's. */
+export const FILL_SIZE = { width: 1280, height: 720 } as const;
+
+const effectDefOf = (node: AppNode): EffectDef | undefined =>
+  node.type === 'effect'
+    ? getEffect(node.data.effectId)
+    : node.type === 'generator'
+      ? getGenerator(node.data.generatorId) ?? getEffect(node.data.generatorId)
+      : undefined;
+
+/**
+ * Whether this port takes a picture as a field -- a diamond socket, in
+ * Blender's terms. A module's params mostly do (see `acceptsField`); so do
+ * the ports of a Math or Map Range, which then work per pixel. A source
+ * modulator's ports and a video's speed are round: they need one number.
+ */
+export const portTakesField = (node: AppNode | undefined, handle: string | null | undefined): boolean => {
+  if (!node || !isParamPort(handle)) return false;
+  const key = handle.slice(PARAM_PORT_PREFIX.length);
+  if (node.type === 'modulator') {
+    const def = getModulator(node.data.modulatorId);
+    return !!def?.field && modulatorPortsOf(def).includes(key);
+  }
+  const def = effectDefOf(node);
+  const spec = def && paramsOf(def).find((candidate) => candidate.key === key);
+  return !!def && !!spec && acceptsField(def, spec);
+};
+
+/**
+ * Whether what comes out of a node is a field: a picture, or a Math or Map
+ * Range that a picture reaches through one of its ports -- so its output
+ * is a value per pixel. This is how a Blender socket turns into a diamond:
+ * decided by what is wired upstream, not by the node.
+ */
+const isFieldSource = (
+  byId: Map<string, AppNode>,
+  sourceOf: PortIndex,
+  nodeId: string | undefined,
+  seen: Set<string> = new Set(),
+): boolean => {
+  if (nodeId === undefined || seen.has(nodeId)) return false;
+  const node = byId.get(nodeId);
+  if (!node || node.type === 'export') return false;
+  if (node.type !== 'modulator') return true;
+  const def = getModulator(node.data.modulatorId);
+  if (!def?.field) return false;
+  seen.add(nodeId);
+  const field = modulatorPortsOf(def).some((key) => isFieldSource(byId, sourceOf, sourceOf(nodeId, paramPort(key)), seen));
+  seen.delete(nodeId);
+  return field;
+};
+
+/** Whether a modulator node's output is currently a field rather than a single number. */
+export const outputIsField = (nodes: AppNode[], edges: Edge[], nodeId: string): boolean => {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  return byId.get(nodeId)?.type === 'modulator' && isFieldSource(byId, indexPorts(edges), nodeId);
+};
+
+/**
+ * What a wire carries, for its colour: a picture, a single number, a
+ * field (a picture going into a param, or out of a per-pixel Math), a
+ * baked file -- or nothing usable, when a field reaches a port that needs
+ * one number. Blender draws that last one red and leaves it in place, so
+ * the wiring survives while it is fixed; so does this.
+ */
+export type WireKind = 'picture' | 'signal' | 'field' | 'render' | 'invalid';
+
+export const wireKind = (
+  nodes: AppNode[],
+  edges: Edge[],
+  edge: Pick<Edge, 'source' | 'target' | 'sourceHandle' | 'targetHandle'>,
+): WireKind => {
+  if (isRenderPort(edge.targetHandle) || isRenderPort(edge.sourceHandle)) return 'render';
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const source = byId.get(edge.source);
+  const field = isFieldSource(byId, indexPorts(edges), edge.source);
+  if (isParamPort(edge.targetHandle)) {
+    if (!field) return 'signal';
+    return portTakesField(byId.get(edge.target), edge.targetHandle) ? 'field' : 'invalid';
+  }
+  if (source?.type === 'modulator') return field ? 'field' : 'signal';
+  return carriesRenderAsset(nodes, edges, edge.source) ? 'render' : 'picture';
+};
+
 /** Whether two ends name the same input port. Null and undefined both mean the main one. */
 export const samePort = (a: string | null | undefined, b: string | null | undefined): boolean =>
   (a ?? null) === (b ?? null);
@@ -277,7 +362,9 @@ export const hasTargetPort = (node: AppNode, handle: string | null | undefined):
   }
   if (node.type === 'modulator') {
     const def = getModulator(node.data.modulatorId);
-    return !!def && isParamPort(handle) && modulatorPortsOf(def).includes(handle.slice(PARAM_PORT_PREFIX.length));
+    if (!def) return false;
+    if (!handle) return !!def.picture;
+    return isParamPort(handle) && modulatorPortsOf(def).includes(handle.slice(PARAM_PORT_PREFIX.length));
   }
   if (node.type === 'video') {
     if (isParamPort(handle)) {
@@ -291,7 +378,7 @@ export const hasTargetPort = (node: AppNode, handle: string | null | undefined):
     if (!def) return false;
     if (isParamPort(handle)) {
       const key = handle.slice(PARAM_PORT_PREFIX.length);
-      return paramsOf(def).some((spec) => spec.key === key && isModulatable(spec));
+      return paramsOf(def).some((spec) => spec.key === key);
     }
     return false;
   }
@@ -301,7 +388,7 @@ export const hasTargetPort = (node: AppNode, handle: string | null | undefined):
   if (!def) return false;
   if (isParamPort(handle)) {
     const key = handle.slice(PARAM_PORT_PREFIX.length);
-    return paramsOf(def).some((spec) => spec.key === key && isModulatable(spec));
+    return paramsOf(def).some((spec) => spec.key === key);
   }
   return inputsOf(def).some((input) => input.key === handle);
 };
@@ -356,12 +443,18 @@ const indexPorts = (edges: Edge[]): PortIndex => {
  * it closes: the port that would complete it is treated as unwired. Unlike
  * a loop in the picture path, there is still a sensible answer without it,
  * so there is no reason to blank the viewer.
+ *
+ * A field on a port -- a picture, or a Math a picture reaches -- is not a
+ * number, so it counts as unwired here; the wire shows red. `onStatistic`
+ * is told about every Image Statistic the signal reads, so the renderer
+ * can measure its picture before the signal is needed.
  */
 const signalFrom = (
   byId: Map<string, AppNode>,
   sourceOf: PortIndex,
   nodeId: string | undefined,
   visiting: Set<string>,
+  onStatistic?: (nodeId: string) => void,
 ): Signal | null => {
   if (nodeId === undefined || visiting.has(nodeId)) return null;
   const node = byId.get(nodeId);
@@ -372,12 +465,16 @@ const signalFrom = (
   visiting.add(nodeId);
   const inputs: Record<string, Signal> = {};
   for (const key of modulatorPortsOf(def)) {
-    const input = signalFrom(byId, sourceOf, sourceOf(nodeId, paramPort(key)), visiting);
+    const source = sourceOf(nodeId, paramPort(key));
+    if (isFieldSource(byId, sourceOf, source)) continue;
+    const input = signalFrom(byId, sourceOf, source, visiting, onStatistic);
     if (input) inputs[key] = input;
   }
   visiting.delete(nodeId);
 
-  return { def, params: node.data.params, seed: seedFor(identityOf(node.id)), inputs };
+  const identity = identityOf(node.id);
+  if (def.picture) onStatistic?.(nodeId);
+  return { def, params: node.data.params, seed: seedFor(identity), inputs, ...(def.picture ? { nodeId: identity } : {}) };
 };
 
 /** What one modulator node puts out, for its card to draw. */
@@ -462,14 +559,90 @@ export const resolveChain = (
   const visiting = new Set<string>();
   const videoModulation = new Map<string, Record<string, Signal>>();
 
-  const modulationFor = (nodeId: string, specs: ReturnType<typeof paramsOf>): Record<string, Signal> => {
+  /*
+   * Image Statistic nodes read by any signal in this chain. Each is
+   * measured once, as a step placed before whatever reads it -- the signal
+   * is resolved while its reader is being visited, before the reader's own
+   * step is pushed -- so a knob follows its picture on the same frame.
+   */
+  const measured = new Set<string>();
+  const measure = (statId: string): void => {
+    if (measured.has(statId)) return;
+    measured.add(statId);
+    const input = visit(sourceOf(statId, null));
+    steps.push({ kind: 'statistic', nodeId: identityOf(statId), input });
+  };
+  const signalAt = (nodeId: string | undefined): Signal | null =>
+    signalFrom(byId, sourceOf, nodeId, new Set(), measure);
+  const isField = (nodeId: string | undefined): boolean => isFieldSource(byId, sourceOf, nodeId);
+
+  /**
+   * What is wired into a module's params: signals by key, and the pictures
+   * of any fields. A field into a param that cannot take one is left out
+   * -- the param keeps its value, and the wire shows red.
+   */
+  const wiringFor = (
+    nodeId: string,
+    def: EffectDef,
+  ): { modulation: Record<string, Signal>; fields: FieldBinding[] } => {
     const modulation: Record<string, Signal> = {};
-    for (const spec of specs) {
-      if (!isModulatable(spec)) continue;
-      const signal = signalFrom(byId, sourceOf, sourceOf(nodeId, paramPort(spec.key)), new Set());
+    const fields: FieldBinding[] = [];
+    for (const spec of paramsOf(def)) {
+      const source = sourceOf(nodeId, paramPort(spec.key));
+      if (source === undefined) continue;
+      if (isField(source)) {
+        if (!acceptsField(def, spec)) continue;
+        const step = visit(source);
+        if (step !== null) fields.push({ key: spec.key, step });
+        continue;
+      }
+      const signal = signalAt(source);
       if (signal) modulation[spec.key] = signal;
     }
-    return modulation;
+    return { modulation, fields };
+  };
+
+  /**
+   * The range a field can take, for Map Range's Auto range: 0..1 for a
+   * picture, and through a per-pixel Math, what the Math makes of its
+   * inputs' ranges. The same interval arithmetic as for a signal.
+   */
+  const fieldBounds = (nodeId: string, seen: Set<string> = new Set()): Interval | null => {
+    const node = byId.get(nodeId);
+    if (node?.type !== 'modulator') return [0, 1];
+    const def = getModulator(node.data.modulatorId);
+    if (!def || seen.has(nodeId)) return null;
+    seen.add(nodeId);
+    const { params, ranges } = fieldOpInputs(nodeId, def, seen);
+    return def.bounds(ranges, params);
+  };
+
+  /** A field operator's params with derived ones worked out, and each port's range. */
+  const fieldOpInputs = (nodeId: string, def: NonNullable<ReturnType<typeof getModulator>>, seen?: Set<string>) => {
+    const node = byId.get(nodeId) as Node<ModulatorNodeData, 'modulator'>;
+    const inputRanges: Record<string, Interval | null> = {};
+    for (const key of modulatorPortsOf(def)) {
+      const source = sourceOf(nodeId, paramPort(key));
+      if (source === undefined) continue;
+      if (isField(source)) inputRanges[key] = fieldBounds(source, seen ?? new Set([nodeId]));
+      else {
+        const signal = signalFrom(byId, sourceOf, source, new Set());
+        if (signal) inputRanges[key] = signalBounds(signal);
+      }
+    }
+    const derived = def.derive ? def.derive(node.data.params, inputRanges) : {};
+    for (const key of Object.keys(derived)) if (sourceOf(nodeId, paramPort(key)) !== undefined) delete derived[key];
+    const params: Record<string, ParamValue> = { ...node.data.params, ...derived };
+    const ranges: Record<string, Interval | null> = {};
+    for (const spec of def.params) {
+      if (!modulatorPortsOf(def).includes(spec.key)) continue;
+      if (spec.key in inputRanges) ranges[spec.key] = inputRanges[spec.key];
+      else {
+        const v = typeof params[spec.key] === 'number' ? (params[spec.key] as number) : 0;
+        ranges[spec.key] = [v, v];
+      }
+    }
+    return { params, ranges };
   };
 
   /** The step index for a node's picture, or null if it cannot make one. */
@@ -490,7 +663,7 @@ export const resolveChain = (
       if (getVideo(node.id)) {
         index = steps.push({ kind: 'video', nodeId: node.id }) - 1;
         const vMod: Record<string, Signal> = {};
-        const speedSignal = signalFrom(byId, sourceOf, sourceOf(node.id, paramPort('speed')), new Set());
+        const speedSignal = signalAt(sourceOf(node.id, paramPort('speed')));
         if (speedSignal) vMod.speed = speedSignal;
         if (Object.keys(vMod).length > 0) {
           videoModulation.set(node.id, vMod);
@@ -500,21 +673,46 @@ export const resolveChain = (
       const def = getGenerator(node.data.generatorId) ?? getEffect(node.data.generatorId);
       if (def) {
         const identity = identityOf(node.id);
+        const { modulation, fields } = wiringFor(node.id, def);
         const pass: Pass = {
           nodeId: identity,
           seed: seedFor(identity),
           def,
           params: node.data.params,
-          modulation: modulationFor(node.id, paramsOf(def)),
+          modulation,
         };
         index =
           steps.push({
             kind: 'generator',
             nodeId: node.id,
             pass,
-            width: node.data.width || 1280,
-            height: node.data.height || 720,
+            width: node.data.width || FILL_SIZE.width,
+            height: node.data.height || FILL_SIZE.height,
+            fields,
           }) - 1;
+      }
+    } else if (node?.type === 'modulator') {
+      // A modulator wired where a picture goes: a per-pixel Math if a
+      // picture reaches it, and otherwise its one number as a flat grey.
+      const def = getModulator(node.data.modulatorId);
+      if (def?.field && isField(node.id)) {
+        const ports: Record<string, FieldPort> = {};
+        for (const key of modulatorPortsOf(def)) {
+          const source = sourceOf(node.id, paramPort(key));
+          if (source === undefined) continue;
+          if (isField(source)) {
+            const step = visit(source);
+            if (step !== null) ports[key] = { step };
+          } else {
+            const signal = signalAt(source);
+            if (signal) ports[key] = { signal };
+          }
+        }
+        const { params } = fieldOpInputs(node.id, def);
+        index = steps.push({ kind: 'fieldOp', nodeId: identityOf(node.id), def, params, ports }) - 1;
+      } else if (def) {
+        const signal = signalAt(node.id);
+        if (signal) index = steps.push({ kind: 'fill', nodeId: identityOf(node.id), signal }) - 1;
       }
     } else if (
       node?.type === 'renderOutput' ||
@@ -532,14 +730,15 @@ export const resolveChain = (
       if (def && input !== null) {
         const extras = inputsOf(def).map((spec) => visit(sourceOf(node.id, spec.key)));
         const identity = identityOf(node.id);
+        const { modulation, fields } = wiringFor(node.id, def);
         const pass: Pass = {
           nodeId: identity,
           seed: seedFor(identity),
           def,
           params: node.data.params,
-          modulation: modulationFor(node.id, paramsOf(def)),
+          modulation,
         };
-        index = steps.push({ kind: 'effect', pass, input, extras }) - 1;
+        index = steps.push({ kind: 'effect', pass, input, extras, fields }) - 1;
       }
     }
 
@@ -557,9 +756,17 @@ export const resolveChain = (
   }
   if (outputIndex === null) return null;
 
-  // Follow main inputs back up to the image, video, or generator that sets the frame.
+  // Follow main inputs back up to the image, video, or generator that sets
+  // the frame -- through a per-pixel Math, by the first picture on its ports.
   let head = steps[outputIndex];
-  while (head.kind === 'effect') head = steps[head.input];
+  while (head.kind === 'effect' || head.kind === 'fieldOp') {
+    if (head.kind === 'effect') head = steps[head.input];
+    else {
+      const first = Object.values(head.ports).find((port): port is { step: number } => 'step' in port);
+      if (!first) break;
+      head = steps[first.step];
+    }
+  }
 
   const passes = steps.flatMap((step) =>
     step.kind === 'effect' || step.kind === 'generator' ? [step.pass] : [],
@@ -579,15 +786,27 @@ export const generatorsForPlan = (plan: RenderPlan): Map<string, { width: number
   for (const step of plan.steps) {
     if (step.kind === 'generator') {
       generators.set(step.nodeId, { width: step.width, height: step.height });
+    } else if (step.kind === 'fill' || step.kind === 'fieldOp') {
+      // Only ever asked for when one heads the chain -- a flat value with
+      // nothing else to take the frame from.
+      generators.set(step.nodeId, { ...FILL_SIZE });
     }
   }
   return generators;
 };
 
+/** Every signal a plan's steps read outside its passes' own modulation. */
+const stepSignals = (step: Step): Signal[] =>
+  step.kind === 'fill'
+    ? [step.signal]
+    : step.kind === 'fieldOp'
+      ? Object.values(step.ports).flatMap((port) => ('signal' in port ? [port.signal] : []))
+      : [];
+
 /** Whether anything in the chain needs a continuous frame loop. */
 export const chainIsAnimated = (chain: ResolvedChain | null): boolean =>
   chain !== null &&
-  (chain.plan.steps.some((step) => step.kind === 'video') ||
+  (chain.plan.steps.some((step) => step.kind === 'video' || stepSignals(step).some(signalIsMoving)) ||
     chain.passes.some((pass) => {
       const params = { ...pass.params };
       for (const [key, signal] of Object.entries(pass.modulation)) {

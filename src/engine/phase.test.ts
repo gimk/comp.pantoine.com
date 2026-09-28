@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PHASE_WRAP, PhaseIntegrator, constantPhase, wrapPhase } from './phase';
+import { PHASE_WRAP, PhaseCarry, PhaseIntegrator, constantPhase, wrapPhase } from './phase';
 
 describe('phase', () => {
   it('is exact for a constant rate, and wraps into [0, PHASE_WRAP)', () => {
@@ -36,5 +36,30 @@ describe('phase', () => {
   it('can integrate without wrapping', () => {
     const phases = new PhaseIntegrator();
     expect(phases.integrate('k', 600, 'a', () => 4, Infinity)).toBeCloseTo(2400, 6);
+  });
+
+  it('carries a phase on from where it was when the rate changes', () => {
+    const carry = new PhaseCarry();
+    // 300 s in at 0.06: phase 18. Nudging to 0.065 must not jump to 19.5.
+    expect(carry.carry('k', 300, 'rate:0.06', constantPhase(300, 0.06))).toBeCloseTo(18, 9);
+    expect(carry.carry('k', 300, 'rate:0.065', constantPhase(300, 0.065))).toBeCloseTo(18, 9);
+    // ...and carries on from there at the new rate.
+    expect(carry.carry('k', 302, 'rate:0.065', constantPhase(302, 0.065))).toBeCloseTo(18.13, 9);
+  });
+
+  it('holds still while paused, however the rate is dragged', () => {
+    const carry = new PhaseCarry();
+    carry.carry('k', 120, 'rate:0.5', constantPhase(120, 0.5));
+    for (const rate of [0.6, 0.9, -0.3, 1]) {
+      expect(carry.carry('k', 120, 'rate:' + rate, constantPhase(120, rate))).toBeCloseTo(60, 9);
+    }
+  });
+
+  it('goes back to the pure function of time on a seek or reset', () => {
+    const carry = new PhaseCarry();
+    carry.carry('k', 300, 'rate:0.06', constantPhase(300, 0.06));
+    carry.carry('k', 300, 'rate:0.1', constantPhase(300, 0.1));
+    // Back to 10 s: exactly what an export starting fresh would draw.
+    expect(carry.carry('k', 10, 'rate:0.1', constantPhase(10, 0.1))).toBeCloseTo(1, 9);
   });
 });

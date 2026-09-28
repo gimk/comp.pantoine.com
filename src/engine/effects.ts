@@ -264,24 +264,86 @@ export const isPhasedParam = (spec: ParamSpec): boolean =>
   spec.kind === 'float' && PHASED_PARAM_KEYS.has(spec.key);
 
 /**
+ * Whether a param can take a picture as well as a single value -- a field,
+ * in Blender's terms, where the knob has a value at every pixel.
+ *
+ * Nearly every param can: the shader reads `u_<key>` wherever it wants the
+ * value, and a field only changes where that value comes from. The ones
+ * that cannot are those the CPU needs as a single number -- a speed that is
+ * integrated into a phase over time, and the particle simulation, whose
+ * knobs drive JavaScript rather than a shader. Their ports stay round, like
+ * a Blender socket that only takes a single value.
+ */
+export const acceptsField = (def: EffectDef, spec: ParamSpec): boolean =>
+  !isPhasedParam(spec) && def.id !== 'particleFlow';
+
+/** The sampler a field-wired param reads its picture from. */
+export const fieldSampler = (key: string): string => `u_${key}_field`;
+
+/** A JS number as a GLSL float literal -- `1` is an int there. */
+export const glslFloat = (value: number): string => {
+  const text = String(value);
+  return /[.eE]/.test(text) ? text : text + '.0';
+};
+
+/**
+ * A picture turned into one param's value at this pixel, the way Blender
+ * converts between socket types: colour to float is luminance, float to
+ * int truncates, float to bool is "above zero", colour to vector takes the
+ * channels as they are. The param's minimum still holds, as it does for a
+ * signal, since it is what keeps an effect out of values that break it.
+ */
+const fieldRead = (spec: ParamSpec): string => {
+  const f = `texture(${fieldSampler(spec.key)}, v_uv)`;
+  switch (spec.kind) {
+    case 'float':
+      return spec.field ? `luma(${f}.rgb)` : `max(luma(${f}.rgb), ${glslFloat(spec.min)})`;
+    case 'int':
+      return `max(int(luma(${f}.rgb)), ${Math.round(spec.min)})`;
+    case 'enum':
+      return `clamp(int(luma(${f}.rgb)), 0, ${spec.options.length - 1})`;
+    case 'bool':
+      return `luma(${f}.rgb) > 0.0`;
+    case 'color':
+      return `${f}.rgb`;
+    case 'vec2':
+      return `max(${f}.rg, vec2(${glslFloat(spec.min)}))`;
+  }
+};
+
+/**
  * Wrap one effect body, plus its params as uniforms, into a full shader.
  *
  * The Mix crossfade is applied on the last pass only -- blending a
  * multi-pass effect against the source at every intermediate step would
  * fade out the work in progress, not the result.
+ *
+ * `fields` names the params wired to a picture. Each becomes a plain
+ * global of the same name, filled from its sampler at the top of `main`,
+ * so the body reads `u_amount` exactly as it always did and no module has
+ * to know a field exists. That is what lets every module take one.
  */
-export const buildFragmentSource = (def: EffectDef, passIndex: number): string => {
+export const buildFragmentSource = (def: EffectDef, passIndex: number, fields: readonly string[] = []): string => {
   assertParamsAreSound(def);
 
   const phaseUniforms = paramsOf(def)
     .filter(isPhasedParam)
     .map((p) => `uniform float u_phase_${p.key};`);
 
+  const fielded = new Set(fields);
+  const fieldSpecs = paramsOf(def).filter((spec) => fielded.has(spec.key) && acceptsField(def, spec));
+
   const uniforms = [
     ...inputsOf(def).map((input) => `uniform sampler2D u_${input.key};`),
-    ...paramsOf(def).map((p) => `uniform ${GLSL_TYPE[p.kind]} u_${p.key};`),
+    ...paramsOf(def).map((p) =>
+      fieldSpecs.includes(p)
+        ? `uniform sampler2D ${fieldSampler(p.key)};\n${GLSL_TYPE[p.kind]} u_${p.key};`
+        : `uniform ${GLSL_TYPE[p.kind]} u_${p.key};`,
+    ),
     ...phaseUniforms,
   ].join('\n');
+
+  const reads = fieldSpecs.map((spec) => `  u_${spec.key} = ${fieldRead(spec)};\n`).join('');
 
   const bodies = passesOf(def);
   const isLast = passIndex === bodies.length - 1;
@@ -290,7 +352,7 @@ export const buildFragmentSource = (def: EffectDef, passIndex: number): string =
       ? `  vec4 mixInput = texture(u_orig, v_uv);\n${bodies[passIndex]}\n  fragColor = mix(mixInput, fragColor, u_mix);`
       : bodies[passIndex];
 
-  return `${prelude}${STDLIB}\n${uniforms}\n\nvoid main() {\n${body}\n}\n`;
+  return `${prelude}${STDLIB}\n${uniforms}\n\nvoid main() {\n${reads}${body}\n}\n`;
 };
 
 /** Starting values for a freshly added node, straight off the spec. */

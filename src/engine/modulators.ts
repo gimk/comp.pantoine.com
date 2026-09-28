@@ -23,7 +23,8 @@
  * so anything can drive anything: a Noise into an LFO's rate, an LFO into a
  * Map Range's output bounds.
  */
-import type { ParamSpec, ParamValue } from './effects';
+import type { ParamSpec, ParamValue, Rgb, Vec2 } from './effects';
+import { STATISTICS, readStatistic } from './statistics';
 
 export type ModulatorDef = {
   id: string;
@@ -35,9 +36,26 @@ export type ModulatorDef = {
    * The output at a given moment. `params` arrive with any wired ports
    * already substituted, so a node never needs to know which of its inputs
    * are connected. `seed` is stable per node, so two random sources do not
-   * wander in step.
+   * wander in step. `nodeId` is for a node whose value the renderer
+   * measures rather than one it can compute -- Image Statistic.
    */
-  sample: (params: Record<string, ParamValue>, time: number, seed: number) => number;
+  sample: (params: Record<string, ParamValue>, time: number, seed: number, nodeId?: string) => number;
+  /**
+   * The same operation, per pixel -- for when a picture arrives on one of
+   * the node's ports and its output becomes a field, as a Blender Math node
+   * does when a texture is plugged into it.
+   *
+   * A GLSL body that assigns `vec3 r`. Every port is a `vec3 p_<key>`,
+   * whether a picture fills it or a single number does, so the maths is
+   * written once, per channel, like Blender's Vector Math. Other params
+   * (modes, toggles) are uniforms `u_<key>` of their GLSL type.
+   */
+  field?: string;
+  /**
+   * Takes a picture on its main input -- a node that measures one rather
+   * than computing from the clock.
+   */
+  picture?: boolean;
   /**
    * Whether the output moves on its own at these settings. A stopped LFO
    * costs nothing; an operator moves only when something feeding it does,
@@ -102,9 +120,11 @@ const AMPLITUDE_OFFSET: ParamSpec[] = [field('amplitude', 'Amplitude', 1), field
 export const modulatorParamsOf = (def: ModulatorDef): ParamSpec[] => def.params;
 
 /**
- * Only continuous knobs take a signal wire. A toggle or a mode switch
- * flickering between states at an LFO's rate is never what anyone meant,
- * and a colour or a point would need a signal per channel to mean anything.
+ * A numeric knob: one that takes a signal as it arrives, shows it on its
+ * slider, and is a port on a modulator. A module's other params take a
+ * wire too, converted as Blender converts between socket types (see
+ * `convertSignal`), but a modulator's modes and toggles stay unwired, as
+ * a Blender Math node's operation is not a socket.
  */
 export const isModulatable = (spec: ParamSpec): spec is Extract<ParamSpec, { kind: 'float' | 'int' }> =>
   spec.kind === 'float' || spec.kind === 'int';
@@ -151,6 +171,17 @@ const valueNoise = (x: number, seed: number): number => {
   return (a + (b - a) * smooth(fract(x))) * 2 - 1;
 };
 
+/**
+ * A re-roll for a random source. The node's own seed already keeps two
+ * sources apart; this picks another draw for the same node without
+ * rewiring it. 0 is the node's own draw, so it changes nothing by default.
+ */
+const SEED_PARAM: ParamSpec = { kind: 'int', key: 'seed', label: 'Seed', min: 0, max: 999, default: 0 };
+
+/** The node's seed moved on by its Seed knob, golden-ratio spaced so neighbours differ. */
+const reseed = (params: Record<string, ParamValue>, seed: number): number =>
+  fract(seed + num(params.seed, 0) * 0.6180339887);
+
 /** Apply a source's Amplitude and Offset to its raw wave. */
 const scaled = (params: Record<string, ParamValue>, wave: number): number =>
   wave * num(params.amplitude, 1) + num(params.offset, 0);
@@ -179,9 +210,11 @@ export const lfo: ModulatorDef = {
     { kind: 'enum', key: 'shape', label: 'Shape', options: [...LFO_SHAPES], default: 0 },
     { kind: 'float', key: 'rate', label: 'Rate (Hz)', min: 0, max: 5, step: 0.01, default: 0.5 },
     { kind: 'float', key: 'phase', label: 'Phase', min: 0, max: 1, step: 0.01, default: 0 },
+    SEED_PARAM,
     ...AMPLITUDE_OFFSET,
   ],
-  sample: (params, time, seed) => {
+  sample: (params, time, nodeSeed) => {
+    const seed = reseed(params, nodeSeed);
     const x = time * num(params.rate, 0) + num(params.phase, 0);
     let wave: number;
     switch (Math.round(num(params.shape, 0))) {
@@ -222,9 +255,11 @@ export const noise: ModulatorDef = {
   params: [
     { kind: 'float', key: 'rate', label: 'Rate (Hz)', min: 0, max: 5, step: 0.01, default: 0.5 },
     { kind: 'int', key: 'octaves', label: 'Octaves', min: 1, max: 6, default: 3 },
+    SEED_PARAM,
     ...AMPLITUDE_OFFSET,
   ],
-  sample: (params, time, seed) => {
+  sample: (params, time, nodeSeed) => {
+    const seed = reseed(params, nodeSeed);
     const octaves = clamp(Math.round(num(params.octaves, 1)), 1, 6);
     let x = time * num(params.rate, 0);
     let sum = 0;
@@ -261,9 +296,11 @@ export const pulse: ModulatorDef = {
     { kind: 'float', key: 'width', label: 'Width', min: 0, max: 1, step: 0.01, default: 0.5 },
     { kind: 'float', key: 'chance', label: 'Chance', min: 0, max: 1, step: 0.01, default: 1 },
     { kind: 'float', key: 'softness', label: 'Softness', min: 0, max: 0.5, step: 0.01, default: 0 },
+    SEED_PARAM,
     ...AMPLITUDE_OFFSET,
   ],
-  sample: (params, time, seed) => {
+  sample: (params, time, nodeSeed) => {
+    const seed = reseed(params, nodeSeed);
     const x = time * num(params.rate, 0);
     const t = fract(x);
     const width = clamp(num(params.width, 0.5), 0, 1);
@@ -364,6 +401,31 @@ export const math: ModulatorDef = {
     }
     return Number.isFinite(out) ? out : 0;
   },
+  // The same operations and the same guards, a channel at a time.
+  field: `  vec3 a = p_a;
+  vec3 b = p_b;
+  vec3 zeroB = vec3(equal(b, vec3(0.0)));
+  vec3 safeB = mix(b, vec3(1.0), zeroB);
+  switch (u_op) {
+    case 1: r = a - b; break;
+    case 2: r = a * b; break;
+    case 3: r = mix(a / safeB, vec3(0.0), zeroB); break;
+    case 4: r = min(a, b); break;
+    case 5: r = max(a, b); break;
+    case 6: {
+      // A negative base only has a real power when the exponent is whole.
+      vec3 whole = vec3(equal(fract(b), vec3(0.0)));
+      vec3 negative = vec3(lessThan(a, vec3(0.0)));
+      vec3 odd = mod(b, 2.0);
+      vec3 magnitude = pow(abs(a), b);
+      r = mix(magnitude, magnitude * (1.0 - 2.0 * odd) * whole, negative);
+      break;
+    }
+    case 7: r = mix(a - safeB * floor(a / safeB), vec3(0.0), zeroB); break;
+    case 8: r = abs(a); break;
+    case 9: r = floor(a + 0.5); break;
+    default: r = a + b;
+  }`,
   moving: () => false,
   /*
    * Interval arithmetic: the output range from the input ranges, exact for
@@ -450,6 +512,16 @@ export const mapRange: ModulatorDef = {
     const toMin = num(params.toMin, 0);
     return toMin + (num(params.toMax, 1) - toMin) * t;
   },
+  field: `  vec3 width = p_fromMax - p_fromMin;
+  vec3 empty = vec3(equal(width, vec3(0.0)));
+  vec3 t = clamp(mix((p_x - p_fromMin) / mix(width, vec3(1.0), empty), vec3(0.0), empty), 0.0, 1.0);
+  if (u_interpolation == 1) {
+    vec3 steps = max(vec3(1.0), floor(p_steps + 0.5));
+    t = min(vec3(1.0), floor(t * (steps + 1.0)) / steps);
+  } else if (u_interpolation == 2) {
+    t = t * t * (3.0 - 2.0 * t);
+  }
+  r = p_toMin + (p_toMax - p_toMin) * t;`,
   moving: () => false,
   // Whatever comes in, the output cannot leave the To range.
   bounds: (ranges) => {
@@ -469,8 +541,31 @@ export const mapRange: ModulatorDef = {
   },
 };
 
+/**
+ * A picture back into a number -- Blender's Attribute Statistic, over
+ * pixels. Wire a video in and its brightness can drive a glitch, so the
+ * picture itself sets how hard it breaks up.
+ *
+ * Measured by the renderer as part of the frame, before anything reading
+ * it is drawn, so a knob it drives follows the picture on the same frame
+ * -- in an export as much as in a viewer. Luminance, as Blender turns a
+ * colour into a float; 0..1 for any ordinary picture.
+ */
+export const statistic: ModulatorDef = {
+  id: 'statistic',
+  label: 'Image Statistic',
+  role: 'operator',
+  picture: true,
+  ports: false,
+  params: [{ kind: 'enum', key: 'statistic', label: 'Statistic', options: [...STATISTICS], default: 0 }],
+  sample: (params, _time, _seed, nodeId) => readStatistic(nodeId, Math.round(num(params.statistic, 0))),
+  // It follows whatever it is measuring, which may be a video playing.
+  moving: () => true,
+  bounds: () => [0, 1],
+};
+
 /** Every modulator the app knows about, in menu order within its role. */
-export const modulatorRegistry: ModulatorDef[] = [lfo, noise, pulse, value, math, mapRange];
+export const modulatorRegistry: ModulatorDef[] = [lfo, noise, pulse, value, math, mapRange, statistic];
 
 const byId = new Map(modulatorRegistry.map((def) => [def.id, def]));
 
@@ -485,6 +580,8 @@ export type Signal = {
   params: Record<string, ParamValue>;
   seed: number;
   inputs: Record<string, Signal>;
+  /** The node it comes from, for a value the renderer measures (Image Statistic). */
+  nodeId?: string;
 };
 
 /**
@@ -577,7 +674,7 @@ export const signalBounds = (signal: Signal): Interval | null => {
 
 /** A signal's value at `time`. */
 export const evaluateSignal = (signal: Signal, time: number): number => {
-  const out = signal.def.sample(effectiveParams(signal, time), time, signal.seed);
+  const out = signal.def.sample(effectiveParams(signal, time), time, signal.seed, signal.nodeId);
   return Number.isFinite(out) ? out : 0;
 };
 
@@ -597,19 +694,102 @@ export const signalKey = (signal: Signal): unknown => [
   signal.def.id,
   signal.params,
   signal.seed,
+  signal.nodeId ?? null,
   Object.entries(signal.inputs).map(([key, input]) => [key, signalKey(input)]),
 ];
 
 /**
- * The value a param is drawn with at `time`: the signal if one is wired,
- * held at or above the param's minimum; otherwise the value it is set to.
+ * The value a param is drawn with at `time`: the signal as it arrives,
+ * held at or above the param's minimum, and converted to the param's type
+ * if it is not a number. The wire replaces the value set on the card, as
+ * a linked socket does, so `_base` is only there for callers' symmetry.
  */
 export const modulatedValue = (
   spec: ParamSpec,
-  base: ParamValue | undefined,
+  _base: ParamValue | undefined,
   signal: Signal,
   time: number,
 ): ParamValue => {
-  if (!isModulatable(spec)) return base ?? spec.default;
-  return readPort(spec, signal, time, true);
+  if (isModulatable(spec)) return readPort(spec, signal, time, true);
+  return convertSignal(spec, evaluateSignal(signal, time));
+};
+
+/**
+ * A single number arriving at a socket of another type, converted the way
+ * Blender does it: a float into a colour is that grey, into a vector is
+ * the same number on both axes, into a toggle is "above zero", and into a
+ * menu truncates to an entry.
+ */
+export const convertSignal = (spec: ParamSpec, value: number): ParamValue => {
+  switch (spec.kind) {
+    case 'float':
+      return spec.field ? value : Math.max(value, spec.min);
+    case 'int':
+      return Math.max(Math.trunc(value), spec.min);
+    case 'enum':
+      return clamp(Math.trunc(value), 0, spec.options.length - 1);
+    case 'bool':
+      return value > 0;
+    case 'color':
+      return [value, value, value] as Rgb;
+    case 'vec2': {
+      const v = Math.max(value, spec.min);
+      return [v, v] as Vec2;
+    }
+  }
+};
+
+/*
+ * Field operators: Math and Map Range, run per pixel.
+ *
+ * The same node becomes a field as soon as a picture reaches one of its
+ * ports, the way a Blender socket turns into a diamond. Its output is then
+ * a picture, drawn by a shader built from the node's `field` body. Values
+ * are free here -- a field can hold 200 or -3 -- which is why the renderer
+ * keeps these in half float wherever the GPU allows.
+ */
+
+/** The sampler, value and wired flag a field operator's port reads from. */
+export const fieldPortUniforms = (key: string) => ({
+  sampler: `u_${key}_field`,
+  value: `u_${key}`,
+  wired: `u_${key}_wired`,
+});
+
+const GLSL_KIND: Record<ParamSpec['kind'], string> = {
+  float: 'float',
+  int: 'int',
+  bool: 'bool',
+  enum: 'int',
+  color: 'vec3',
+  vec2: 'vec2',
+};
+
+/**
+ * The body of a field operator's shader, to go after the effect prelude:
+ * port reads, then the node's own `field` body, then a guard that turns a
+ * NaN or an infinity into 0 as the CPU version does.
+ */
+export const fieldOperatorBody = (def: ModulatorDef): { uniforms: string; body: string } => {
+  const ports = new Set(modulatorPortsOf(def));
+  const uniforms: string[] = [];
+  const reads: string[] = [];
+  for (const spec of def.params) {
+    if (ports.has(spec.key)) {
+      const u = fieldPortUniforms(spec.key);
+      uniforms.push(`uniform sampler2D ${u.sampler};`, `uniform float ${u.value};`, `uniform bool ${u.wired};`);
+      reads.push(`  vec3 p_${spec.key} = ${u.wired} ? texture(${u.sampler}, v_uv).rgb : vec3(${u.value});`);
+    } else {
+      uniforms.push(`uniform ${GLSL_KIND[spec.kind]} u_${spec.key};`);
+    }
+  }
+  const body = [
+    ...reads,
+    '  vec3 r = vec3(0.0);',
+    def.field ?? '',
+    '  r = mix(r, vec3(0.0), vec3(isnan(r)));',
+    '  r = mix(r, vec3(0.0), vec3(isinf(r)));',
+    '  fragColor = vec4(r, 1.0);',
+  ].join('\n');
+  return { uniforms: uniforms.join('\n'), body };
 };

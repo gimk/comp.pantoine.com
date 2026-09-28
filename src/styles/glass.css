@@ -37,6 +37,8 @@
   --port-mod-soft: rgba(217, 122, 30, 0.6);
   --port-render: #a855f7;
   --port-render-soft: rgba(168, 85, 247, 0.6);
+  /* A link that cannot carry what reaches it: a field into a single-value port. */
+  --port-invalid: #d6453a;
 
   /* The glass itself: a milky white fill over a bright top edge. Kept well
      below opaque on purpose -- on a flat ground the blur only shows where
@@ -276,7 +278,7 @@ textarea,
 }
 
 .toolbar-menu-item:hover {
-  background: rgba(255, 255, 255, 0.8);
+  background: rgba(23, 23, 26, 0.07);
 }
 
 .tag {
@@ -636,13 +638,16 @@ textarea,
 /* --------------------------------------------------------------------------
    Nodes
 
-   Same glass as the panels, one step more opaque so they read as sitting on
-   top of the graph rather than in it.
+   Same glass as the panels, but near-opaque: a card is read, not looked
+   through, and over a dark picture the thinner fill went mid-grey and took
+   the secondary labels with it. The faint grey is darkened to match, since
+   even the firmer sheet still dims a little over black.
    -------------------------------------------------------------------------- */
 
 .node {
+  --text-dim: #6e6e77;
   width: 196px;
-  background: var(--glass-fill-strong);
+  background: rgba(255, 255, 255, 0.82);
   -webkit-backdrop-filter: var(--glass-blur);
   backdrop-filter: var(--glass-blur);
   border: 1px solid var(--glass-border);
@@ -1027,6 +1032,93 @@ textarea,
 }
 
 /*
+ * A port that takes a picture as well as a number: a diamond, as Blender
+ * draws a socket that can be a field. Split down the middle, amber on the
+ * left and blue on the right, for the two things it takes; all blue once a
+ * picture is wired in.
+ *
+ * Cut from the same box as the round socket's disc with a clip path,
+ * rather than a small square turned 45 degrees: the port itself sits on a
+ * half pixel (React Flow centres it with a -50% translate), and a rotated
+ * square rasterises differently from the ring around it, so it never
+ * looked centred. A clip of the same inset box is concentric by
+ * construction, at any zoom.
+ */
+.react-flow__handle.port-param.port-field::after,
+.react-flow__handle.port-param.port-field:hover::after,
+.react-flow__handle.port-param.port-field.connectingfrom::after,
+.react-flow__handle.port-param.port-field.connectingto::after {
+  inset: 1px;
+  border-radius: 0;
+  box-shadow: none;
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+  background: linear-gradient(90deg, var(--port-mod-soft) 0% 50%, var(--port-image-soft) 50% 100%);
+}
+
+.react-flow__handle.port-param.port-field:hover::after,
+.react-flow__handle.port-param.port-field.connectingfrom::after,
+.react-flow__handle.port-param.port-field.connectingto::after {
+  background: linear-gradient(90deg, var(--port-mod) 0% 50%, var(--port-image) 50% 100%);
+}
+
+.react-flow__handle.port-param.port-field.is-field-wired::after {
+  background: var(--port-image);
+}
+
+/* A Math or Map Range whose output is a field: its output lug turns into a blue diamond. */
+.react-flow__handle.port-mod.is-field::after,
+.react-flow__handle.port-mod.is-field:hover::after,
+.react-flow__handle.port-mod.is-field.connectingfrom::after,
+.react-flow__handle.port-mod.is-field.connectingto::after {
+  inset: 3px;
+  border-radius: 0;
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+  background: var(--port-image-soft);
+}
+
+.react-flow__handle.port-mod.is-field:hover::after,
+.react-flow__handle.port-mod.is-field.connectingfrom::after,
+.react-flow__handle.port-mod.is-field.connectingto::after {
+  background: var(--port-image);
+}
+
+/*
+ * A param driven by a picture has a value per pixel, so there is no one
+ * number to show. Its control keeps its place and its size -- the card
+ * never reflows when a wire goes in -- but is greyed out and takes no
+ * input, as a linked socket's value is.
+ */
+.param-control.is-locked {
+  opacity: 0.38;
+  filter: grayscale(1);
+  pointer-events: none;
+  user-select: none;
+}
+
+/* A field reaching a port that needs one number: the port rings red, like its wire. */
+.react-flow__handle.port-param.is-invalid::after {
+  -webkit-mask: none;
+  mask: none;
+  padding: 0;
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--port-invalid);
+}
+
+
+/* Image Statistic's reading, live. */
+.stat-readout {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-readout-value {
+  font-size: 15px;
+  color: var(--port-mod);
+}
+
+/*
  * A param with a signal wired in takes the signal's value, so its control
  * is locked, as a connected socket is. The number shows what is arriving,
  * in the signal's amber; on a slider, a dot on the track shows where it
@@ -1345,6 +1437,15 @@ textarea,
   cursor: pointer;
 }
 
+/* Menus are read, not looked through: the plain glass fill lets a dark
+   picture turn the sheet mid-grey and the secondary labels vanish into it,
+   so the floating lists take a near-opaque fill. */
+.toolbar-menu.glass,
+.quick-add-panel.glass,
+.quick-add-sub.glass {
+  background: rgba(255, 255, 255, 0.82);
+}
+
 .toolbar-menu-group {
   display: flex;
   flex-direction: column;
@@ -1358,7 +1459,7 @@ textarea,
 
 .toolbar-menu-heading {
   padding: 5px 11px 3px;
-  color: var(--text-dim);
+  color: var(--text-muted);
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.07em;
@@ -1458,21 +1559,21 @@ textarea,
 .quick-add-item:hover,
 .quick-add-item:focus-visible,
 .quick-add-folder.is-open {
-  background: rgba(255, 255, 255, 0.85);
+  background: rgba(23, 23, 26, 0.07);
 }
 
 .quick-add-folder svg {
-  color: var(--text-dim);
+  color: var(--text-muted);
 }
 
 .quick-add-hint {
-  color: var(--text-dim);
+  color: var(--text-muted);
   font-size: 11px;
 }
 
 .quick-add-empty {
   padding: 8px 11px;
-  color: var(--text-dim);
+  color: var(--text-muted);
 }
 
 /* --------------------------------------------------------------------------
@@ -1540,6 +1641,46 @@ textarea,
   stroke: var(--port-mod);
   stroke-width: 2.2;
   filter: drop-shadow(0 0 2px rgba(217, 122, 30, 0.6));
+}
+
+/*
+ * A field wire: a picture used as a value per pixel -- into a knob, or out
+ * of a Math a picture reaches. Blue for the picture it carries, dashed as
+ * Blender dashes a field link, so it reads apart from both kinds it mixes.
+ */
+.react-flow__edge-path.link-edge-field {
+  stroke: var(--port-image);
+  stroke-width: 1.8;
+  stroke-dasharray: 5 3;
+}
+
+.react-flow__edge.selected .react-flow__edge-path.link-edge-field,
+.react-flow__edge:hover .react-flow__edge-path.link-edge-field {
+  stroke: var(--port-image);
+  stroke-width: 2.2;
+  filter: drop-shadow(0 0 2px rgba(47, 111, 214, 0.55));
+}
+
+.link-edge-flow-field {
+  stroke: rgba(68, 131, 238, 0.75);
+  stroke-dasharray: 16 64;
+  animation: linkModFlow 1.8s linear infinite;
+}
+
+/*
+ * A field reaching a port that needs one number. Blender draws the link
+ * red and leaves it, so nothing is lost while the wiring is fixed; the
+ * port it reaches keeps its own value in the meantime.
+ */
+.react-flow__edge-path.link-edge-invalid {
+  stroke: var(--port-invalid);
+  stroke-width: 1.8;
+}
+
+.react-flow__edge.selected .react-flow__edge-path.link-edge-invalid,
+.react-flow__edge:hover .react-flow__edge-path.link-edge-invalid {
+  stroke: var(--port-invalid);
+  stroke-width: 2.2;
 }
 
 /* A render wire: a rendered media asset rather than a live WebGL pipeline. */

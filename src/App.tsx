@@ -32,7 +32,7 @@ import { EffectNode } from './components/EffectNode';
 import { ModulatorNode } from './components/ModulatorNode';
 import { OutputNode } from './components/OutputNode';
 import { BackgroundNode } from './components/BackgroundNode';
-import { FullScreenBackground } from './components/FullScreenBackground';
+import { FullScreenBackground, activeBackground } from './components/FullScreenBackground';
 import { RenderNode } from './components/RenderNode';
 import { ExportNode } from './components/ExportNode';
 import { SnapGuides } from './components/SnapGuides';
@@ -117,6 +117,12 @@ const Editor: React.FC = () => {
   const onEdgesChange = useGraph((state) => state.onEdgesChange);
   const onConnect = useGraph((state) => state.onConnect);
   const insertTargetEdgeId = useGraph((state) => state.insertTargetEdgeId);
+  // The dot grid is for bare canvas. Once a Background is drawing a picture
+  // behind the graph, it only speckles over it.
+  const backgroundShowing = useGraph((state) => {
+    const node = activeBackground(state.nodes);
+    return !!node && (node.data.opacity ?? 1) > 0 && state.edges.some((edge) => edge.target === node.id);
+  });
 
   /*
    * Dragging an effect over a link offers to splice it into the flow. The
@@ -329,7 +335,9 @@ const Editor: React.FC = () => {
         proOptions={proOptions}
       >
         <SnapGuides />
-        <Background variant={BackgroundVariant.Dots} gap={26} size={1.4} color="rgba(23,23,26,0.16)" />
+        {!backgroundShowing && (
+          <Background variant={BackgroundVariant.Dots} gap={26} size={1.4} color="rgba(23,23,26,0.16)" />
+        )}
       </ReactFlow>
       {quickAdd && <QuickAdd at={quickAdd} onClose={closeQuickAdd} />}
     </>

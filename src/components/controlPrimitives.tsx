@@ -44,7 +44,7 @@ const lockClass = (live: LiveReading | undefined): string =>
  * Straight to the elements rather than through React state, so a card full
  * of wired params does not re-render sixty times a second.
  */
-const useLivePaint = (live: LiveReading | undefined, paint: (value: number) => void, deps: unknown[]): void => {
+export const useLivePaint = (live: LiveReading | undefined, paint: (value: number) => void, deps: unknown[]): void => {
   useEffect(() => {
     if (!live) return;
     const draw = () => paint(live.read(clockSeconds()));

@@ -6,7 +6,16 @@
  * to a document it did not write.
  */
 import type { Connection, Edge } from '@xyflow/react';
-import { MOD_OUTPUT, carriesRenderAsset, isParamPort, isRenderPort, samePort, type AppNode } from './graph';
+import { getModulator } from '../engine/modulators';
+import {
+  MOD_OUTPUT,
+  carriesRenderAsset,
+  isParamPort,
+  isRenderPort,
+  portTakesField,
+  samePort,
+  type AppNode,
+} from './graph';
 
 /** Either end of a prospective wire: a Connection, or an Edge being moved. */
 type Wire = Pick<Connection, 'source' | 'target'> & {
@@ -43,8 +52,16 @@ export const wouldCreateCycle = (edges: Edge[], wire: Wire): boolean => {
 };
 
 /**
- * Pictures go into picture inputs, signals into param ports, and rendered
- * media assets into render ports -- never cross-wired, and never in a loop.
+ * What goes where, following Blender's sockets: pictures into picture
+ * inputs, and into any param port shaped as a diamond, where they become a
+ * field; signals into any param port, and into a picture input as a flat
+ * grey; rendered media assets into render ports only. Never in a loop.
+ *
+ * A Math or Map Range is a signal or a field depending on what feeds it,
+ * which can change after it is wired. A field reaching a round port is
+ * allowed and drawn red rather than refused, as Blender leaves an invalid
+ * link in place -- otherwise rewiring upstream would silently cut wires
+ * downstream, and a document would lose them on reload.
  *
  * A loop has no picture to show: the chain resolver gives up on one, and two
  * viewers wired into each other used to be enough to take the whole editor
@@ -59,11 +76,25 @@ export const isValidConnection = (nodes: AppNode[], edges: Edge[], wire: Wire): 
 
   const isSourceMod = wire.sourceHandle === MOD_OUTPUT || sourceNode.type === 'modulator';
   const isTargetMod = isParamPort(wire.targetHandle);
+  const sourceIsAsset = () => isRenderPort(wire.sourceHandle) || carriesRenderAsset(nodes, edges, sourceNode.id);
 
   let allowed: boolean;
-  if (isSourceMod || isTargetMod) {
-    // Modulation signals can only connect to modulation param ports.
-    allowed = isSourceMod && isTargetMod;
+  if (isTargetMod) {
+    // A signal into any param; a live picture only where it can be a field.
+    allowed = isSourceMod || (!sourceIsAsset() && portTakesField(targetNode, wire.targetHandle));
+  } else if (isSourceMod) {
+    // A signal or a field where a picture goes: an effect's inputs, a
+    // viewer, a Render, or an Image Statistic -- never a baked-file port.
+    allowed =
+      !isRenderPort(wire.targetHandle) &&
+      (targetNode.type === 'effect' ||
+        targetNode.type === 'renderOutput' ||
+        targetNode.type === 'backgroundOutput' ||
+        targetNode.type === 'render' ||
+        (targetNode.type === 'modulator' && !wire.targetHandle && !!getModulator(targetNode.data.modulatorId)?.picture));
+  } else if (targetNode.type === 'modulator') {
+    // A picture into an Image Statistic's input.
+    allowed = !wire.targetHandle && !!getModulator(targetNode.data.modulatorId)?.picture && !sourceIsAsset();
   } else {
     // Whether the source stream is a rendered asset (purple) or a live picture (blue).
     const isSourceRender = isRenderPort(wire.sourceHandle) || carriesRenderAsset(nodes, edges, sourceNode.id);

@@ -17,6 +17,10 @@
  *     cached per track, so playback costs one or two samples a frame; going
  *     backwards, or changing what the rate depends on, starts again from
  *     zero.
+ *
+ * A rate changed while the clock runs is the one exception: `PhaseCarry`
+ * offsets the new phase to continue from the old, until time next goes
+ * backwards.
  */
 
 /**
@@ -111,3 +115,45 @@ export class PhaseIntegrator {
 }
 
 const finite = (value: number): number => (Number.isFinite(value) ? value : 0);
+
+type Carried = { identity: string; offset: number; time: number; phase: number };
+
+/**
+ * Keeps a phase continuous when its rate changes while it runs.
+ *
+ * On its own, a constant rate's phase is `time * rate`, which is exact but
+ * re-multiplies all of elapsed time by the new value the moment a Speed
+ * slider moves: 300 s in, a nudge of 0.005 throws a hum bar 1.5 cycles, so
+ * dragging the slider sends the picture racing. The same goes for any
+ * change to what a modulated rate depends on.
+ *
+ * So when a track's identity changes, the new phase is offset to start
+ * from where the old one was, and carries on from there at the new rate.
+ * Paused, a drag leaves the picture where it is.
+ *
+ * The offset is dropped whenever time goes backwards -- a seek, a reset,
+ * a looping preview starting over -- and the phase is again the pure
+ * function of time that an export, which starts with no history, sees.
+ */
+export class PhaseCarry {
+  private tracks = new Map<string, Carried>();
+
+  carry(key: string, time: number, identity: string, raw: number, period: number = PHASE_WRAP): number {
+    const track = this.tracks.get(key);
+    let offset = 0;
+    if (track && time >= track.time) {
+      offset = track.identity === identity ? track.offset : track.phase - raw;
+    }
+    const phase = wrapPhase(raw + offset, period);
+    this.tracks.set(key, { identity, offset, time, phase });
+    return phase;
+  }
+
+  prune(live: Set<string>): void {
+    for (const key of this.tracks.keys()) if (!live.has(key)) this.tracks.delete(key);
+  }
+
+  clear(): void {
+    this.tracks.clear();
+  }
+}

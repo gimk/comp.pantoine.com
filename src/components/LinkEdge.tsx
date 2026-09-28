@@ -2,7 +2,7 @@ import React, { useState, useSyncExternalStore } from 'react';
 import { BaseEdge, EdgeLabelRenderer, getBezierPath, type EdgeProps } from '@xyflow/react';
 import { X } from 'lucide-react';
 import { useGraph } from '../state/store';
-import { carriesRenderAsset, isParamPort, isRenderPort } from '../state/graph';
+import { wireKind } from '../state/graph';
 import { isPlaying, subscribeClock } from '../engine/clock';
 
 /**
@@ -20,6 +20,7 @@ import { isPlaying, subscribeClock } from '../engine/clock';
 export const LinkEdge: React.FC<EdgeProps> = ({
   id,
   source,
+  target,
   sourceX,
   sourceY,
   sourcePosition,
@@ -45,59 +46,42 @@ export const LinkEdge: React.FC<EdgeProps> = ({
     targetPosition,
   });
 
-  // Purple when the wire carries a baked file: straight off a Render node's
-  // port, or through any Viewer or Background passing one on. A boolean
-  // selector, so an edge re-renders when its colour changes and not on
-  // every store change. The graph walk is skipped outright for a wire whose
-  // ports already say what it carries.
-  const isMod = isParamPort(targetHandleId);
-  const namesRenderPort = isRenderPort(targetHandleId) || isRenderPort(sourceHandleId);
-  const carriesAsset = useGraph((state) =>
-    namesRenderPort || isMod ? false : carriesRenderAsset(state.nodes, state.edges, source),
+  // What the wire carries sets its colour: ink for a picture, dashed amber
+  // for a signal, dashed blue for a field, purple for a baked file, red for
+  // a field into a port that needs one number. A string selector, so an
+  // edge re-renders when its kind changes and not on every store change.
+  const kind = useGraph((state) =>
+    wireKind(state.nodes, state.edges, {
+      source,
+      target,
+      sourceHandle: sourceHandleId ?? null,
+      targetHandle: targetHandleId ?? null,
+    }),
   );
-  const isRender = namesRenderPort || carriesAsset;
+  const variant = kind === 'picture' ? '' : kind === 'signal' ? 'mod' : kind;
 
   return (
     <>
       {/* High-contrast halo underlay: guarantees crisp visibility over black, dark pictures, and light ground */}
       <path
         d={path}
-        className={`link-edge-halo ${
-          isRender
-            ? 'link-edge-halo-render'
-            : isMod
-              ? 'link-edge-halo-mod'
-              : ''
-        }`}
+        className={`link-edge-halo ${variant ? `link-edge-halo-${variant}` : ''}`}
         aria-hidden="true"
       />
 
-      {/* Purple for rendered media asset, dashed for modulation signal, solid ink for picture */}
       <BaseEdge
         id={id}
         path={path}
         markerEnd={markerEnd}
         style={style}
-        className={
-          isRender
-            ? 'link-edge-render'
-            : isMod
-              ? 'link-edge-mod'
-              : undefined
-        }
+        className={variant ? `link-edge-${variant}` : undefined}
       />
 
-      {/* Subtle flowing stream overlay when comp is playing */}
-      {playing && (
+      {/* Subtle flowing stream overlay when comp is playing -- not on a link that carries nothing. */}
+      {playing && kind !== 'invalid' && (
         <path
           d={path}
-          className={`link-edge-flow ${
-            isRender
-              ? 'link-edge-flow-render'
-              : isMod
-                ? 'link-edge-flow-mod'
-                : ''
-          }`}
+          className={`link-edge-flow ${variant ? `link-edge-flow-${variant}` : ''}`}
           aria-hidden="true"
         />
       )}

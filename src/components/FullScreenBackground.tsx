@@ -13,7 +13,7 @@ const MAX_SCREEN_WORKING_SIZE = 2560;
  * The Background node that owns the screen: the selected one if it is
  * enabled, otherwise the first enabled one.
  */
-const activeBackground = (nodes: AppNode[]): Node<BackgroundNodeData, 'backgroundOutput'> | undefined => {
+export const activeBackground = (nodes: AppNode[]): Node<BackgroundNodeData, 'backgroundOutput'> | undefined => {
   let first: Node<BackgroundNodeData, 'backgroundOutput'> | undefined;
   for (const node of nodes) {
     if (node.type !== 'backgroundOutput' || node.data.enabled === false) continue;

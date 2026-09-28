@@ -4,6 +4,7 @@ import {
   lfo,
   mapRange,
   math,
+  noise,
   signalBounds,
   type Signal,
 } from './modulators';
@@ -75,6 +76,26 @@ describe('modulators and signal evaluation', () => {
       expect(lfo.sample({ shape: 0, rate: 1, phase: 0, amplitude: 1, offset: 0 }, 0.25, 0)).toBeCloseTo(1, 5);
       // at t = 0.75 -> sin(3pi/2) = -1
       expect(lfo.sample({ shape: 0, rate: 1, phase: 0, amplitude: 1, offset: 0 }, 0.75, 0)).toBeCloseTo(-1, 5);
+    });
+  });
+
+  describe('noise source', () => {
+    const params = { rate: 1, octaves: 3, amplitude: 1, offset: 0 };
+    const curve = (seedKnob: number) =>
+      [0.3, 1.7, 2.9, 4.1].map((t) => noise.sample({ ...params, seed: seedKnob }, t, 0.42));
+
+    it('draws the same curve for the same seed', () => {
+      expect(curve(7)).toEqual(curve(7));
+    });
+
+    it('re-rolls the curve when the Seed knob changes', () => {
+      expect(curve(1)).not.toEqual(curve(0));
+      expect(curve(2)).not.toEqual(curve(1));
+    });
+
+    it('leaves the node its own draw at Seed 0', () => {
+      const unset = [0.3, 1.7, 2.9, 4.1].map((t) => noise.sample(params, t, 0.42));
+      expect(curve(0)).toEqual(unset);
     });
   });
 

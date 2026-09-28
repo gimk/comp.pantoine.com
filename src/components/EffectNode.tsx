@@ -11,9 +11,10 @@ import {
   Tv,
   Waves,
 } from 'lucide-react';
-import { paramPort, resolveSignal, type EffectNodeData } from '../state/graph';
+import { paramPort, resolveSignal, wireKind, type EffectNodeData } from '../state/graph';
 import { getEffect } from '../engine/registry';
 import {
+  acceptsField,
   inputsOf,
   paramsOf,
   type Category,
@@ -167,13 +168,23 @@ export const ParamRow: React.FC<{
   nodeId: string;
   spec: ParamSpec;
   value: ParamValue | undefined;
-  /** Whether this param takes a signal wire. */
+  /** Whether this param takes a wire at all. */
   port: boolean;
+  /** Whether it also takes a picture, as a field: a diamond socket. */
+  field?: boolean;
   /** A value the node works out for this param itself, if it does. */
   derived?: number;
   onChange: (value: ParamValue) => void;
-}> = ({ nodeId, spec, value, port, derived, onChange }) => {
-  const signal = usePortSignal(nodeId, spec.key, port);
+}> = ({ nodeId, spec, value, port, field = false, derived, onChange }) => {
+  const handle = paramPort(spec.key);
+  // What the wire into this port carries, if there is one -- a string, so
+  // the row re-renders only when that changes.
+  const wired = useGraph((state) => {
+    if (!port) return '';
+    const edge = state.edges.find((candidate) => candidate.target === nodeId && candidate.targetHandle === handle);
+    return edge ? wireKind(state.nodes, state.edges, edge) : '';
+  });
+  const signal = usePortSignal(nodeId, spec.key, wired === 'signal');
   const live = useMemo<LiveReading | undefined>(() => {
     if (!signal && derived !== undefined) return { read: () => derived, moving: false, derived: true };
     if (!signal || !isModulatable(spec)) return undefined;
@@ -184,16 +195,41 @@ export const ParamRow: React.FC<{
   }, [signal, spec, derived]);
 
   if (!port) return <Control spec={spec} value={value} onChange={onChange} />;
+
+  /*
+   * A picture has a value per pixel, and a signal into a toggle, a menu, a
+   * colour or a point is converted rather than shown -- so for those the
+   * control stays exactly where and as big as it was, greyed out and
+   * locked, as a linked socket is. The card never reflows when a wire goes
+   * in. A red link leaves the control in charge, and says so on its port.
+   */
+  const locked = wired === 'field' || (wired === 'signal' && !isModulatable(spec));
+
   return (
     <div className={'param-row' + (spec.kind === 'float' && spec.field ? ' is-field' : '')}>
       <Handle
         type="target"
-        id={paramPort(spec.key)}
+        id={handle}
         position={Position.Left}
-        className="port port-param"
-        title={'Modulate ' + spec.label}
+        className={
+          'port port-param' +
+          (field ? ' port-field' : '') +
+          (wired === 'field' ? ' is-field-wired' : '') +
+          (wired === 'invalid' ? ' is-invalid' : '')
+        }
+        title={
+          wired === 'invalid'
+            ? `${spec.label} needs a single number, but a picture reaches it through a Math`
+            : (field ? 'Drive with a number or a picture: ' : 'Drive with a number: ') + spec.label
+        }
       />
-      <Control spec={spec} value={value} onChange={onChange} live={live} />
+      <div
+        className={'param-control' + (locked ? ' is-locked' : '')}
+        aria-disabled={locked || undefined}
+        title={locked ? (wired === 'field' ? `${spec.label} is driven by a picture` : `${spec.label} is driven by a signal`) : undefined}
+      >
+        <Control spec={spec} value={value} onChange={onChange} live={live} />
+      </div>
     </div>
   );
 };
@@ -271,7 +307,8 @@ export const EffectNode: React.FC<NodeProps<Node<EffectNodeData, 'effect'>>> = (
             nodeId={id}
             spec={spec}
             value={data.params[spec.key]}
-            port={isModulatable(spec)}
+            port
+            field={acceptsField(def, spec)}
             onChange={(value) => setParam(id, spec.key, value)}
           />
         ))}

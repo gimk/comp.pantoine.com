@@ -1,10 +1,22 @@
 import type { EffectDef, ParamSpec, ParamValue, Rgb, Vec2 } from './effects';
-import { FIRST_INPUT_UNIT, buildFragmentSource, inputsOf, isPhasedParam, paramsOf, passesOf, prelude } from './effects';
+import { FIRST_INPUT_UNIT, buildFragmentSource, fieldSampler, inputsOf, isPhasedParam, paramsOf, passesOf, prelude } from './effects';
+import { STDLIB } from './stdlib';
 import { createProgram, drawQuad, uniform, type UniformCache } from './gl';
 import { TargetPool, createTarget, deleteTarget, feedbackFormat, type RenderTarget, type TargetFormat } from './targets';
 import { clearShaderError, reportShaderError } from './shaderErrors';
-import { modulatedValue, signalIsMoving, signalKey, type Signal } from './modulators';
-import { PhaseIntegrator, constantPhase } from './phase';
+import {
+  evaluateSignal,
+  fieldOperatorBody,
+  fieldPortUniforms,
+  modulatedValue,
+  modulatorPortsOf,
+  signalIsMoving,
+  signalKey,
+  type ModulatorDef,
+  type Signal,
+} from './modulators';
+import { setStatistics, summarize } from './statistics';
+import { PhaseCarry, PhaseIntegrator, constantPhase } from './phase';
 import type { LoadedImage } from './imageStore';
 import type { LoadedVideo } from './videoStore';
 import { ParticleEngine } from './particleSim';
@@ -39,6 +51,7 @@ export type Step =
       pass: Pass;
       width: number;
       height: number;
+      fields: FieldBinding[];
     }
   | {
       kind: 'effect';
@@ -47,7 +60,41 @@ export type Step =
       input: number;
       /** One per `inputsOf(def)`, in order; null where nothing is wired. */
       extras: (number | null)[];
+      fields: FieldBinding[];
+    }
+  | {
+      /**
+       * A single number wired where a picture goes, as a flat grey -- how
+       * Blender converts a float into a colour. Sized like a fresh
+       * generator if it ends up setting the frame.
+       */
+      kind: 'fill';
+      nodeId: string;
+      signal: Signal;
+    }
+  | {
+      /** A Math or Map Range with a picture on a port: the same maths, per pixel. */
+      kind: 'fieldOp';
+      nodeId: string;
+      def: ModulatorDef;
+      /** The node's params, with any it derives from its inputs worked out. */
+      params: Record<string, ParamValue>;
+      /** What fills each wired port: a picture, or a single number. */
+      ports: Record<string, FieldPort>;
+    }
+  | {
+      /** Measure a picture for an Image Statistic node; draws nothing. */
+      kind: 'statistic';
+      nodeId: string;
+      /** The picture measured, or null if nothing that makes one is wired. */
+      input: number | null;
     };
+
+/** A param with a picture wired into it: the step whose picture it reads. */
+export type FieldBinding = { key: string; step: number };
+
+export type FieldPort = { step: number } | { signal: Signal };
+
 
 export type RenderPlan = {
   steps: Step[];
@@ -126,6 +173,21 @@ void main() {
 }
 `;
 
+/**
+ * A single number as a picture: a flat grey of that value, as Blender
+ * turns a float into a colour. Written to a half-float target where the
+ * GPU allows, so a 200 stays 200 when it reaches a param as a field.
+ */
+export const FILL_FRAGMENT = prelude + `
+uniform float u_value;
+void main() {
+  fragColor = vec4(vec3(u_value), 1.0);
+}
+`;
+
+/** The side of the grid a picture is sampled on for Image Statistic. */
+const STAT_SIZE = 64;
+
 type CompiledProgram = {
   program: WebGLProgram;
   uniforms: UniformCache;
@@ -165,6 +227,26 @@ const setParamUniform = (
   }
 };
 
+/** The earlier steps whose pictures one step reads. */
+const stepReads = (step: Step): number[] => {
+  switch (step.kind) {
+    case 'effect':
+      return [
+        step.input,
+        ...step.extras.filter((extra): extra is number => extra !== null),
+        ...step.fields.map((field) => field.step),
+      ];
+    case 'generator':
+      return step.fields.map((field) => field.step);
+    case 'fieldOp':
+      return Object.values(step.ports).flatMap((port) => ('step' in port ? [port.step] : []));
+    case 'statistic':
+      return step.input === null ? [] : [step.input];
+    default:
+      return [];
+  }
+};
+
 type SourceTexture = { texture: WebGLTexture; key: string };
 type VideoSourceTexture = {
   texture: WebGLTexture;
@@ -182,6 +264,11 @@ export class Pipeline {
   private present: CompiledProgram;
   private importer: CompiledProgram;
   private historyCopy: CompiledProgram;
+  private filler: CompiledProgram;
+  /** Where a picture is sampled down to be measured for Image Statistic; made on first use. */
+  private statTarget: RenderTarget | null = null;
+  /** How many textures one draw can sample; the ceiling on extra inputs plus fields. */
+  private maxUnits: number;
   private particleEngine: ParticleEngine;
   /** What feedback state is stored in on this GPU: half float if it can. */
   private feedbackFormat: TargetFormat;
@@ -211,6 +298,8 @@ export class Pipeline {
    * time -- see phase.ts. Keyed `nodeId:paramKey`.
    */
   private phases = new PhaseIntegrator();
+  /** Offsets that keep each phase continuous across a change of rate; see phase.ts. */
+  private carries = new PhaseCarry();
 
   private historyFor(nodeId: string, width: number, height: number): RenderTarget {
     let target = this.history.get(nodeId);
@@ -234,6 +323,8 @@ export class Pipeline {
     this.present = this.compile('__present__', PRESENT_FRAGMENT);
     this.importer = this.compile('__import__', IMPORT_FRAGMENT);
     this.historyCopy = this.compile('__history__', HISTORY_FRAGMENT);
+    this.filler = this.compile('__fill__', FILL_FRAGMENT);
+    this.maxUnits = gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS) as number;
     this.particleEngine = new ParticleEngine(gl);
     this.feedbackFormat = feedbackFormat(gl);
 
@@ -271,11 +362,12 @@ export class Pipeline {
    * different source -- the module edited and hot-reloaded -- gets a fresh
    * attempt, so fixing a shader takes effect without a page reload.
    */
-  private programFor(def: EffectDef, passIndex: number): CompiledProgram {
-    const key = def.id + '#' + passIndex;
+  private programFor(def: EffectDef, passIndex: number, fields: readonly string[] = []): CompiledProgram {
+    // A field changes the source, so each set of fielded params is a program of its own.
+    const key = def.id + '#' + passIndex + (fields.length > 0 ? '|' + fields.join(',') : '');
     let source: string;
     try {
-      source = buildFragmentSource(def, passIndex);
+      source = buildFragmentSource(def, passIndex, fields);
     } catch (error) {
       // Refused before it got to the GPU (a bad param key). Keyed by the
       // message, since there is no source to key it by.
@@ -477,6 +569,11 @@ export class Pipeline {
    * (see phase.ts); its identity is everything the rate depends on, so a
    * knob turned on the LFO recomputes the track rather than splicing two
    * different histories together.
+   *
+   * Either way the result goes through `carries`, so a rate that changes
+   * while the clock runs -- a Speed slider being dragged -- picks up from
+   * the phase on screen instead of jumping to the new rate times all of
+   * elapsed time.
    */
   private phasesFor(pass: Pass, specs: ParamSpec[], time: number, live: Set<string>): [string, number][] {
     const out: [string, number][] = [];
@@ -486,15 +583,17 @@ export class Pipeline {
       live.add(key);
       const base = pass.params[spec.key] ?? spec.default;
       const signal = pass.modulation[spec.key];
-      let phase: number;
+      let raw: number;
+      let identity: string;
       if (signal && signalIsMoving(signal)) {
-        const identity = JSON.stringify([signalKey(signal), base]);
-        phase = this.phases.integrate(key, time, identity, (t) => Number(modulatedValue(spec, base, signal, t)));
+        identity = JSON.stringify([signalKey(signal), base]);
+        raw = this.phases.integrate(key, time, identity, (t) => Number(modulatedValue(spec, base, signal, t)));
       } else {
-        const value = signal ? modulatedValue(spec, base, signal, time) : base;
-        phase = constantPhase(time, Number(value));
+        const value = Number(signal ? modulatedValue(spec, base, signal, time) : base);
+        identity = 'rate:' + value;
+        raw = constantPhase(time, value);
       }
-      out.push([spec.key, phase]);
+      out.push([spec.key, this.carries.carry(key, time, identity, raw)]);
     }
     return out;
   }
@@ -520,6 +619,8 @@ export class Pipeline {
     liveFeedback: Set<string>,
     livePhases: Set<string>,
     liveParticleSims: Set<string>,
+    /** Pictures for the params wired to a field, by param key. */
+    fields: Map<string, WebGLTexture> = new Map(),
   ): { target: RenderTarget; pooled: boolean } {
     const gl = this.gl;
     const specs = paramsOf(pass.def);
@@ -581,9 +682,15 @@ export class Pipeline {
     let result = input;
     let current: RenderTarget | null = null;
 
+    // Fields take the units after the extra inputs. A module with more
+    // fields than the GPU has units for keeps the rest at their values.
+    const fieldUnits = Math.max(0, this.maxUnits - FIRST_INPUT_UNIT - inputs.length);
+    const fielded = specs.filter((spec) => fields.has(spec.key)).slice(0, fieldUnits);
+    const fieldKeys = fielded.map((spec) => spec.key);
+
     for (let i = 0; i < bodies.length; i += 1) {
       const target = this.pool.acquire(format);
-      const compiled = this.programFor(pass.def, i);
+      const compiled = this.programFor(pass.def, i, fieldKeys);
       gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
       this.bindShared(compiled, result, input, previous, width, height, request, pass.seed, i);
 
@@ -593,6 +700,12 @@ export class Pipeline {
         gl.activeTexture(gl.TEXTURE0 + unit);
         gl.bindTexture(gl.TEXTURE_2D, extras[k] ?? this.blank);
         gl.uniform1i(uniform(gl, compiled.program, compiled.uniforms, 'u_' + spec.key), unit);
+      });
+      fielded.forEach((spec, k) => {
+        const unit = FIRST_INPUT_UNIT + inputs.length + k;
+        gl.activeTexture(gl.TEXTURE0 + unit);
+        gl.bindTexture(gl.TEXTURE_2D, fields.get(spec.key)!);
+        gl.uniform1i(uniform(gl, compiled.program, compiled.uniforms, fieldSampler(spec.key)), unit);
       });
       gl.activeTexture(gl.TEXTURE0);
 
@@ -628,6 +741,102 @@ export class Pipeline {
     }
     this.pool.release(kept);
     return { target: last, pooled: true };
+  }
+
+  /**
+   * A Math or Map Range, per pixel. Its program is built from the node's
+   * `field` body; each port reads its picture if one is wired, and its
+   * single value -- a signal, or what is typed -- if not.
+   */
+  private runFieldOp(
+    step: Extract<Step, { kind: 'fieldOp' }>,
+    textures: WebGLTexture[],
+    width: number,
+    height: number,
+    request: RenderRequest,
+  ): RenderTarget {
+    const gl = this.gl;
+    const { def, params, ports } = step;
+    const target = this.pool.acquire(this.feedbackFormat);
+    const { uniforms: declared, body } = fieldOperatorBody(def);
+    const source = `${prelude}${STDLIB}\n${declared}\n\nvoid main() {\n${body}\n}\n`;
+    let compiled: CompiledProgram;
+    try {
+      compiled = this.compile('__field__' + def.id, source);
+    } catch (error) {
+      console.error('Field "' + def.id + '" failed to compile:\n' + String(error));
+      compiled = this.present;
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
+    this.bindShared(compiled, this.blank, this.blank, this.blank, width, height, request, 0, 0);
+
+    const portKeys = new Set(modulatorPortsOf(def));
+    let unit = FIRST_INPUT_UNIT;
+    for (const spec of def.params) {
+      const at = (name: string) => uniform(gl, compiled.program, compiled.uniforms, name);
+      if (!portKeys.has(spec.key)) {
+        const location = at('u_' + spec.key);
+        setParamUniform(gl, location, spec, params[spec.key]);
+        continue;
+      }
+      const names = fieldPortUniforms(spec.key);
+      const port = ports[spec.key];
+      const picture = port && 'step' in port ? textures[port.step] : undefined;
+      if (picture && unit < this.maxUnits) {
+        gl.activeTexture(gl.TEXTURE0 + unit);
+        gl.bindTexture(gl.TEXTURE_2D, picture);
+        gl.uniform1i(at(names.sampler), unit);
+        gl.uniform1i(at(names.wired), 1);
+        unit += 1;
+      } else {
+        const value =
+          port && 'signal' in port
+            ? evaluateSignal(port.signal, request.time)
+            : typeof params[spec.key] === 'number'
+              ? (params[spec.key] as number)
+              : spec.kind === 'float' || spec.kind === 'int'
+                ? spec.default
+                : 0;
+        gl.uniform1i(at(names.wired), 0);
+        gl.uniform1f(at(names.value), value);
+      }
+    }
+    gl.activeTexture(gl.TEXTURE0);
+    drawQuad(gl);
+    return target;
+  }
+
+  /**
+   * Sample a picture on a small grid and read it back, for Image Statistic.
+   *
+   * A synchronous readback, which stalls until the GPU has drawn the
+   * picture -- but over a 64x64 grid, and it is what lets a knob driven by
+   * the measurement follow it on the very same frame, in an export as
+   * much as in a viewer. Linear filtering averages a little around each
+   * grid point, which is what a statistic of a picture means anyway.
+   */
+  private measure(nodeId: string, picture: WebGLTexture | null, request: RenderRequest): void {
+    const gl = this.gl;
+    if (!picture) {
+      setStatistics(nodeId, [0, 0, 0, 0, 0]);
+      return;
+    }
+    if (!this.statTarget) this.statTarget = createTarget(gl, STAT_SIZE, STAT_SIZE, this.feedbackFormat);
+    const target = this.statTarget;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
+    gl.viewport(0, 0, STAT_SIZE, STAT_SIZE);
+    this.bindShared(this.present, picture, picture, picture, STAT_SIZE, STAT_SIZE, request, 0, 0);
+    drawQuad(gl);
+    if (target.format === 'rgba16f') {
+      const pixels = new Float32Array(STAT_SIZE * STAT_SIZE * 4);
+      gl.readPixels(0, 0, STAT_SIZE, STAT_SIZE, gl.RGBA, gl.FLOAT, pixels);
+      setStatistics(nodeId, summarize(pixels));
+    } else {
+      const pixels = new Uint8Array(STAT_SIZE * STAT_SIZE * 4);
+      gl.readPixels(0, 0, STAT_SIZE, STAT_SIZE, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+      // Alpha is tested for zero only, so it can stay on the 0..255 scale.
+      setStatistics(nodeId, summarize(pixels, 255));
+    }
   }
 
   render(request: RenderRequest): void {
@@ -679,11 +888,7 @@ export class Pipeline {
      */
     const readers = new Array<number>(plan.steps.length).fill(0);
     readers[plan.output] += 1;
-    for (const step of plan.steps) {
-      if (step.kind !== 'effect') continue;
-      readers[step.input] += 1;
-      for (const extra of step.extras) if (extra !== null) readers[extra] += 1;
-    }
+    for (const step of plan.steps) for (const read of stepReads(step)) readers[read] += 1;
 
     const textures: WebGLTexture[] = [];
     const owned: (RenderTarget | null)[] = [];
@@ -745,7 +950,29 @@ export class Pipeline {
         return;
       }
 
-      if (step.kind === 'generator') {
+      const fieldTextures = (bindings: FieldBinding[]): Map<string, WebGLTexture> =>
+        new Map(bindings.map((binding) => [binding.key, textures[binding.step] ?? this.blank]));
+
+      if (step.kind === 'fill') {
+        const target = this.pool.acquire(this.feedbackFormat);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
+        this.bindShared(this.filler, this.blank, this.blank, this.blank, workWidth, workHeight, request, 0, 0);
+        const value = evaluateSignal(step.signal, request.time);
+        gl.uniform1f(uniform(gl, this.filler.program, this.filler.uniforms, 'u_value'), value);
+        drawQuad(gl);
+        textures[index] = target.texture;
+        owned[index] = target;
+        return;
+      }
+
+      if (step.kind === 'fieldOp') {
+        const target = this.runFieldOp(step, textures, workWidth, workHeight, request);
+        textures[index] = target.texture;
+        owned[index] = target;
+      } else if (step.kind === 'statistic') {
+        this.measure(step.nodeId, step.input === null ? null : textures[step.input], request);
+        gl.viewport(0, 0, workWidth, workHeight);
+      } else if (step.kind === 'generator') {
         const { target, pooled } = this.runEffect(
           step.pass,
           this.blank,
@@ -756,28 +983,28 @@ export class Pipeline {
           liveFeedback,
           livePhases,
           liveParticleSims,
+          fieldTextures(step.fields),
         );
         textures[index] = target.texture;
         owned[index] = pooled ? target : null;
-        return;
+      } else {
+        const { target, pooled } = this.runEffect(
+          step.pass,
+          textures[step.input],
+          step.extras.map((extra) => (extra === null ? this.blank : textures[extra])),
+          workWidth,
+          workHeight,
+          request,
+          liveFeedback,
+          livePhases,
+          liveParticleSims,
+          fieldTextures(step.fields),
+        );
+        textures[index] = target.texture;
+        owned[index] = pooled ? target : null;
       }
 
-      const { target, pooled } = this.runEffect(
-        step.pass,
-        textures[step.input],
-        step.extras.map((extra) => (extra === null ? this.blank : textures[extra])),
-        workWidth,
-        workHeight,
-        request,
-        liveFeedback,
-        livePhases,
-        liveParticleSims,
-      );
-      textures[index] = target.texture;
-      owned[index] = pooled ? target : null;
-
-      doneReading(step.input);
-      for (const extra of step.extras) if (extra !== null) doneReading(extra);
+      for (const read of stepReads(step)) doneReading(read);
     });
 
     const result = textures[plan.output];
@@ -799,6 +1026,7 @@ export class Pipeline {
       this.videoSources.delete(nodeId);
     }
     this.phases.prune(livePhases);
+    this.carries.prune(livePhases);
     this.particleEngine.prune(liveParticleSims);
 
     const isFill = request.fitMode === 'fill' || request.fitMode === 'cover';
@@ -856,6 +1084,7 @@ export class Pipeline {
   resetFeedback(): void {
     this.disposeHistory();
     this.phases.clear();
+    this.carries.clear();
     this.particleEngine.reset();
   }
 
@@ -874,7 +1103,10 @@ export class Pipeline {
     this.disposeHistory();
     this.disposeDisplay();
     this.phases.clear();
+    this.carries.clear();
     this.particleEngine.dispose();
+    if (this.statTarget) deleteTarget(gl, this.statTarget);
+    this.statTarget = null;
     for (const compiled of this.programs.values()) gl.deleteProgram(compiled.program);
     this.programs.clear();
     for (const source of this.sources.values()) gl.deleteTexture(source.texture);

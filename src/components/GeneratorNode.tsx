@@ -4,8 +4,7 @@ import { SlidersHorizontal, Waves, Sparkles } from 'lucide-react';
 import { type GeneratorNodeData } from '../state/graph';
 import { getGenerator, RESOLUTION_PRESETS } from '../engine/generators';
 import { getEffect } from '../engine/registry';
-import { paramsOf } from '../engine/effects';
-import { isModulatable } from '../engine/modulators';
+import { acceptsField, paramsOf } from '../engine/effects';
 import { useGraph } from '../state/store';
 import { getShaderError, subscribeShaderErrors } from '../engine/shaderErrors';
 import { ParamRow } from './EffectNode';
@@ -107,7 +106,8 @@ export const GeneratorNode: React.FC<NodeProps<Node<GeneratorNodeData, 'generato
               nodeId={id}
               spec={spec}
               value={data.params[spec.key]}
-              port={isModulatable(spec)}
+              port
+            field={acceptsField(def, spec)}
               onChange={(value) => setParam(id, spec.key, value)}
             />
           ))}

@@ -1,7 +1,7 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useRef } from 'react';
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
-import { Activity, Sigma } from 'lucide-react';
-import { MOD_OUTPUT, resolveSignal, type ModulatorNodeData } from '../state/graph';
+import { Activity, ScanEye, Sigma } from 'lucide-react';
+import { MOD_OUTPUT, outputIsField, resolveSignal, type ModulatorNodeData } from '../state/graph';
 import {
   derivedParams,
   evaluateSignal,
@@ -15,6 +15,7 @@ import {
 } from '../engine/modulators';
 import { useGraph } from '../state/store';
 import { ParamRow } from './EffectNode';
+import { useLivePaint, type LiveReading } from './controlPrimitives';
 
 const SCOPE_WIDTH = 170;
 const SCOPE_HEIGHT = 34;
@@ -101,6 +102,8 @@ export const ModulatorNode: React.FC<NodeProps<Node<ModulatorNodeData, 'modulato
     const { nodes, edges } = useGraph.getState();
     return resolveSignal(nodes, edges, id);
   }, [id, key]);
+  // Whether a picture reaches this node, making its output a field.
+  const isField = useGraph((state) => outputIsField(state.nodes, state.edges, id));
 
   if (!def) {
     return (
@@ -115,11 +118,17 @@ export const ModulatorNode: React.FC<NodeProps<Node<ModulatorNodeData, 'modulato
   }
 
   const ports = new Set(modulatorPortsOf(def));
-  const derived = signal ? derivedParams(signal) : {};
-  const Icon = def.role === 'operator' ? Sigma : Activity;
+  // A per-pixel Math has no single value to derive from, so its Auto range
+  // is worked out by the renderer instead, and not shown here.
+  const derived = signal && !isField ? derivedParams(signal) : {};
+  const Icon = def.picture ? ScanEye : def.role === 'operator' ? Sigma : Activity;
 
   return (
     <div className="node node-modulator">
+      {/* Image Statistic's picture input, first in the DOM for the same
+          reason as an effect's: an edge naming no handle lands on it. */}
+      {def.picture && <Handle type="target" position={Position.Left} className="port port-in port-title" />}
+
       <div className="node-title">
         <Icon size={13} />
         <span>{def.label}</span>
@@ -128,8 +137,10 @@ export const ModulatorNode: React.FC<NodeProps<Node<ModulatorNodeData, 'modulato
       <div className="node-body">
         {/* Only for a signal that moves. One standing still -- a Value, or a
             Math fed only by Values -- would draw a flat line, and its one
-            number is already on the card. */}
-        {signal && signalIsMoving(signal) && <Scope signal={signal} />}
+            number is already on the card. A field has no single trace to
+            draw, and a measurement is shown as the number it is. */}
+        {signal && def.picture && <StatReadout signal={signal} />}
+        {signal && !isField && !def.picture && signalIsMoving(signal) && <Scope signal={signal} />}
         {modulatorParamsOf(def).map((spec) => (
           <ParamRow
             key={spec.key}
@@ -137,6 +148,7 @@ export const ModulatorNode: React.FC<NodeProps<Node<ModulatorNodeData, 'modulato
             spec={spec}
             value={data.params[spec.key]}
             port={ports.has(spec.key)}
+            field={!!def.field && ports.has(spec.key)}
             derived={derived[spec.key]}
             onChange={(value) => setParam(id, spec.key, value)}
           />
@@ -147,8 +159,29 @@ export const ModulatorNode: React.FC<NodeProps<Node<ModulatorNodeData, 'modulato
         type="source"
         id={MOD_OUTPUT}
         position={Position.Right}
-        className="port port-out port-mod port-title"
+        className={'port port-out port-mod port-title' + (isField ? ' is-field' : '')}
       />
+    </div>
+  );
+};
+
+/** What an Image Statistic last measured, repainted every frame while it can change. */
+const StatReadout: React.FC<{ signal: Signal }> = ({ signal }) => {
+  const valueRef = useRef<HTMLSpanElement>(null);
+  const live = useMemo<LiveReading>(() => ({ read: (time) => evaluateSignal(signal, time), moving: true }), [signal]);
+  useLivePaint(
+    live,
+    (value) => {
+      if (valueRef.current) valueRef.current.textContent = value.toFixed(3);
+    },
+    [],
+  );
+  return (
+    <div className="stat-readout">
+      <span className="control-label">Reading</span>
+      <span ref={valueRef} className="stat-readout-value">
+        0.000
+      </span>
     </div>
   );
 };

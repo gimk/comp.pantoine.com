@@ -90,16 +90,33 @@ export const chainSignature = (chain: ResolvedChain): string => {
                 step.width,
                 step.height,
                 Object.entries(step.pass.modulation).map(([key, signal]) => [key, signalKey(signal)]),
+                step.fields,
               ]
-            : [
-                step.pass.nodeId,
-                step.pass.seed,
-                step.pass.def.id,
-                step.pass.params,
-                step.input,
-                step.extras,
-                Object.entries(step.pass.modulation).map(([key, signal]) => [key, signalKey(signal)]),
-              ],
+            : step.kind === 'fill'
+              ? ['fill', step.nodeId, signalKey(step.signal)]
+              : step.kind === 'fieldOp'
+                ? [
+                    'fieldOp',
+                    step.nodeId,
+                    step.def.id,
+                    step.params,
+                    Object.entries(step.ports).map(([key, port]) => [
+                      key,
+                      'step' in port ? port.step : signalKey(port.signal),
+                    ]),
+                  ]
+                : step.kind === 'statistic'
+                  ? ['statistic', step.nodeId, step.input]
+                  : [
+                      step.pass.nodeId,
+                      step.pass.seed,
+                      step.pass.def.id,
+                      step.pass.params,
+                      step.input,
+                      step.extras,
+                      Object.entries(step.pass.modulation).map(([key, signal]) => [key, signalKey(signal)]),
+                      step.fields,
+                    ],
     ),
     formatter ?? null,
   ]);

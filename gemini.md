@@ -8,7 +8,7 @@ This document (`gemini.md`) provides everything an AI coding assistant needs to 
 
 ## 1. High-Level Architecture & Philosophy
 
-Comp Studio lets users build compositing graphs by connecting media sources (images, videos), effect modules (shaders), modulators (LFOs, math, signals), and outputs (viewer, background, file renderers, exporters).
+Comp Studio lets users build compositing graphs by connecting media sources (images, videos, procedural generators), effect modules (shaders), modulators (LFO, noise, pulse, value, math, map range), and outputs (viewer, background, file renderers, exporters).
 
 ### Core Design Principles
 
@@ -23,7 +23,7 @@ Comp Studio lets users build compositing graphs by connecting media sources (ima
 
 3. **Demand-Driven Render Loop**:
    - The canvas does not run an unconstrained 60fps render loop if the graph is static.
-   - Continuous frame rendering is activated **only** when `chainIsAnimated(chain)` returns `true` (e.g. video source attached, animated shader with non-zero speed, or active moving modulators).
+   - Continuous frame rendering is activated **only** when `chainIsAnimated(chain)` (`src/state/graph.ts`) returns `true` (e.g. video source attached, animated shader with non-zero speed, or active moving modulators).
 
 4. **Backward Graph Resolution**:
    - Rendering walks backwards from the active viewer/output sink (`OutputNode`, `RenderNode`, `BackgroundNode`) towards sources via DFS.
@@ -66,6 +66,9 @@ Comp Studio lets users build compositing graphs by connecting media sources (ima
 ├── index.html                 # App shell entry point
 ├── vite.config.ts             # Vite build configuration (React plugin)
 ├── tsconfig.json              # TypeScript strict configuration
+├── .github/workflows/
+│   ├── ci.yml                 # PRs to main: npm test + npm run build
+│   └── deploy.yml             # Push to main: build and deploy
 ├── scripts/
 │   └── check-shaders.mjs      # Offline GLSL validator (reserved words + AST parse)
 ├── public/
@@ -73,7 +76,7 @@ Comp Studio lets users build compositing graphs by connecting media sources (ima
 │   └── favicon.svg
 ├── src/
 │   ├── main.tsx               # React root mount
-│   ├── App.tsx                # Main canvas container, React Flow setup, hotkeys
+│   ├── App.tsx                # Main canvas container, React Flow setup, nodeTypes, isValidConnection
 │   ├── styles/
 │   │   └── glass.css          # Glassmorphic UI styles, CSS variables, node themes
 │   ├── types/
@@ -90,10 +93,11 @@ Comp Studio lets users build compositing graphs by connecting media sources (ima
 │   │   ├── targets.ts         # Framebuffer ping-pong target allocator (TargetPool)
 │   │   ├── effects.ts         # EffectDef, ParamSpec, shader prelude, uniform generation
 │   │   ├── registry.ts        # Registry of all effect definitions
+│   │   ├── generators.ts      # Generator registry (ramp, noise) + resolution presets
 │   │   ├── stdlib.ts          # Shared GLSL functions injected into every shader
 │   │   ├── imageStore.ts      # Storage for loaded ImageBitmaps
 │   │   ├── videoStore.ts      # Storage for HTMLVideoElements
-│   │   ├── modulators.ts      # LFO, Noise, Math, Envelope signal generators
+│   │   ├── modulators.ts      # LFO, Noise, Pulse, Value, Math, Map Range signals
 │   │   ├── clock.ts           # Playback transport, time synchronization, time wrapping
 │   │   ├── exportEngine.ts    # Headless recorder for PNG, JPG, GIF, MP4, WebM
 │   │   ├── shaderErrors.ts    # Error listener for shader compilation issues
@@ -103,6 +107,8 @@ Comp Studio lets users build compositing graphs by connecting media sources (ima
 │   └── components/            # React UI components & React Flow custom nodes
 │       ├── ImageNode.tsx      # Image source node (drop / file input)
 │       ├── VideoNode.tsx      # Video source node (playback controls / scrubbing)
+│       ├── GeneratorNode.tsx  # Procedural source node (Ramp, Noise) with output resolution
+│       ├── GradientEditor.tsx # Multi-stop gradient control used by the Ramp generator
 │       ├── EffectNode.tsx     # Generic effect node rendered from EffectDef
 │       ├── ModulatorNode.tsx  # Signal generator node with mini-waveform preview
 │       ├── OutputNode.tsx     # Primary interactive viewer node (WebGL canvas)
@@ -110,14 +116,21 @@ Comp Studio lets users build compositing graphs by connecting media sources (ima
 │       ├── FullScreenBackground.tsx # Renders composite behind the graph canvas
 │       ├── RenderNode.tsx     # Offscreen format baker (duration, scale, fps)
 │       ├── ExportNode.tsx     # Downstream file downloader
-│       ├── Toolbar.tsx        # Top toolbar (Add module, import, undo/redo, share)
+│       ├── Toolbar.tsx        # Top palette menus (Input / Module / Output): drag or click to add
+│       ├── paletteCatalog.ts  # Single catalog feeding both Toolbar and QuickAdd
+│       ├── paletteDrag.ts     # Drag-from-palette-onto-canvas plumbing
 │       ├── Transport.tsx      # Bottom playback transport controls
-│       ├── QuickAdd.tsx       # Quick search module palette (Cmd+K / Tab)
+│       ├── QuickAdd.tsx       # Searchable add menu at the pointer (Shift+A / Shift+I / Ctrl+/)
+│       ├── useCanvasShortcuts.ts # Canvas hotkeys (undo/redo, copy/paste, Space, R, F, ...)
 │       ├── LinkEdge.tsx       # Custom bezier wire with delete button & hit target
+│       ├── edgeHitTest.ts     # Wire hit-testing for dropping nodes onto edges
 │       ├── SnapGuides.tsx     # Visual alignment guide overlay
 │       ├── AboutModal.tsx     # Info and shortcut overlay
+│       ├── ErrorBoundary.tsx  # Keeps a crashing node from taking down the canvas
 │       └── controlPrimitives.tsx # Sliders, toggles, color pickers, number fields
 ```
+
+Unit tests sit next to the code they cover (`*.test.ts` in `src/engine/`, `src/state/`, `src/components/`).
 
 ---
 
@@ -165,10 +178,12 @@ uniform int u_pass;            // Current pass index (for multi-pass effects)
 ### 4.2. STDLIB Functions Available in All Shaders (`stdlib.ts`)
 
 - `TAU`: `6.28318530718`
-- `sat(float x)`: Clamps value to `[0.0, 1.0]`
+- `sat(x)`: Clamps value to `[0.0, 1.0]` (overloaded for `float`, `vec2`, `vec3`, `vec4`)
 - `luma(vec3 c)`: Rec. 709 perceived luminance (`dot(c, vec3(0.2126, 0.7152, 0.0722))`)
 - `hash11(float)`, `hash12(vec2)`, `hash22(vec2)`: Fast deterministic noise hashes
 - `valueNoise(vec2 p)`: Smoothed 2D lattice noise in `[0, 1]`
+- `perlinNoise(vec2 p)`: 2D gradient noise
+- `worleyNoise(vec2 p)`: 2D cellular (distance-to-nearest-point) noise
 - `fbm(vec2 p, int octaves)`: Fractal brownian motion (up to 8 octaves)
 - `hueRotate(vec3 c, float angle)`: Rotate color hue preserving luminance
 - `aspectUv(vec2 uv, vec2 resolution)`: Corrects UV aspect ratio centered at `(0, 0)`
@@ -190,8 +205,10 @@ uniform int u_pass;            // Current pass index (for multi-pass effects)
 4. **Reserved Param Keys**:
    - Effect parameter keys become `u_<key>`. You **cannot** name a param:
      `src`, `orig`, `prev`, `resolution`, `time`, `delta`, `frame`, `seed`, `pass`.
+   - `mix` is taken on any `mixable` effect (the injected Mix knob).
+   - Params and extra `inputs` share one `u_<key>` namespace; a duplicate or reserved key throws in `buildFragmentSource`, which the renderer turns into a pass-through plus an error on the node.
 5. **Phase Uniforms**:
-   - Parameters named `speed`, `rate`, or `roll` automatically generate an integrated phase uniform `uniform float u_phase_<key>;`. Use this instead of `u_time * u_speed` when modulating speed so that rate changes don't jump discontinuously.
+   - `float` parameters named `speed`, `rate`, or `roll` automatically generate an integrated phase uniform `uniform float u_phase_<key>;`. Use this instead of `u_time * u_speed` when modulating speed so that rate changes don't jump discontinuously.
 
 ---
 
@@ -227,7 +244,9 @@ export const invert: EffectDef = {
 };
 ```
 
-Then register it in `src/engine/registry.ts`:
+`category` is required and decides which group of the Module menu the effect lands in: `color`, `stylize`, `optics`, `geometry`, `crt`, `tape`, `noise`, `temporal`, `composite`, or `generator` (see `CATEGORY_LABELS` in `effects.ts`). `animated` may be a function of the params, e.g. `(p) => p.speed !== 0`, so a paused effect doesn't pin the frame loop.
+
+Then register it in `src/engine/registry.ts`, inside its category's block (the array is ordered by how often a module is reached for, not alphabetically):
 
 ```ts
 import { invert } from './modules/invert';
@@ -284,15 +303,21 @@ export const trails: EffectDef = {
 
 ### Secondary Inputs (Multi-Texture Effects)
 
-Declare `inputs: [{ key: 'mask', label: 'Mask' }]`. It exposes an extra input handle on the node and declares `uniform sampler2D u_mask;`. Unconnected inputs safely sample transparent black `vec4(0.0)`.
+Declare `inputs: [{ key: 'mask', label: 'Mask' }]`. It exposes an extra input handle on the node and declares `uniform sampler2D u_mask;`, bound from texture unit 3 upward (`FIRST_INPUT_UNIT`; units 0–2 are `u_src`, `u_orig`, `u_prev`). Unconnected inputs safely sample transparent black `vec4(0.0)`, so treat alpha 0 as "leave the picture alone".
+
+### Generators (Procedural Sources)
+
+A generator is an `EffectDef` with `category: 'generator'` that ignores `u_src` and draws from scratch (`modules/ramp.ts`, `modules/noiseGenerator.ts`). Generators are listed both in `registry.ts` and in `generatorRegistry` (`src/engine/generators.ts`); they appear in the **Input** menu as `generator` nodes with their own output resolution (`RESOLUTION_PRESETS`), and are filtered out of the Module menu. To add one, register it in both places and add a catalog entry in `paletteCatalog.ts`.
 
 ---
 
 ## 6. Guide: Working with Modulators
 
 Modulators (`src/engine/modulators.ts`) generate numeric values to drive parameters over time:
-- **Sources** (e.g. `lfo`, `noise`, `envelope`): Pure functions of time, rate, and seed.
-- **Operators** (e.g. `math`, `mapRange`, `smooth`): Combine or scale incoming signals.
+- **Sources** (`lfo`, `noise`, `pulse`, `value`): Pure functions of time, params, and seed. They appear in the Input menu.
+- **Operators** (`math`, `map` / Map Range): Combine or scale incoming signals. They appear in the Module menu.
+
+All are listed in `modulatorRegistry`. Signals are plain numbers in the units of their destination (an LFO swings -1..1; use Map Range to rescale).
 
 ```ts
 export type ModulatorDef = {
@@ -307,7 +332,7 @@ export type ModulatorDef = {
 };
 ```
 
-Modulator edges connect a source's `mod` handle to a target's `param:<key>` handle. In `pipeline.ts`, before setting uniforms, `pass.modulation[key]` is evaluated and overrides the slider value.
+Modulator edges connect a source's `mod` handle to a target's `param:<key>` handle. Only `float` and `int` params are modulatable (`isModulatable`). The binding is the edge itself — nothing is stored in the param value — so documents stay plain. In `pipeline.ts`, before setting uniforms, `pass.modulation[key]` is evaluated and overrides the slider value; the slider is locked while wired and shows the incoming value.
 
 ---
 
@@ -316,11 +341,12 @@ Modulator edges connect a source's `mod` handle to a target's `param:<key>` hand
 - **Node Types**:
   - Image: `image`
   - Video: `video`
+  - Generator: `generator`
   - Effect: `effect`
   - Modulator: `modulator`
   - Viewer: `renderOutput` (**Must be `renderOutput`, not `output`**, to prevent React Flow default stylesheet collision)
   - Background: `backgroundOutput`
-  - Offscreen Render: `render` / `formatter`
+  - Offscreen Render: `render` (`formatter` is a legacy alias, also mapped to `RenderNode`)
   - File Export: `export`
 
 - **Port & Handle Typing**:
@@ -358,6 +384,8 @@ npm run check:shaders
 npm run build
 ```
 
+CI (`.github/workflows/ci.yml`) runs `npm test` and `npm run build` on every pull request to `main`, so anything that fails locally will fail there too.
+
 ### 8.2. Pre-Commit / Pre-Completion Verification Checklist
 
 Before finishing any task, an AI assistant **must ensure**:
@@ -373,7 +401,7 @@ Before finishing any task, an AI assistant **must ensure**:
 5. **No Collisions with Reserved Names**:
    Check new effect parameters or local GLSL variables against reserved lists.
 6. **No Breaking Document Persistence**:
-   Ensure state schema changes maintain backward compatibility in `document.ts` (handle missing optional fields cleanly).
+   Ensure state schema changes maintain backward compatibility in `document.ts` (handle missing optional fields cleanly). Documents are versioned (`DOCUMENT_VERSION`, currently 2; older versions listed in `READABLE_VERSIONS`) and autosaved to `localStorage` under `comp.graph` — a breaking change needs a version bump and a migration.
 
 ---
 
@@ -386,7 +414,7 @@ Before finishing any task, an AI assistant **must ensure**:
 3. **Loop Detection in Graphs**:
    - Graph resolution detects cycles using the `Loop` error in `graph.ts`. Don't bypass cycle checks when modifying node traversal.
 4. **Working Resolution vs Display Resolution**:
-   - Effects execute inside `TargetPool` buffers capped at `MAX_WORKING_SIZE` (2048px). The final blit pass scales the result into the display canvas with aspect fit and bilinear/mipmapped filtering.
+   - The pipeline scales the working frame so its long side fits the `maxWorkingSize` passed in each render request. The live viewers pass `MAX_WORKING_SIZE` (2048px, defined in `OutputNode.tsx` and `FullScreenBackground.tsx`); file exports in `exportEngine.ts` use at least 4096px. The final blit pass scales the result into the display canvas with aspect fit and bilinear/mipmapped filtering.
 5. **Deployment**:
    - Deploys are fully automated via GitHub Actions (`.github/workflows/deploy.yml`) on push to `main`.
    - The custom domain is retained via `public/CNAME`.

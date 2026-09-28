@@ -13,6 +13,9 @@ const nodes: AppNode[] = [
   { id: 'vA', type: 'renderOutput', position: at, data: { width: 360 } },
   { id: 'vB', type: 'renderOutput', position: at, data: { width: 360 } },
   { id: 'exp', type: 'export', position: at, data: { filenamePrefix: '' } },
+  { id: 'osc', type: 'modulator', position: at, data: { modulatorId: 'lfo', params: {} } },
+  { id: 'stat', type: 'modulator', position: at, data: { modulatorId: 'statistic', params: {} } },
+  { id: 'scan', type: 'effect', position: at, data: { effectId: 'scanlines', params: {} } },
 ];
 const wire = (source: string, target: string, targetHandle: string | null = null, sourceHandle: string | null = null) => ({
   source,
@@ -45,10 +48,27 @@ describe('connection rules', () => {
     expect(wouldCreateCycle(edges, wire('fx2', 'fx1'))).toBe(true);
   });
 
-  it('keeps signals and pictures apart', () => {
+  it('converts between signals and pictures as Blender sockets do', () => {
     expect(isValidConnection(nodes, [], wire('lfo', 'fx1', paramPort('mix'), MOD_OUTPUT))).toBe(true);
-    expect(isValidConnection(nodes, [], wire('lfo', 'fx1', null, MOD_OUTPUT))).toBe(false);
-    expect(isValidConnection(nodes, [], wire('img', 'fx1', paramPort('mix')))).toBe(false);
+    // A number where a picture goes is a flat grey.
+    expect(isValidConnection(nodes, [], wire('lfo', 'fx1', null, MOD_OUTPUT))).toBe(true);
+    // A picture into a param is a field.
+    expect(isValidConnection(nodes, [], wire('img', 'fx1', paramPort('mix')))).toBe(true);
+    // ...and into a Math's port makes the Math per-pixel.
+    expect(isValidConnection(nodes, [], wire('img', 'lfo', paramPort('a')))).toBe(true);
+    // Never into a baked file's port, or a modulator's main input unless it measures pictures.
+    expect(isValidConnection(nodes, [], wire('lfo', 'exp', RENDER_PORT, MOD_OUTPUT))).toBe(false);
+    expect(isValidConnection(nodes, [], wire('img', 'lfo'))).toBe(false);
+    expect(isValidConnection(nodes, [], wire('img', 'stat'))).toBe(true);
+  });
+
+  it('refuses a picture into a port that needs a single number', () => {
+    // A source's rate is a round socket, and so is a speed integrated into a phase.
+    expect(isValidConnection(nodes, [], wire('img', 'osc', paramPort('rate')))).toBe(false);
+    expect(isValidConnection(nodes, [], wire('img', 'scan', paramPort('roll')))).toBe(false);
+    expect(isValidConnection(nodes, [], wire('img', 'scan', paramPort('lines')))).toBe(true);
+    // A baked file is never a field.
+    expect(isValidConnection(nodes, [], wire('rnd', 'fx1', paramPort('mix')))).toBe(false);
   });
 
   it('sends baked files only where a baked file can go', () => {
