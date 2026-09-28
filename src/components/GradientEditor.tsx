@@ -267,7 +267,7 @@ export const GradientEditor: React.FC<GradientEditorProps> = ({ nodeId, params, 
         <div
           ref={trackRef}
           className="gradient-track nodrag"
-          style={{ background: gradientCss }}
+          style={{ backgroundImage: gradientCss }}
           onClick={handleTrackClick}
           title="Click gradient bar to add a color stop"
         />
