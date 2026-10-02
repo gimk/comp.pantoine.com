@@ -512,6 +512,75 @@ class Loop extends Error {}
  * picture is not fatal: it samples as transparent, and the effect carries
  * on without it.
  */
+/**
+ * Range arithmetic for per-pixel Maths, shared by the renderer -- which
+ * needs a Map Range's Auto range to draw it -- and the card, which shows
+ * the From range that Auto range is using.
+ */
+const fieldRanges = (byId: Map<string, AppNode>, sourceOf: PortIndex) => {
+  const isField = (nodeId: string | undefined): boolean => isFieldSource(byId, sourceOf, nodeId);
+
+  /**
+   * The range a field can take, for Map Range's Auto range: 0..1 for a
+   * picture, and through a per-pixel Math, what the Math makes of its
+   * inputs' ranges. The same interval arithmetic as for a signal.
+   */
+  const fieldBounds = (nodeId: string, seen: Set<string> = new Set()): Interval | null => {
+    const node = byId.get(nodeId);
+    if (node?.type !== 'modulator') return [0, 1];
+    const def = getModulator(node.data.modulatorId);
+    if (!def || seen.has(nodeId)) return null;
+    seen.add(nodeId);
+    const { params, ranges } = fieldOpInputs(nodeId, def, seen);
+    return def.bounds(ranges, params);
+  };
+
+  /** A field operator's params with derived ones worked out, and each port's range. */
+  const fieldOpInputs = (nodeId: string, def: NonNullable<ReturnType<typeof getModulator>>, seen?: Set<string>) => {
+    const node = byId.get(nodeId) as Node<ModulatorNodeData, 'modulator'>;
+    const inputRanges: Record<string, Interval | null> = {};
+    for (const key of modulatorPortsOf(def)) {
+      const source = sourceOf(nodeId, paramPort(key));
+      if (source === undefined) continue;
+      if (isField(source)) inputRanges[key] = fieldBounds(source, seen ?? new Set([nodeId]));
+      else {
+        const signal = signalFrom(byId, sourceOf, source, new Set());
+        if (signal) inputRanges[key] = signalBounds(signal);
+      }
+    }
+    const derived = def.derive ? def.derive(node.data.params, inputRanges) : {};
+    for (const key of Object.keys(derived)) if (sourceOf(nodeId, paramPort(key)) !== undefined) delete derived[key];
+    const params: Record<string, ParamValue> = { ...node.data.params, ...derived };
+    const ranges: Record<string, Interval | null> = {};
+    for (const spec of def.params) {
+      if (!modulatorPortsOf(def).includes(spec.key)) continue;
+      if (spec.key in inputRanges) ranges[spec.key] = inputRanges[spec.key];
+      else {
+        const v = typeof params[spec.key] === 'number' ? (params[spec.key] as number) : 0;
+        ranges[spec.key] = [v, v];
+      }
+    }
+    return { params, ranges, derived };
+  };
+
+  return { fieldBounds, fieldOpInputs };
+};
+
+/**
+ * The params a per-pixel Math works out for itself -- Map Range's From
+ * range under Auto range -- for showing on its card. Empty when its output
+ * is a single number; `derivedParams` covers that case.
+ */
+export const fieldOpDerived = (nodes: AppNode[], edges: Edge[], nodeId: string): Record<string, number> => {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const sourceOf = indexPorts(edges);
+  const node = byId.get(nodeId);
+  if (node?.type !== 'modulator' || !isFieldSource(byId, sourceOf, nodeId)) return {};
+  const def = getModulator(node.data.modulatorId);
+  if (!def) return {};
+  return fieldRanges(byId, sourceOf).fieldOpInputs(nodeId, def).derived;
+};
+
 export const resolveChain = (
   nodes: AppNode[],
   edges: Edge[],
@@ -602,48 +671,7 @@ export const resolveChain = (
     return { modulation, fields };
   };
 
-  /**
-   * The range a field can take, for Map Range's Auto range: 0..1 for a
-   * picture, and through a per-pixel Math, what the Math makes of its
-   * inputs' ranges. The same interval arithmetic as for a signal.
-   */
-  const fieldBounds = (nodeId: string, seen: Set<string> = new Set()): Interval | null => {
-    const node = byId.get(nodeId);
-    if (node?.type !== 'modulator') return [0, 1];
-    const def = getModulator(node.data.modulatorId);
-    if (!def || seen.has(nodeId)) return null;
-    seen.add(nodeId);
-    const { params, ranges } = fieldOpInputs(nodeId, def, seen);
-    return def.bounds(ranges, params);
-  };
-
-  /** A field operator's params with derived ones worked out, and each port's range. */
-  const fieldOpInputs = (nodeId: string, def: NonNullable<ReturnType<typeof getModulator>>, seen?: Set<string>) => {
-    const node = byId.get(nodeId) as Node<ModulatorNodeData, 'modulator'>;
-    const inputRanges: Record<string, Interval | null> = {};
-    for (const key of modulatorPortsOf(def)) {
-      const source = sourceOf(nodeId, paramPort(key));
-      if (source === undefined) continue;
-      if (isField(source)) inputRanges[key] = fieldBounds(source, seen ?? new Set([nodeId]));
-      else {
-        const signal = signalFrom(byId, sourceOf, source, new Set());
-        if (signal) inputRanges[key] = signalBounds(signal);
-      }
-    }
-    const derived = def.derive ? def.derive(node.data.params, inputRanges) : {};
-    for (const key of Object.keys(derived)) if (sourceOf(nodeId, paramPort(key)) !== undefined) delete derived[key];
-    const params: Record<string, ParamValue> = { ...node.data.params, ...derived };
-    const ranges: Record<string, Interval | null> = {};
-    for (const spec of def.params) {
-      if (!modulatorPortsOf(def).includes(spec.key)) continue;
-      if (spec.key in inputRanges) ranges[spec.key] = inputRanges[spec.key];
-      else {
-        const v = typeof params[spec.key] === 'number' ? (params[spec.key] as number) : 0;
-        ranges[spec.key] = [v, v];
-      }
-    }
-    return { params, ranges };
-  };
+  const { fieldOpInputs } = fieldRanges(byId, sourceOf);
 
   /** The step index for a node's picture, or null if it cannot make one. */
   const visit = (nodeId: string | undefined): number | null => {

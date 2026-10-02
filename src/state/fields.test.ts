@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Edge } from '@xyflow/react';
-import { MOD_OUTPUT, chainIsAnimated, hasTargetPort, outputIsField, paramPort, resolveChain, wireKind, type AppNode } from './graph';
+import { MOD_OUTPUT, chainIsAnimated, fieldOpDerived, hasTargetPort, outputIsField, paramPort, resolveChain, wireKind, type AppNode } from './graph';
 import { buildFragmentSource } from '../engine/effects';
 import { getEffect } from '../engine/registry';
 import { convertSignal, fieldOperatorBody, math, mapRange } from '../engine/modulators';
@@ -70,6 +70,13 @@ describe('fields: pictures wired into params', () => {
     ];
     const op = resolveChain(nodes, edges, 'view')!.plan.steps.find((step) => step.kind === 'fieldOp');
     expect(op?.kind === 'fieldOp' && [op.params.fromMin, op.params.fromMax]).toEqual([0, 1]);
+    // The card shows the same From range, so it can lock those knobs.
+    expect(fieldOpDerived(nodes, edges, 'map')).toEqual({ fromMin: 0, fromMax: 1 });
+    // With Auto range off, From is the user's again.
+    const manual = nodes.map((node) =>
+      node.id === 'map' ? mod('map', 'map', { auto: false, toMin: 0, toMax: 40 }) : node,
+    );
+    expect(fieldOpDerived(manual, edges, 'map')).toEqual({});
   });
 
   it('leaves a field on a round port unused, and marks the wire invalid', () => {

@@ -1,7 +1,7 @@
 import React, { useMemo, useRef } from 'react';
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
 import { Activity, ScanEye, Sigma } from 'lucide-react';
-import { MOD_OUTPUT, outputIsField, resolveSignal, type ModulatorNodeData } from '../state/graph';
+import { MOD_OUTPUT, fieldOpDerived, outputIsField, resolveSignal, type ModulatorNodeData } from '../state/graph';
 import {
   derivedParams,
   evaluateSignal,
@@ -104,6 +104,11 @@ export const ModulatorNode: React.FC<NodeProps<Node<ModulatorNodeData, 'modulato
   }, [id, key]);
   // Whether a picture reaches this node, making its output a field.
   const isField = useGraph((state) => outputIsField(state.nodes, state.edges, id));
+  // What a per-pixel Math works out for itself from its inputs' ranges --
+  // Map Range's From range under Auto range. A string, so the card only
+  // re-renders when the numbers change.
+  const fieldDerivedKey = useGraph((state) => JSON.stringify(fieldOpDerived(state.nodes, state.edges, id)));
+  const fieldDerived = useMemo<Record<string, number>>(() => JSON.parse(fieldDerivedKey), [fieldDerivedKey]);
 
   if (!def) {
     return (
@@ -118,9 +123,10 @@ export const ModulatorNode: React.FC<NodeProps<Node<ModulatorNodeData, 'modulato
   }
 
   const ports = new Set(modulatorPortsOf(def));
-  // A per-pixel Math has no single value to derive from, so its Auto range
-  // is worked out by the renderer instead, and not shown here.
-  const derived = signal && !isField ? derivedParams(signal) : {};
+  // A per-pixel Math derives from its inputs' ranges -- 0..1 for a
+  // picture -- rather than from a signal, but it is the same From range,
+  // in effect in the same way, so it is shown the same way.
+  const derived = isField ? fieldDerived : signal ? derivedParams(signal) : {};
   const Icon = def.picture ? ScanEye : def.role === 'operator' ? Sigma : Activity;
 
   return (
