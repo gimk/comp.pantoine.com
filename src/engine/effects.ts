@@ -11,13 +11,28 @@
  * blur and grain being reimplemented once per look.
  */
 import { STDLIB } from './stdlib';
+import type { TimeCacheConfig } from './timeCache';
 
 export type Vec2 = [number, number];
 /** Straight RGB, each channel 0..1 -- what the shader wants, no conversion. */
 export type Rgb = [number, number, number];
 export type ParamValue = number | boolean | Vec2 | Rgb;
 
-type BaseSpec = { key: string; label: string };
+type BaseSpec = {
+  key: string;
+  label: string;
+  /**
+   * Whether this param does anything given the rest -- a width that only
+   * one waveform reads. The card dims it otherwise. It stays editable and
+   * keeps its port, so nothing wired to it is lost when the mode changes.
+   */
+  activeWhen?: (params: Record<string, ParamValue>) => boolean;
+  /**
+   * Read by the engine on the CPU rather than by the shader -- a cache's
+   * length -- so it takes a single value, never a picture: a round port.
+   */
+  cpu?: boolean;
+};
 
 /** A single tweakable knob, rendered as the control its kind implies. */
 export type ParamSpec =
@@ -142,6 +157,22 @@ export type EffectDef = {
    * after the final pass.
    */
   feedbackPass?: number;
+  /**
+   * Intermediate sub-passes draw into full-float targets (half float, then
+   * eight bits, where the GPU has nothing better) instead of eight bits.
+   * For an effect whose passes hand numbers to each other rather than a
+   * picture -- a running sum, a phase. Those targets are sampled nearest,
+   * so read them with `texelFetch`. The last pass is unaffected.
+   */
+  scratch?: 'float';
+  /**
+   * Keeps a ring of this node's past input frames (see timeCache.ts), sized
+   * from the resolved params, and binds it as `u_cache`, a sampler2DArray.
+   * `u_cache_now` is the clock in cache slots, `u_cache_head` the newest
+   * slot -- the current frame -- and slot s lives in layer
+   * `mod(s, u_cache_layers)`.
+   */
+  timeCache?: (params: Record<string, ParamValue>) => TimeCacheConfig;
   params: ParamSpec[];
   /** Extra image inputs, in port order. Most effects have none. */
   inputs?: InputSpec[];
@@ -275,7 +306,7 @@ export const isPhasedParam = (spec: ParamSpec): boolean =>
  * a Blender socket that only takes a single value.
  */
 export const acceptsField = (def: EffectDef, spec: ParamSpec): boolean =>
-  !isPhasedParam(spec) && def.id !== 'particleFlow';
+  !isPhasedParam(spec) && !spec.cpu && def.id !== 'particleFlow';
 
 /** The sampler a field-wired param reads its picture from. */
 export const fieldSampler = (key: string): string => `u_${key}_field`;
@@ -323,6 +354,13 @@ const fieldRead = (spec: ParamSpec): string => {
  * so the body reads `u_amount` exactly as it always did and no module has
  * to know a field exists. That is what lets every module take one.
  */
+/** What an effect with a `timeCache` reads it through. */
+const TIME_CACHE_UNIFORMS = `uniform highp sampler2DArray u_cache;
+uniform float u_cache_now;
+uniform float u_cache_head;
+uniform float u_cache_layers;
+uniform float u_cache_fps;`;
+
 export const buildFragmentSource = (def: EffectDef, passIndex: number, fields: readonly string[] = []): string => {
   assertParamsAreSound(def);
 
@@ -341,6 +379,7 @@ export const buildFragmentSource = (def: EffectDef, passIndex: number, fields: r
         : `uniform ${GLSL_TYPE[p.kind]} u_${p.key};`,
     ),
     ...phaseUniforms,
+    ...(def.timeCache ? [TIME_CACHE_UNIFORMS] : []),
   ].join('\n');
 
   const reads = fieldSpecs.map((spec) => `  u_${spec.key} = ${fieldRead(spec)};\n`).join('');

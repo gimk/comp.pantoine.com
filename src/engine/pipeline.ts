@@ -2,7 +2,8 @@ import type { EffectDef, ParamSpec, ParamValue, Rgb, Vec2 } from './effects';
 import { FIRST_INPUT_UNIT, buildFragmentSource, fieldSampler, inputsOf, isPhasedParam, paramsOf, passesOf, prelude } from './effects';
 import { STDLIB } from './stdlib';
 import { createProgram, drawQuad, uniform, type UniformCache } from './gl';
-import { TargetPool, createTarget, deleteTarget, feedbackFormat, type RenderTarget, type TargetFormat } from './targets';
+import { TimeCacheStore, type CacheBinding } from './timeCache';
+import { TargetPool, createTarget, deleteTarget, feedbackFormat, scratchFormat, type RenderTarget, type TargetFormat } from './targets';
 import { clearShaderError, reportShaderError } from './shaderErrors';
 import {
   evaluateSignal,
@@ -272,6 +273,8 @@ export class Pipeline {
   private particleEngine: ParticleEngine;
   /** What feedback state is stored in on this GPU: half float if it can. */
   private feedbackFormat: TargetFormat;
+  /** What an effect's float scratch passes draw into: full float if it can. */
+  private scratchFormat: TargetFormat;
   /** What an unwired extra input samples: one transparent black texel. */
   private blank: WebGLTexture;
   /** One uploaded texture per image node the graph reads. */
@@ -300,6 +303,10 @@ export class Pipeline {
   private phases = new PhaseIntegrator();
   /** Offsets that keep each phase continuous across a change of rate; see phase.ts. */
   private carries = new PhaseCarry();
+  /** Past input frames per Time Machine node; see timeCache.ts. */
+  private timeCaches: TimeCacheStore;
+  /** Nodes whose time cache was used this frame; the rest are dropped. */
+  private liveCaches = new Set<string>();
 
   private historyFor(nodeId: string, width: number, height: number): RenderTarget {
     let target = this.history.get(nodeId);
@@ -327,6 +334,8 @@ export class Pipeline {
     this.maxUnits = gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS) as number;
     this.particleEngine = new ParticleEngine(gl);
     this.feedbackFormat = feedbackFormat(gl);
+    this.scratchFormat = scratchFormat(gl);
+    this.timeCaches = new TimeCacheStore(gl);
 
     const blank = gl.createTexture();
     if (!blank) throw new Error('Could not create blank texture');
@@ -674,6 +683,10 @@ export class Pipeline {
      * pool until the end, since later passes may still be drawing.
      */
     const format: TargetFormat = pass.def.feedback ? this.feedbackFormat : 'rgba8';
+    // Every pass but the last, for an effect that hands numbers between its
+    // own passes. The last stays in `format`, so downstream sees an
+    // ordinary picture.
+    const scratch: TargetFormat = pass.def.scratch === 'float' ? this.scratchFormat : format;
     const keepIndex = pass.def.feedback
       ? Math.min(bodies.length - 1, Math.max(0, Math.round(pass.def.feedbackPass ?? bodies.length - 1)))
       : -1;
@@ -682,14 +695,30 @@ export class Pipeline {
     let result = input;
     let current: RenderTarget | null = null;
 
-    // Fields take the units after the extra inputs. A module with more
-    // fields than the GPU has units for keeps the rest at their values.
-    const fieldUnits = Math.max(0, this.maxUnits - FIRST_INPUT_UNIT - inputs.length);
+    // Fields take the units after the extra inputs, and a time cache the
+    // one after those. A module with more fields than the GPU has units
+    // for keeps the rest at their values.
+    const cacheUnits = pass.def.timeCache ? 1 : 0;
+    const fieldUnits = Math.max(0, this.maxUnits - FIRST_INPUT_UNIT - inputs.length - cacheUnits);
     const fielded = specs.filter((spec) => fields.has(spec.key)).slice(0, fieldUnits);
     const fieldKeys = fielded.map((spec) => spec.key);
 
+    // Recorded before the node draws, so the newest slot is this frame.
+    let cache: CacheBinding | null = null;
+    if (pass.def.timeCache) {
+      const resolved: Record<string, ParamValue> = {};
+      specs.forEach((spec, k) => {
+        resolved[spec.key] = values[k];
+      });
+      this.liveCaches.add(pass.nodeId);
+      cache = this.timeCaches.record(pass.nodeId, pass.def.timeCache(resolved), width, height, request.time, () => {
+        this.bindShared(this.present, input, input, input, width, height, request, 0, 0);
+        drawQuad(gl);
+      });
+    }
+
     for (let i = 0; i < bodies.length; i += 1) {
-      const target = this.pool.acquire(format);
+      const target = this.pool.acquire(i < bodies.length - 1 ? scratch : format);
       const compiled = this.programFor(pass.def, i, fieldKeys);
       gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
       this.bindShared(compiled, result, input, previous, width, height, request, pass.seed, i);
@@ -707,6 +736,17 @@ export class Pipeline {
         gl.bindTexture(gl.TEXTURE_2D, fields.get(spec.key)!);
         gl.uniform1i(uniform(gl, compiled.program, compiled.uniforms, fieldSampler(spec.key)), unit);
       });
+      if (cache) {
+        const unit = FIRST_INPUT_UNIT + inputs.length + fielded.length;
+        const { program, uniforms } = compiled;
+        gl.activeTexture(gl.TEXTURE0 + unit);
+        gl.bindTexture(gl.TEXTURE_2D_ARRAY, cache.texture);
+        gl.uniform1i(uniform(gl, program, uniforms, 'u_cache'), unit);
+        gl.uniform1f(uniform(gl, program, uniforms, 'u_cache_now'), cache.now);
+        gl.uniform1f(uniform(gl, program, uniforms, 'u_cache_head'), cache.head);
+        gl.uniform1f(uniform(gl, program, uniforms, 'u_cache_layers'), cache.layers);
+        gl.uniform1f(uniform(gl, program, uniforms, 'u_cache_fps'), cache.fps);
+      }
       gl.activeTexture(gl.TEXTURE0);
 
       specs.forEach((spec, k) => {
@@ -872,6 +912,7 @@ export class Pipeline {
       this.historyHeight = workHeight;
     }
     const liveFeedback = new Set<string>();
+    this.liveCaches.clear();
     const liveSources = new Set<string>();
     const liveVideoSources = new Set<string>();
     const livePhases = new Set<string>();
@@ -1028,6 +1069,7 @@ export class Pipeline {
     this.phases.prune(livePhases);
     this.carries.prune(livePhases);
     this.particleEngine.prune(liveParticleSims);
+    this.timeCaches.prune(this.liveCaches);
 
     const isFill = request.fitMode === 'fill' || request.fitMode === 'cover';
     const fit = isFill
@@ -1086,6 +1128,7 @@ export class Pipeline {
     this.phases.clear();
     this.carries.clear();
     this.particleEngine.reset();
+    this.timeCaches.reset();
   }
 
   /** Clear the canvas to transparent, for when nothing is wired up. */
@@ -1105,6 +1148,7 @@ export class Pipeline {
     this.phases.clear();
     this.carries.clear();
     this.particleEngine.dispose();
+    this.timeCaches.dispose();
     if (this.statTarget) deleteTarget(gl, this.statTarget);
     this.statTarget = null;
     for (const compiled of this.programs.values()) gl.deleteProgram(compiled.program);

@@ -13,6 +13,7 @@ import { dither } from './modules/dither';
 import { dropouts } from './modules/dropouts';
 import { echo } from './modules/echo';
 import { flames } from './modules/flames';
+import { fmScanlines } from './modules/fmScanlines';
 import { edgeDetect } from './modules/edgeDetect';
 import { gradientMap } from './modules/gradientMap';
 import { grain } from './modules/grain';
@@ -39,6 +40,7 @@ import { streak } from './modules/streak';
 import { subpixels } from './modules/subpixels';
 import { swirl } from './modules/swirl';
 import { threshold } from './modules/threshold';
+import { timeMachine } from './modules/timeMachine';
 import { trails } from './modules/trails';
 import { transform } from './modules/transform';
 import { velocityMod } from './modules/velocityMod';
@@ -97,6 +99,7 @@ export const registry: EffectDef[] = [
   subpixels,
   ruttEtra,
   velocityMod,
+  fmScanlines,
   particleFlow,
   interlace,
   roll,
@@ -117,6 +120,7 @@ export const registry: EffectDef[] = [
   // Temporal
   trails,
   echo,
+  timeMachine,
   flames,
 
   // Composite

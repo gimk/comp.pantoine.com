@@ -10,9 +10,13 @@
 
 /**
  * Storage for a target. Almost everything is `rgba8`; `rgba16f` is for
- * state that is faded a little every frame and read back the next one.
+ * state that is faded a little every frame and read back the next one;
+ * `rgba32f` is for numbers an effect builds up between its own sub-passes
+ * (a running sum along a row), where half float runs out of digits. Full
+ * float is not filterable everywhere, so it is sampled nearest -- read it
+ * with `texelFetch`, a texel at a time.
  */
-export type TargetFormat = 'rgba8' | 'rgba16f';
+export type TargetFormat = 'rgba8' | 'rgba16f' | 'rgba32f';
 
 export type RenderTarget = {
   framebuffer: WebGLFramebuffer;
@@ -23,6 +27,34 @@ export type RenderTarget = {
 };
 
 const floatSupport = new WeakMap<WebGL2RenderingContext, boolean>();
+const fullFloatSupport = new WeakMap<WebGL2RenderingContext, boolean>();
+
+/**
+ * Whether this context can really draw into `format`. Asked with a real
+ * framebuffer because a driver advertising EXT_color_buffer_float is not
+ * quite the same as one honouring it.
+ */
+const canRenderTo = (gl: WebGL2RenderingContext, format: 'rgba16f' | 'rgba32f'): boolean => {
+  if (!gl.getExtension('EXT_color_buffer_float')) return false;
+  let supported = false;
+  const texture = gl.createTexture();
+  const framebuffer = gl.createFramebuffer();
+  if (texture && framebuffer) {
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    if (format === 'rgba32f') {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, 1, 1, 0, gl.RGBA, gl.FLOAT, null);
+    } else {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, 1, 1, 0, gl.RGBA, gl.HALF_FLOAT, null);
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+    supported = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  }
+  gl.deleteFramebuffer(framebuffer);
+  gl.deleteTexture(texture);
+  return supported;
+};
 
 /**
  * The format decaying state should live in on this context.
@@ -39,24 +71,23 @@ const floatSupport = new WeakMap<WebGL2RenderingContext, boolean>();
 export const feedbackFormat = (gl: WebGL2RenderingContext): TargetFormat => {
   let supported = floatSupport.get(gl);
   if (supported === undefined) {
-    supported = false;
-    if (gl.getExtension('EXT_color_buffer_float')) {
-      const texture = gl.createTexture();
-      const framebuffer = gl.createFramebuffer();
-      if (texture && framebuffer) {
-        gl.bindTexture(gl.TEXTURE_2D, texture);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, 1, 1, 0, gl.RGBA, gl.HALF_FLOAT, null);
-        gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
-        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
-        supported = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
-        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-      }
-      gl.deleteFramebuffer(framebuffer);
-      gl.deleteTexture(texture);
-    }
+    supported = canRenderTo(gl, 'rgba16f');
     floatSupport.set(gl, supported);
   }
   return supported ? 'rgba16f' : 'rgba8';
+};
+
+/**
+ * What an effect that asks for `scratch: 'float'` keeps its intermediate
+ * numbers in: full float if it can, else the best this context has.
+ */
+export const scratchFormat = (gl: WebGL2RenderingContext): TargetFormat => {
+  let supported = fullFloatSupport.get(gl);
+  if (supported === undefined) {
+    supported = canRenderTo(gl, 'rgba32f');
+    fullFloatSupport.set(gl, supported);
+  }
+  return supported ? 'rgba32f' : feedbackFormat(gl);
 };
 
 export const createTarget = (
@@ -68,13 +99,18 @@ export const createTarget = (
   const texture = gl.createTexture();
   if (!texture) throw new Error('Could not create target texture');
   gl.bindTexture(gl.TEXTURE_2D, texture);
-  if (format === 'rgba16f') {
+  if (format === 'rgba32f') {
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, width, height, 0, gl.RGBA, gl.FLOAT, null);
+  } else if (format === 'rgba16f') {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, width, height, 0, gl.RGBA, gl.HALF_FLOAT, null);
   } else {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
   }
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  // Full float without OES_texture_float_linear is incomplete under LINEAR,
+  // and an incomplete texture reads as black.
+  const filter = format === 'rgba32f' ? gl.NEAREST : gl.LINEAR;
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
   // Effects that sample off their own edges should smear the border pixel
   // rather than wrap round to the far side of the image.
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -109,7 +145,11 @@ export class TargetPool {
   private gl: WebGL2RenderingContext;
   private all: RenderTarget[] = [];
   /** Sets, so releasing twice cannot hand one target to two owners. */
-  private free: Record<TargetFormat, Set<RenderTarget>> = { rgba8: new Set(), rgba16f: new Set() };
+  private free: Record<TargetFormat, Set<RenderTarget>> = {
+    rgba8: new Set(),
+    rgba16f: new Set(),
+    rgba32f: new Set(),
+  };
   private width = 0;
   private height = 0;
 
@@ -148,8 +188,7 @@ export class TargetPool {
   dispose(): void {
     for (const target of this.all) deleteTarget(this.gl, target);
     this.all = [];
-    this.free.rgba8.clear();
-    this.free.rgba16f.clear();
+    for (const free of Object.values(this.free)) free.clear();
     this.width = 0;
     this.height = 0;
   }

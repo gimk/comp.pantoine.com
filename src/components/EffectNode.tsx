@@ -174,8 +174,10 @@ export const ParamRow: React.FC<{
   field?: boolean;
   /** A value the node works out for this param itself, if it does. */
   derived?: number;
+  /** Has no effect given the node's other params: dimmed, still editable. */
+  inactive?: boolean;
   onChange: (value: ParamValue) => void;
-}> = ({ nodeId, spec, value, port, field = false, derived, onChange }) => {
+}> = ({ nodeId, spec, value, port, field = false, derived, inactive = false, onChange }) => {
   const handle = paramPort(spec.key);
   // What the wire into this port carries, if there is one -- a string, so
   // the row re-renders only when that changes.
@@ -206,7 +208,9 @@ export const ParamRow: React.FC<{
   const locked = wired === 'field' || (wired === 'signal' && !isModulatable(spec));
 
   return (
-    <div className={'param-row' + (spec.kind === 'float' && spec.field ? ' is-field' : '')}>
+    <div
+      className={'param-row' + (spec.kind === 'float' && spec.field ? ' is-field' : '') + (inactive ? ' is-inactive' : '')}
+    >
       <Handle
         type="target"
         id={handle}
@@ -309,6 +313,7 @@ export const EffectNode: React.FC<NodeProps<Node<EffectNodeData, 'effect'>>> = (
             value={data.params[spec.key]}
             port
             field={acceptsField(def, spec)}
+            inactive={spec.activeWhen ? !spec.activeWhen(data.params) : false}
             onChange={(value) => setParam(id, spec.key, value)}
           />
         ))}

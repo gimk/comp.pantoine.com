@@ -1,6 +1,7 @@
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
 import { generatorsForPlan, type ExportFormat, type RenderNodeData, type ResolvedChain } from '../state/graph';
 import { useGraph } from '../state/store';
+import { defaultParams } from './effects';
 import { Pipeline } from './pipeline';
 import { createContext } from './gl';
 import { getImage, type LoadedImage } from './imageStore';
@@ -44,6 +45,12 @@ export type ExportResult = {
 /** Seconds of feedback history rendered before the first captured frame. */
 const WARM_UP_SECONDS = 2;
 const MAX_WARM_UP_FRAMES = 120;
+/**
+ * The longest warm-up a Time Machine can ask for, in seconds. Its cache can
+ * reach further back than this; past it, the start of an export shows the
+ * oldest frames it did manage to record.
+ */
+const MAX_CACHE_WARM_UP_SECONDS = 10;
 /** Frame rate warm-up runs at for a still, which has no frame rate of its own. */
 const STILL_WARM_UP_FPS = 30;
 /** How long one video seek may take before the export gives up on it. */
@@ -477,7 +484,8 @@ class ExportSession {
    */
   async warmUp(start: number, fps: number): Promise<void> {
     if (!this.inputs.needsWarmUp) return;
-    const frames = warmUpFrames(start, fps, WARM_UP_SECONDS, MAX_WARM_UP_FRAMES);
+    const seconds = this.inputs.warmUpSeconds;
+    const frames = warmUpFrames(start, fps, seconds, Math.max(MAX_WARM_UP_FRAMES, Math.ceil(seconds * fps)));
     for (let k = frames; k >= 1; k--) {
       await this.render(start - k / fps, 1 / fps);
       await yieldToEventLoop();
@@ -503,6 +511,8 @@ type Inputs = {
   width: number;
   height: number;
   needsWarmUp: boolean;
+  /** How much of the clock to render before capture: enough to fill every time cache. */
+  warmUpSeconds: number;
 };
 
 /** Everything the chain reads, and the output size -- before any GPU work. */
@@ -516,7 +526,17 @@ const gatherInputs = (chain: ResolvedChain, data: RenderNodeData, even: boolean)
   if (!(data.scale > 0)) throw new Error('Render scale must be above zero.');
 
   const { width, height } = outputSize(source.width, source.height, data.scale, even);
-  const needsWarmUp = chain.passes.some((pass) => pass.def.feedback || pass.def.id === 'particleFlow');
+  const needsWarmUp = chain.passes.some(
+    (pass) => pass.def.feedback || pass.def.timeCache || pass.def.id === 'particleFlow',
+  );
+  // A time cache wants its whole reach recorded before the first frame.
+  let warmUpSeconds = WARM_UP_SECONDS;
+  for (const pass of chain.passes) {
+    if (!pass.def.timeCache) continue;
+    const cache = pass.def.timeCache({ ...defaultParams(pass.def), ...pass.params });
+    const reach = (cache.frames - 1) / Math.max(cache.fps, 0.001);
+    warmUpSeconds = Math.max(warmUpSeconds, Math.min(reach, MAX_CACHE_WARM_UP_SECONDS));
+  }
   return {
     images,
     videos,
@@ -526,6 +546,7 @@ const gatherInputs = (chain: ResolvedChain, data: RenderNodeData, even: boolean)
     width,
     height,
     needsWarmUp,
+    warmUpSeconds,
   };
 };
 

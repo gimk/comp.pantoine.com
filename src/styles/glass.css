@@ -985,6 +985,12 @@ textarea,
   position: relative;
 }
 
+/* A param the node's other settings make irrelevant: still editable, port untouched. */
+.param-row.is-inactive > .param-control {
+  opacity: 0.4;
+  transition: opacity 160ms ease;
+}
+
 .node-input {
   display: flex;
   align-items: center;
