@@ -22,8 +22,11 @@ import {
 } from './components/paletteDrag';
 import { addPaletteItem } from './components/paletteCatalog';
 import { QuickAdd } from './components/QuickAdd';
+import { useShallow } from 'zustand/react/shallow';
 import type { AppNode } from './state/graph';
 import { isValidConnection as isConnectionAllowed } from './state/connections';
+import { drawnEdges, isGroup, realWire } from './state/groups';
+import { GroupNode } from './components/GroupNode';
 import { withNodeBoundary } from './components/NodeBoundary';
 import { ImageNode } from './components/ImageNode';
 import { VideoNode } from './components/VideoNode';
@@ -52,6 +55,7 @@ import './styles/glass.css';
  * The sink is `renderOutput` rather than `output` on purpose: React Flow
  * ships built-in `input`/`output`/`default` node types, and reusing the name
  * pulls in their stylesheet, which paints a white card behind the glass one.
+ * A group is `moduleGroup` for the same reason: `group` is built in too.
  *
  * Each is wrapped in its own error boundary, so one card that throws shows
  * as broken on its own instead of taking the whole canvas with it.
@@ -66,6 +70,7 @@ const nodeTypes = {
   backgroundOutput: withNodeBoundary(BackgroundNode),
   render: withNodeBoundary(RenderNode),
   export: withNodeBoundary(ExportNode),
+  moduleGroup: withNodeBoundary(GroupNode),
 };
 
 /**
@@ -73,10 +78,11 @@ const nodeTypes = {
  * take it never lights up -- rather than accepting the drop and then
  * producing nothing, which would look like a bug in the effect. The rules
  * themselves live in `connections`, where the store and the loader share them.
+ * A wire to a group's card is judged as the wire to the module inside it.
  */
 const isValidConnection = (connection: Connection | Edge): boolean => {
   const { nodes, edges } = useGraph.getState();
-  return isConnectionAllowed(nodes, edges, connection);
+  return isConnectionAllowed(nodes, edges, realWire(nodes, connection));
 };
 
 /**
@@ -279,12 +285,17 @@ const Editor: React.FC = () => {
     return true;
   }, []);
 
+  // Only the groups, compared item by item: a slider moving elsewhere hands
+  // the store a new node array but leaves every group as it was.
+  const groups = useGraph(useShallow((state) => state.nodes.filter(isGroup)));
+
   const edgesForFlow = useMemo(() => {
-    if (!insertTargetEdgeId) return edges;
-    return edges.map((edge) =>
+    const drawn = drawnEdges(groups, edges);
+    if (!insertTargetEdgeId) return drawn;
+    return drawn.map((edge) =>
       edge.id === insertTargetEdgeId ? { ...edge, className: 'edge-insert-target' } : edge,
     );
-  }, [edges, insertTargetEdgeId]);
+  }, [groups, edges, insertTargetEdgeId]);
 
   return (
     <>

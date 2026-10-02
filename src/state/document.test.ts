@@ -334,7 +334,7 @@ describe('document serialization & deserialization', () => {
 });
 
 describe('document versions and repair', () => {
-  it('reads a version 2 document, migrating formatter nodes, and writes version 3', () => {
+  it('reads a version 2 document, migrating formatter nodes, and writes the current version', () => {
     const v2 = {
       version: 2,
       nodes: [
@@ -348,8 +348,8 @@ describe('document versions and repair', () => {
     expect(loaded).not.toBeNull();
     expect(loaded!.nodes.map((node) => node.type)).toEqual(['generator', 'render', 'video']);
     expect(loaded!.edges).toHaveLength(1);
-    expect(DOCUMENT_VERSION).toBe(3);
-    expect(serializeGraph(loaded!.nodes, loaded!.edges).version).toBe(3);
+    expect(DOCUMENT_VERSION).toBe(4);
+    expect(serializeGraph(loaded!.nodes, loaded!.edges).version).toBe(4);
     expect(deserializeGraph({ version: 1, nodes: [], edges: [] })).not.toBeNull();
   });
 

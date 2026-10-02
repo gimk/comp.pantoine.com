@@ -3,6 +3,7 @@ import { BaseEdge, EdgeLabelRenderer, getBezierPath, type EdgeProps } from '@xyf
 import { X } from 'lucide-react';
 import { useGraph } from '../state/store';
 import { wireKind } from '../state/graph';
+import type { DrawnEdgeData } from '../state/groups';
 import { isPlaying, subscribeClock } from '../engine/clock';
 
 /**
@@ -32,6 +33,7 @@ export const LinkEdge: React.FC<EdgeProps> = ({
   style,
   sourceHandleId,
   targetHandleId,
+  data,
 }) => {
   const removeEdge = useGraph((state) => state.removeEdge);
   const playing = useSyncExternalStore(subscribeClock, isPlaying);
@@ -50,13 +52,19 @@ export const LinkEdge: React.FC<EdgeProps> = ({
   // for a signal, dashed blue for a field, purple for a baked file, red for
   // a field into a port that needs one number. A string selector, so an
   // edge re-renders when its kind changes and not on every store change.
+  // A wire drawn to a group's card is judged by the module it really reaches.
+  const real = (data as Partial<DrawnEdgeData> | undefined)?.real;
   const kind = useGraph((state) =>
-    wireKind(state.nodes, state.edges, {
-      source,
-      target,
-      sourceHandle: sourceHandleId ?? null,
-      targetHandle: targetHandleId ?? null,
-    }),
+    wireKind(
+      state.nodes,
+      state.edges,
+      real ?? {
+        source,
+        target,
+        sourceHandle: sourceHandleId ?? null,
+        targetHandle: targetHandleId ?? null,
+      },
+    ),
   );
   const variant = kind === 'picture' ? '' : kind === 'signal' ? 'mod' : kind;
 

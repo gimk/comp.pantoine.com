@@ -51,6 +51,7 @@ const dialogIsOpen = (): boolean => document.querySelector('[aria-modal="true"]'
  *   Ctrl/Cmd + Shift + Z redo (Ctrl + Y too)
  *   Ctrl/Cmd + D         duplicate the selection
  *   Ctrl/Cmd + C / X / V copy, cut, paste (paste lands under the pointer)
+ *   Ctrl/Cmd + G         group the selection; with Shift, ungroup it
  *   Ctrl/Cmd + A         select everything
  *   Escape               clear the selection
  *   F                    frame the selection, or the whole graph
@@ -130,6 +131,14 @@ export const useCanvasShortcuts = (
         if (isValueControl(event.target)) return;
         event.preventDefault();
         store.paste(pointer.current ? screenToFlowPosition(pointer.current) : undefined);
+      } else if (mod && !event.altKey && key === 'g') {
+        // Otherwise the browser's find-next.
+        event.preventDefault();
+        if (event.shiftKey) {
+          for (const node of store.nodes) if (node.selected && node.type === 'moduleGroup') store.ungroup(node.id);
+        } else {
+          store.groupSelection();
+        }
       } else if (mod && key === 'a') {
         event.preventDefault();
         store.setAllSelected(true);

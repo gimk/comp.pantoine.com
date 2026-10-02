@@ -165,7 +165,36 @@ export const DEFAULT_BACKGROUND_DATA: BackgroundNodeData = {
   opacity: 1,
 };
 
+/**
+ * One port on a group's card, standing in for a port of a module inside.
+ * Which ports a group shows is settled when it is made (see `groups`).
+ */
+export type GroupPort = {
+  /** The member module the port belongs to. */
+  node: string;
+  /** Its handle on that module; null for the main picture port. */
+  handle: string | null;
+  label: string;
+  /** What the port carries, for its colour and shape. */
+  kind: 'picture' | 'param' | 'field' | 'mod';
+};
+
+/**
+ * A group: modules collapsed into one opaque card.
+ *
+ * Only a matter of display. The members stay in the graph as ordinary
+ * nodes, hidden, with their wires untouched -- so the renderer never knows
+ * groups exist. The card draws the wires that cross into and out of it.
+ */
+export type GroupNodeData = {
+  name: string;
+  members: string[];
+  inputs: GroupPort[];
+  outputs: GroupPort[];
+};
+
 export type AppNode =
+  | Node<GroupNodeData, 'moduleGroup'>
   | Node<ImageNodeData, 'image'>
   | Node<VideoNodeData, 'video'>
   | Node<GeneratorNodeData, 'generator'>
@@ -352,6 +381,8 @@ export const samePort = (a: string | null | undefined, b: string | null | undefi
  * pointing at nothing.
  */
 export const hasTargetPort = (node: AppNode, handle: string | null | undefined): boolean => {
+  // A group's ports belong to its members; no wire ever names the group.
+  if (node.type === 'moduleGroup') return false;
   if (node.type === 'renderOutput' || node.type === 'backgroundOutput') {
     return !handle || isRenderPort(handle);
   }

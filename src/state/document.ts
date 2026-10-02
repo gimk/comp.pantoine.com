@@ -26,7 +26,9 @@ import {
   samePort,
   type AppNode,
   type ExportFormat,
+  type GroupPort,
 } from './graph';
+import { canJoinGroup } from './groups';
 import { isValidConnection, wouldCreateCycle } from './connections';
 
 /**
@@ -43,11 +45,15 @@ import { isValidConnection, wouldCreateCycle } from './connections';
  * 'formatter'. The bump is for the other direction: a build that only knows
  * 2 would drop every node kind it has not heard of and save the remains
  * over the document, where the version stops it at the door instead.
+ *
+ * 4 added groups. A build that knows only 3 would drop them and show their
+ * members loose, which loses nothing -- but it would then save that over
+ * the document, so the bump keeps it out.
  */
-export const DOCUMENT_VERSION = 3;
+export const DOCUMENT_VERSION = 4;
 
 /** Older versions this build still reads, migrated on the way in. */
-const READABLE_VERSIONS = new Set([1, 2, DOCUMENT_VERSION]);
+const READABLE_VERSIONS = new Set([1, 2, 3, DOCUMENT_VERSION]);
 
 /*
  * The largest things a document may ask for. Anything outside is a
@@ -123,7 +129,16 @@ type SerializedNode =
       fit?: 'fill' | 'fit' | 'cover' | 'contain';
       opacity?: number;
     }
-  | { id: string; type: 'renderOutput'; position: XYPosition; width: number };
+  | { id: string; type: 'renderOutput'; position: XYPosition; width: number }
+  | {
+      id: string;
+      type: 'moduleGroup';
+      position: XYPosition;
+      name: string;
+      members: string[];
+      inputs: GroupPort[];
+      outputs: GroupPort[];
+    };
 
 /** Ports are named only where they are not the main one. */
 type SerializedEdge = {
@@ -144,6 +159,17 @@ export const serializeGraph = (nodes: AppNode[], edges: Edge[]): SerializedGraph
   version: DOCUMENT_VERSION,
   nodes: nodes.map((node): SerializedNode => {
     const position = { x: node.position.x, y: node.position.y };
+    if (node.type === 'moduleGroup') {
+      return {
+        id: node.id,
+        type: 'moduleGroup',
+        position,
+        name: node.data.name,
+        members: node.data.members,
+        inputs: node.data.inputs,
+        outputs: node.data.outputs,
+      };
+    }
     if (node.type === 'image') {
       return {
         id: node.id,
@@ -307,6 +333,22 @@ const videoSpeed = (value: unknown): number =>
 
 const RENDER_FORMATS: ExportFormat[] = ['jpg', 'png', 'gif', 'mp4', 'webm'];
 
+const PORT_KINDS: GroupPort['kind'][] = ['picture', 'param', 'field', 'mod'];
+
+/** A group's saved ports, keeping only the well-formed ones. */
+const readPorts = (value: unknown): GroupPort[] =>
+  Array.isArray(value)
+    ? value.flatMap((port: Partial<GroupPort> | null): GroupPort[] =>
+        port &&
+        typeof port.node === 'string' &&
+        (port.handle === null || typeof port.handle === 'string') &&
+        typeof port.label === 'string' &&
+        PORT_KINDS.includes(port.kind as GroupPort['kind'])
+          ? [{ node: port.node, handle: port.handle, label: port.label, kind: port.kind as GroupPort['kind'] }]
+          : [],
+      )
+    : [];
+
 /**
  * Rebuild a graph from a parsed document, or null if it is not one.
  *
@@ -458,9 +500,48 @@ export const deserializeGraph = (raw: unknown): { nodes: AppNode[]; edges: Edge[
       });
     } else if (entry.type === 'renderOutput') {
       nodes.push(outputNode(entry.id, position, entry.width));
+    } else if (entry.type === 'moduleGroup') {
+      nodes.push({
+        id: entry.id,
+        type: 'moduleGroup',
+        position,
+        // Checked against the members once every node is in (below).
+        data: {
+          name: typeof entry.name === 'string' ? entry.name : 'Group',
+          members: Array.isArray(entry.members) ? entry.members.filter((id) => typeof id === 'string') : [],
+          inputs: readPorts(entry.inputs),
+          outputs: readPorts(entry.outputs),
+        },
+      });
     }
 
     if (nodes.length > before) taken.add(entry.id);
+  }
+
+  // A group holds modules that are here, that a group may hold, and that no
+  // other group already has; one left with fewer than two is not a group
+  // any more, and its members load loose. Members are hidden behind it.
+  const claimed = new Set<string>();
+  const loaded = new Map(nodes.map((node) => [node.id, node]));
+  for (let i = nodes.length - 1; i >= 0; i -= 1) {
+    const group = nodes[i];
+    if (group.type !== 'moduleGroup') continue;
+    const members = group.data.members.filter((id) => {
+      const member = loaded.get(id);
+      return !!member && canJoinGroup(member) && !claimed.has(id);
+    });
+    if (members.length < 2) {
+      nodes.splice(i, 1);
+      continue;
+    }
+    const inside = new Set(members);
+    group.data.members = members;
+    group.data.inputs = group.data.inputs.filter((port) => inside.has(port.node));
+    group.data.outputs = group.data.outputs.filter((port) => inside.has(port.node));
+    for (const id of members) {
+      claimed.add(id);
+      loaded.get(id)!.hidden = true;
+    }
   }
 
   // A document with no viewer is left with none. There can be several, and

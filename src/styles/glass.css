@@ -208,7 +208,13 @@ textarea,
 
 /* On a near-white sheet a white wash would not show, so hover is a tint of
    ink and the open button is lifted to full white instead. */
-.toolbar-button:hover {
+.toolbar-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+  pointer-events: auto;
+}
+
+.toolbar-button:hover:not(:disabled) {
   background: rgba(23, 23, 26, 0.07);
   color: var(--text-primary);
 }
@@ -708,6 +714,164 @@ textarea,
 
 .node-drop-active {
   box-shadow: var(--glass-shadow), 0 0 0 2px var(--accent-soft);
+}
+
+/* --------------------------------------------------------------------------
+   Group
+
+   Several modules behind one card. Two more sheets peek out from under it,
+   stepped down and right, so a group reads as a stack of modules at a
+   glance -- and never as one more module.
+   -------------------------------------------------------------------------- */
+
+/* Drawn as shadows rather than extra elements: an outer shadow is never
+   painted under the card, so it cannot show through the translucent glass.
+   Each sheet is a fill with a hairline ring one pixel outside it. */
+.node-group {
+  --group-stack:
+    5px 5px 0 -1px rgba(255, 255, 255, 0.78),
+    5px 5px 0 0 rgba(23, 23, 26, 0.12),
+    10px 10px 0 -1px rgba(255, 255, 255, 0.55),
+    10px 10px 0 0 rgba(23, 23, 26, 0.08);
+  width: 220px;
+  box-shadow: var(--group-stack), var(--glass-shadow);
+}
+
+.react-flow__node.selected .node-group {
+  box-shadow: var(--group-stack), var(--glass-shadow), 0 0 0 2px var(--accent-soft);
+}
+
+.group-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: text;
+}
+
+.group-name-input {
+  flex: 1;
+  min-width: 0;
+  padding: 1px 4px;
+  margin: -2px -4px;
+  border: 1px solid var(--hairline);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--text-primary);
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+}
+
+/* A small pill, outlined so it reads as a button and not as a second title.
+   Negative margins keep the title row the height of every other card's, so
+   the title-row ports line up with theirs. */
+.group-ungroup {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  padding: 2px 8px 2px 6px;
+  margin: -3px -4px -3px 0;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.7);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
+}
+
+.group-ungroup:hover {
+  background: #fff;
+  border-color: rgba(23, 23, 26, 0.18);
+  color: var(--text-primary);
+}
+
+.group-body {
+  gap: 0;
+}
+
+/* What is inside, as a row of tags. */
+.group-members {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.group-member {
+  max-width: 100%;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(23, 23, 26, 0.055);
+  color: var(--text-muted);
+  font-size: 10.5px;
+  line-height: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The other ports, below a hairline: inputs left, outputs right, in pairs. */
+.group-ports {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  margin: 12px -12px 0;
+  padding: 11px 12px 0;
+  border-top: 1px solid var(--hairline);
+}
+
+.group-port-row {
+  display: flex;
+  gap: 8px;
+}
+
+.group-port {
+  position: relative;
+  display: flex;
+  flex: 1;
+  align-items: center;
+  min-width: 0;
+  min-height: 16px;
+}
+
+.group-port-out {
+  justify-content: flex-end;
+  text-align: right;
+}
+
+.group-port-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-size: 11px;
+}
+
+.group-port-module {
+  color: var(--text-dim);
+}
+
+.group-port > .react-flow__handle.port {
+  top: 50%;
+}
+
+.group-port-in > .react-flow__handle.port {
+  left: -12px;
+}
+
+.group-port-out > .react-flow__handle.port {
+  right: -12px;
+  left: auto;
 }
 
 /* Image node */

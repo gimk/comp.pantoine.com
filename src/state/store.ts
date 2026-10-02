@@ -49,6 +49,7 @@ import { highestIdSuffix, loadGraph, saveGraph } from './document';
 import { snapDrag, type Box, type SnapGuide } from './snapping';
 import { isValidConnection, wouldCreateCycle } from './connections';
 import { useRenderJobs } from './renderJobs';
+import { isGroup, planGroup, realWire, ungroupOffset, withMembers } from './groups';
 
 /**
  * Whatever was left in local storage, restored before anything else runs.
@@ -72,6 +73,7 @@ const nextId = (prefix: string): string => {
 
 /** What a fresh id for a copy of this node should be prefixed with. */
 const idPrefixFor = (node: AppNode): string => {
+  if (node.type === 'moduleGroup') return 'group';
   if (node.type === 'effect') return node.data.effectId;
   if (node.type === 'generator') return node.data.generatorId;
   if (node.type === 'modulator') return node.data.modulatorId;
@@ -95,10 +97,22 @@ const rewire = (edge: Edge, source: string, target: string): Edge => ({
 /**
  * A node's data as a copy of it should carry it: deep-copied, and with any
  * reference to another node's id renamed through `rename` -- or dropped, if
- * that node is not coming along. Today that is only a speed helper's mark.
+ * that node is not coming along: a speed helper's mark, and a group's
+ * members and the ports it shows for them.
  */
 const copyData = (node: AppNode, rename: (id: string) => string | undefined): AppNode['data'] => {
   const data = structuredClone(node.data);
+  if (node.type === 'moduleGroup') {
+    const group = data as typeof node.data;
+    const renamePorts = (ports: typeof group.inputs) =>
+      ports.flatMap((port) => {
+        const id = rename(port.node);
+        return id ? [{ ...port, node: id }] : [];
+      });
+    group.members = group.members.flatMap((member) => rename(member) ?? []);
+    group.inputs = renamePorts(group.inputs);
+    group.outputs = renamePorts(group.outputs);
+  }
   if (node.type === 'modulator' && node.data.helperFor) {
     const helperFor = rename(node.data.helperFor);
     if (helperFor) (data as typeof node.data).helperFor = helperFor;
@@ -137,7 +151,8 @@ const copySubgraph = (
       id,
       position: { x: node.position.x + offset.x, y: node.position.y + offset.y },
       data: copyData(node, (other) => ids.get(other)),
-      selected: true,
+      // A group's members come along hidden, and stay out of the selection.
+      selected: !node.hidden,
       dragging: false,
     } as AppNode;
   });
@@ -248,7 +263,12 @@ export const setDragModifiers = (keys: { ctrl: boolean; alt: boolean }): void =>
   drag.mode = mode;
 
   const store = useGraph.getState();
-  if (mode === 'duplicate') store.beginAltDuplicate(drag.ids);
+  // A group is its members as well, and a stand-in cannot be left behind
+  // for them; Alt on a group just moves it.
+  const ids = drag.ids;
+  if (mode === 'duplicate' && !store.nodes.some((node) => ids.includes(node.id) && isGroup(node))) {
+    store.beginAltDuplicate(ids);
+  }
   if (mode === 'detach') {
     store.detachFromChain(drag.ids);
     // Lifting out and splicing in are opposites; the highlight goes now,
@@ -393,6 +413,11 @@ type GraphStore = {
   paste: (at?: XYPosition) => void;
   removeNodes: (ids: string[]) => void;
   setAllSelected: (selected: boolean) => void;
+  /** Collapse the selection into a group; returns why not, if it cannot. */
+  groupSelection: () => string | null;
+  /** Open a group back out into its modules, where the card has been moved to. */
+  ungroup: (groupId: string) => void;
+  renameGroup: (groupId: string, name: string) => void;
 };
 
 /**
@@ -525,17 +550,25 @@ export const useGraph = create<GraphStore>((set, get) => ({
     const removed = new Set(changes.flatMap((change) => (change.type === 'remove' ? [change.id] : [])));
     if (removed.size > 0) {
       const { nodes, edges } = get();
-      const helpers = orphanedHelpers(nodes, edges, removed);
-      for (const id of helpers) {
+      // A group goes with everything in it.
+      const extra = [...withMembers(nodes, removed)].filter((id) => !removed.has(id));
+      extra.forEach((id) => removed.add(id));
+      extra.push(...orphanedHelpers(nodes, edges, removed));
+      for (const id of extra) {
         removed.add(id);
         changes = [...changes, { type: 'remove', id }];
       }
       retire(nodes, removed);
-      // React Flow sends the removed nodes' wires separately; the helpers'
-      // wires are ours to take.
-      if (helpers.length > 0) {
+      // React Flow sends the removed nodes' wires separately; the wires of
+      // what it did not know was going are ours to take.
+      if (extra.length > 0) {
         set({ edges: edges.filter((edge) => !removed.has(edge.source) && !removed.has(edge.target)) });
       }
+    }
+    // A hidden group member is never picked, however it is asked for.
+    const hidden = new Set(get().nodes.filter((node) => node.hidden).map((node) => node.id));
+    if (hidden.size > 0) {
+      changes = changes.filter((change) => !(change.type === 'select' && change.selected && hidden.has(change.id)));
     }
     // Shift held mid-drag: pull the dragged nodes onto the nearest
     // centre line of another module. The correction is added on top of where
@@ -550,7 +583,12 @@ export const useGraph = create<GraphStore>((set, get) => ({
       if (lead && lead.type === 'position' && lead.position) {
         const origin = origins.get(lead.id)!;
         const delta = { x: lead.position.x - origin.x, y: lead.position.y - origin.y };
-        const snap = snapDrag(get().nodes, origins, delta, visibleArea());
+        const snap = snapDrag(
+          get().nodes.filter((node) => !node.hidden),
+          origins,
+          delta,
+          visibleArea(),
+        );
         guides = snap.guides;
         changes = changes.map((change) => {
           if (change.type !== 'position' || !change.position || !origins.has(change.id)) return change;
@@ -569,7 +607,9 @@ export const useGraph = create<GraphStore>((set, get) => ({
     set({ edges: applyEdgeChanges(changes, get().edges) });
   },
 
-  onConnect: (connection) => {
+  onConnect: (drawn) => {
+    // A wire to a group's card is a wire to the module inside.
+    const connection = realWire(get().nodes, drawn);
     // The canvas checks as the wire is dragged; this is for every other way in.
     if (!isValidConnection(get().nodes, get().edges, connection)) return;
     // An input takes one wire: connecting to an occupied port replaces what
@@ -592,7 +632,12 @@ export const useGraph = create<GraphStore>((set, get) => ({
    * the same action arrived at from the other direction. The edge being
    * moved is exempt from that sweep, or it would clear itself on the way in.
    */
-  reconnectLink: (oldEdge, connection) => {
+  reconnectLink: (drawnEdge, drawn) => {
+    // Both may name a group's card rather than the module inside; the edge
+    // in the store, under the same id, is always the real one.
+    const oldEdge = get().edges.find((edge) => edge.id === drawnEdge.id);
+    if (!oldEdge) return;
+    const connection = realWire(get().nodes, drawn);
     const others = get().edges.filter((edge) => edge.id !== oldEdge.id);
     if (!isValidConnection(get().nodes, others, connection)) return;
     const kept = get().edges.filter(
@@ -1018,7 +1063,8 @@ export const useGraph = create<GraphStore>((set, get) => ({
 
   duplicateSelection: (offset) => {
     const { nodes, edges } = get();
-    const picked = nodes.filter((node) => node.selected);
+    const ids = withMembers(nodes, nodes.filter((node) => node.selected).map((node) => node.id));
+    const picked = nodes.filter((node) => ids.has(node.id));
     if (picked.length === 0) return;
     const copy = copySubgraph(picked, edges, new Set(nodes.map((n) => n.id)), offset, (id) => id);
     set({
@@ -1029,7 +1075,8 @@ export const useGraph = create<GraphStore>((set, get) => ({
 
   copySelection: () => {
     const { nodes, edges } = get();
-    const picked = nodes.filter((node) => node.selected);
+    const wanted = withMembers(nodes, nodes.filter((node) => node.selected).map((node) => node.id));
+    const picked = nodes.filter((node) => wanted.has(node.id));
     if (picked.length === 0) return false;
 
     if (clipboard) {
@@ -1082,7 +1129,7 @@ export const useGraph = create<GraphStore>((set, get) => ({
     // A module taken out of a chain closes the gap behind it rather than
     // leaving the chain broken.
     get().detachFromChain(ids);
-    const gone = new Set(ids);
+    const gone = withMembers(get().nodes, ids);
     for (const id of orphanedHelpers(get().nodes, get().edges, gone)) gone.add(id);
     retire(get().nodes, gone);
     set({
@@ -1093,9 +1140,79 @@ export const useGraph = create<GraphStore>((set, get) => ({
 
   setAllSelected: (selected) => {
     set({
-      nodes: get().nodes.map((node) => (!!node.selected === selected ? node : { ...node, selected })),
+      nodes: get().nodes.map((node) =>
+        !!node.selected === selected || (selected && node.hidden) ? node : { ...node, selected },
+      ),
       edges: get().edges.map((edge) => (!!edge.selected === selected ? edge : { ...edge, selected })),
     });
+  },
+
+  /*
+   * Grouping only hides the members and puts a card in front of them; the
+   * wiring is not touched (see `groups`). So ungrouping is exact: the
+   * modules come back as they were, wires and all.
+   */
+  groupSelection: () => {
+    const { nodes, edges } = get();
+    const result = planGroup(
+      nodes,
+      edges,
+      nodes.filter((node) => node.selected).map((node) => node.id),
+    );
+    if ('reason' in result) return result.reason;
+    const { plan } = result;
+    const members = new Set(plan.data.members);
+    // A group taken into this one is dissolved into it.
+    const absorbed = new Set(nodes.filter((node) => node.selected && isGroup(node)).map((node) => node.id));
+    const group: AppNode = {
+      id: nextId('group'),
+      type: 'moduleGroup',
+      position: plan.position,
+      data: plan.data,
+      selected: true,
+    };
+    set({
+      nodes: [
+        ...nodes
+          .filter((node) => !absorbed.has(node.id))
+          .map((node) => {
+            if (members.has(node.id)) return { ...node, hidden: true, selected: false };
+            return node.selected ? { ...node, selected: false } : node;
+          }),
+        group,
+      ],
+    });
+    // A selected wire inside would stay selected out of sight.
+    const inside = (edge: Edge) => edge.selected && (members.has(edge.source) || members.has(edge.target));
+    if (edges.some(inside)) set({ edges: edges.map((edge) => (inside(edge) ? { ...edge, selected: false } : edge)) });
+    return null;
+  },
+
+  ungroup: (groupId) => {
+    const { nodes } = get();
+    const group = nodes.find((node) => node.id === groupId);
+    if (!isGroup(group)) return;
+    const members = new Set(group.data.members);
+    const offset = ungroupOffset(group, nodes.filter((node) => members.has(node.id)));
+    set({
+      nodes: nodes.flatMap((node): AppNode[] => {
+        if (node.id === groupId) return [];
+        if (members.has(node.id)) {
+          const shown = { ...node, position: { x: node.position.x + offset.x, y: node.position.y + offset.y }, selected: true };
+          delete shown.hidden;
+          return [shown];
+        }
+        return node.selected ? [{ ...node, selected: false }] : [node];
+      }),
+    });
+  },
+
+  renameGroup: (groupId, name) => {
+    const nodes = updateNode(get().nodes, groupId, (node) => {
+      if (node.type !== 'moduleGroup' || node.data.name === name) return node;
+      return { ...node, data: { ...node.data, name } };
+    });
+    if (nodes !== get().nodes) set({ nodes });
   },
 }));
 

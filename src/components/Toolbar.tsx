@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useReactFlow } from '@xyflow/react';
-import { Import, MonitorPlay, Plus } from 'lucide-react';
+import { Group, Import, MonitorPlay, Plus } from 'lucide-react';
+import { useGraph } from '../state/store';
+import { planGroup } from '../state/groups';
 import { PALETTE_DRAG_MIME, encodePaletteItem, paletteCenterOffset } from './paletteDrag';
 import { addPaletteItem, catalog, type CatalogEntry, type CatalogFolder } from './paletteCatalog';
 
@@ -40,6 +42,38 @@ const PaletteItem: React.FC<{
     {entry.tag && <span className="tag">{entry.tag}</span>}
   </button>
 );
+
+/**
+ * Group the selected modules. Shown once more than one thing is selected,
+ * and greyed out, saying why, while the selection cannot be grouped -- so
+ * the rule is learnt from the button rather than from nothing happening.
+ */
+const GroupButton: React.FC = () => {
+  const groupSelection = useGraph((state) => state.groupSelection);
+  // '' when the selection can be grouped, null when there is nothing to show.
+  const reason = useGraph((state) => {
+    const ids = state.nodes.filter((node) => node.selected).map((node) => node.id);
+    if (ids.length < 2) return null;
+    const result = planGroup(state.nodes, state.edges, ids);
+    return 'reason' in result ? result.reason : '';
+  });
+  if (reason === null) return null;
+  return (
+    <>
+      <span className="toolbar-sep" />
+      <button
+        type="button"
+        className="toolbar-button"
+        disabled={reason !== ''}
+        title={reason || 'Group the selected modules into one box (Ctrl+G)'}
+        onClick={() => groupSelection()}
+      >
+        <Group size={14} />
+        <span>Group</span>
+      </button>
+    </>
+  );
+};
 
 /**
  * Floating glass pill holding everything that can go on the canvas, one
@@ -110,6 +144,7 @@ export const Toolbar: React.FC = () => {
             <span>{f.label}</span>
           </button>
         ))}
+        <GroupButton />
       </div>
 
       {folder && (
