@@ -1,19 +1,30 @@
 import type { EffectDef } from '../effects';
 
 /**
- * Velocity Modulation (Moving Scanlines / Velocity Slowdown / Beam Congestion).
+ * Phase Modulation: rolling raster lines whose phase is offset by the
+ * picture, pixel by pixel.
  *
- * Emulates continuous rolling raster scanlines whose propagation velocity is
- * governed by an image parameter (Luminance, Inverted Luma, Saturation, Edges,
- * Red, Green, Blue, or Hue). Where the driver signal is high, lines decelerate
- * and bunch together into dense, glowing 3D relief contours.
+ *   phase = Lines * y - Depth * driver - ripple
  *
- * Designed with physical wave dispersion where slowdown scales the spatial
- * wavenumber, ensuring exact zero at 0.0 without runaway time-accumulation drift.
+ * with y across the lines -- down the frame for horizontal lines, along
+ * it for vertical ones.
+ *
+ * The offset depends on the driver at this pixel and nothing else, which
+ * is what makes it PM rather than FM: lines bend where the picture is
+ * bright and are back on the carrier's grid wherever it is dark again.
+ * Depth is in cycles -- 1 moves a line onto the next one's place -- so it
+ * means the same at any line count. Frequency Modulation is the
+ * integrating counterpart, where a bright patch shifts everything after it.
+ *
+ * Kept as id `velocityMod` so saved documents still find it. It used to
+ * have a Slowdown that multiplied the line density by the driver; density
+ * times position is neither PM nor FM -- its effect grew towards the
+ * bottom of the frame and tore lines at every edge -- so it is gone, and
+ * Deflection became Depth.
  */
 export const velocityMod: EffectDef = {
   id: 'velocityMod',
-  label: 'Velocity Modulation',
+  label: 'Phase Modulation',
   category: 'crt',
   animated: (params) => params.speed !== 0,
   mixable: true,
@@ -21,16 +32,18 @@ export const velocityMod: EffectDef = {
     {
       kind: 'enum',
       key: 'driver',
-      label: 'Velocity Driver',
+      label: 'Driver',
       options: ['Luminance', 'Inverted Luma', 'Saturation', 'Edges', 'Red', 'Green', 'Blue', 'Hue'],
       default: 0,
     },
+    { kind: 'enum', key: 'axis', label: 'Axis', options: ['Horizontal Lines', 'Vertical Lines'], default: 0 },
     { kind: 'float', key: 'lines', label: 'Lines', min: 20, max: 250, step: 2, default: 100 },
     { kind: 'float', key: 'lineWidth', label: 'Line Width', min: 0.5, max: 3.5, step: 0.1, default: 1.2 },
     { kind: 'float', key: 'speed', label: 'Roll Speed', min: -3, max: 3, step: 0.05, default: 1.0 },
-    { kind: 'float', key: 'slowdown', label: 'Slowdown', min: -0.2, max: 0.4, step: 0.005, default: 0.08 },
-    { kind: 'float', key: 'deflection', label: 'Deflection', min: -0.15, max: 0.15, step: 0.002, default: 0.04 },
-    { kind: 'float', key: 'ripple', label: 'Ripple', min: 0, max: 0.025, step: 0.001, default: 0.006 },
+    /** Phase offset at a driver of 1, in cycles. */
+    { kind: 'float', key: 'depth', label: 'Depth', min: -8, max: 8, step: 0.05, default: 2 },
+    /** A sine along each line, its amplitude set by the driver: cycles at a driver of 1. */
+    { kind: 'float', key: 'ripple', label: 'Ripple', min: 0, max: 2, step: 0.01, default: 0.6 },
     { kind: 'float', key: 'frequency', label: 'Ripple Freq', min: 5, max: 100, step: 1, default: 35 },
     { kind: 'float', key: 'dotDensity', label: 'Dot Density', min: 0, max: 150, step: 1, default: 45 },
     { kind: 'float', key: 'brightness', label: 'Brightness', min: 0.5, max: 2.5, step: 0.05, default: 1.4 },
@@ -75,29 +88,30 @@ export const velocityMod: EffectDef = {
     b = (d > 0.001) ? fract(((mx == srcCol.r) ? (srcCol.g - srcCol.b) / d : (mx == srcCol.g) ? (srcCol.b - srcCol.r) / d + 2.0 : (srcCol.r - srcCol.g) / d + 4.0) / 6.0) : 0.0;
   }
 
-  // Carrier wave ripple modulated by local driver signal
-  // 127 whole cycles per 1000 phase units (~0.8 rad each), so the carrier
-  // stays continuous when the phase wraps at 1000.
-  float carrier = sin(v_uv.x * u_frequency + u_phase_speed * (127.0 * TAU / 1000.0));
-  float ripple = carrier * u_ripple * b;
-
-  // 3D vertical deflection
-  float totalDeflect = b * u_deflection + ripple;
-
-  // Continuous horizontal scanline coordinate with physical wave slowdown
-  // Wavenumber k = lines * (1 + slowdown * b) => velocity v = omega / k (slows down where bright)
-  float yEff = v_uv.y - totalDeflect;
-  float lineDensity = u_lines * max(1.0 + u_slowdown * 1.5 * b, 0.1);
-  float linePhase = yEff * lineDensity - u_phase_speed;
-
-  // Distance to rolling line in screen pixels (exact Euclidean distance)
+  // The phase, in cycles: the carrier's, offset by the driver here. The
+  // ripple is a sine along the lines, its amplitude also set by the driver.
+  // 127 whole cycles per 1000 phase units (~0.8 rad each), so it stays
+  // continuous when the phase wraps at 1000.
   //
-  // The phase-per-pixel is the analytic slope of the raster term alone.
-  // fwidth(linePhase) would also pick up the image-driven deflection and
-  // density, which jump at every hard edge in the picture -- the width then
-  // balloons there and draws a bright outline around everything.
+  // Worked in line space: across runs across the lines, the way the
+  // phase advances, along runs along them. Vertical lines are the same
+  // picture with the two swapped.
+  vec2 lineUv = u_axis == 0 ? v_uv : v_uv.yx;
+  vec2 lineRes = u_axis == 0 ? u_resolution : u_resolution.yx;
+  float along = lineUv.x;
+  float across = lineUv.y;
+  float numLines = max(u_lines, 1.0);
+  float ripple = sin(along * u_frequency + u_phase_speed * (127.0 * TAU / 1000.0)) * u_ripple * b;
+  float linePhase = across * numLines - u_depth * b - ripple - u_phase_speed;
+
+  // Distance to the nearest line in screen pixels.
+  //
+  // The phase-per-pixel is the carrier's slope alone. fwidth(linePhase)
+  // would also pick up the driver's offset, which jumps at every hard edge
+  // in the picture -- the width then balloons there and draws a bright
+  // outline around everything.
   float dPhase = abs(fract(linePhase + 0.5) - 0.5);
-  float fw = max(lineDensity / max(u_resolution.y, 1.0), 0.0001);
+  float fw = max(numLines / max(lineRes.y, 1.0), 0.0001);
   float distPx = dPhase / fw;
 
   float hw = max(u_lineWidth * 0.5 * u_pixel_scale, 0.4);
@@ -107,11 +121,10 @@ export const velocityMod: EffectDef = {
   float beam = lineBeam;
   if (u_dotDensity > 0.5) {
     float lineIndex = floor(linePhase + 0.5);
-    float effDensity = u_dotDensity * max(1.0 + u_slowdown * b, 0.1);
-    float dotPhase = v_uv.x * effDensity + lineIndex * 0.5 - u_phase_speed * 1.2;
+    float dotPhase = along * u_dotDensity + lineIndex * 0.5 - u_phase_speed * 1.2;
     float dotP = abs(fract(dotPhase + 0.5) - 0.5);
     // Analytic as above: fwidth would spike at the lineIndex step and at edges.
-    float dotFw = max(effDensity / max(u_resolution.x, 1.0), 0.0001);
+    float dotFw = max(u_dotDensity / max(lineRes.x, 1.0), 0.0001);
     float dotDistPx = dotP / dotFw;
     float dotMask = exp(-0.5 * (dotDistPx * dotDistPx) / (hw * hw));
 

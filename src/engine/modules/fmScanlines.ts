@@ -159,7 +159,8 @@ export const fmScanlines: EffectDef = {
       options: ['Luminance', 'Inverted Luma', 'Red', 'Green', 'Blue', 'Saturation'],
       default: 0,
     },
-    { kind: 'enum', key: 'axis', label: 'Axis', options: ['Horizontal', 'Vertical'], default: 0 },
+    /** Named for the lines drawn: vertical lines are a scan along each row. */
+    { kind: 'enum', key: 'axis', label: 'Axis', options: ['Vertical Lines', 'Horizontal Lines'], default: 0 },
     { kind: 'enum', key: 'waveform', label: 'Waveform', options: ['Hairline', 'Sine', 'Pulse', 'Saw'], default: 0 },
     /** Hairline only: pixels per line. */
     {
