@@ -5,6 +5,7 @@ import { useGraph } from '../state/store';
 import {
   RENDER_PORT,
   generatorsForPlan,
+  outputFrameOf,
   resolveChain,
   type ExportFormat,
   type RenderNodeData,
@@ -50,7 +51,8 @@ export const RenderNode: React.FC<NodeProps<Node<RenderNodeData, 'render'>>> = (
   const { chain } = useResolvedChain(id);
   const primaryVideo = chain ? getVideo(chain.sourceNodeId) : undefined;
   const primaryGenerator = chain ? generatorsForPlan(chain.plan).get(chain.sourceNodeId) : undefined;
-  const primarySource = chain ? getImage(chain.sourceNodeId) ?? primaryVideo ?? primaryGenerator : undefined;
+  // What the chain puts out -- the source's size unless a Resize/Crop changed it.
+  const primarySource = chain && (getImage(chain.sourceNodeId) ?? primaryVideo ?? primaryGenerator) ? outputFrameOf(chain) ?? undefined : undefined;
 
   const update = useCallback(
     (patch: Partial<RenderNodeData>) => {

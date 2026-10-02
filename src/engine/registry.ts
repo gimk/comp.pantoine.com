@@ -47,6 +47,7 @@ import { velocityMod } from './modules/velocityMod';
 import { vignette } from './modules/vignette';
 import { wobble } from './modules/wobble';
 import { ramp } from './modules/ramp';
+import { resize } from './modules/resize';
 import { noiseGenerator } from './modules/noiseGenerator';
 import { signalRot } from './modules/signalRot';
 import { iridescentMetal } from './modules/iridescentMetal';
@@ -88,6 +89,7 @@ export const registry: EffectDef[] = [
 
   // Transform & Warp
   transform,
+  resize,
   swirl,
   wobble,
   displace,

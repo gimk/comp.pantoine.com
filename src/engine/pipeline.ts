@@ -3,6 +3,7 @@ import { FIRST_INPUT_UNIT, buildFragmentSource, fieldSampler, inputsOf, isPhased
 import { STDLIB } from './stdlib';
 import { createProgram, drawQuad, uniform, type UniformCache } from './gl';
 import { TimeCacheStore, type CacheBinding } from './timeCache';
+import { planFrames, sameShape, type Frame } from './frames';
 import { TargetPool, createTarget, deleteTarget, feedbackFormat, scratchFormat, type RenderTarget, type TargetFormat } from './targets';
 import { clearShaderError, reportShaderError } from './shaderErrors';
 import {
@@ -281,6 +282,8 @@ export class Pipeline {
   private sources = new Map<string, SourceTexture>();
   /** One uploaded texture per video node the graph reads. */
   private videoSources = new Map<string, VideoSourceTexture>();
+  /** The frame of the step being drawn's main input: `u_input_frame` for a Resize/Crop. */
+  private inputFrame: Frame = { width: 1, height: 1 };
   /** Working pixels per source pixel for the frame being drawn: `u_pixel_scale`. */
   private pixelScale = 1;
 
@@ -294,8 +297,6 @@ export class Pipeline {
    * is the behaviour you want anyway.
    */
   private history = new Map<string, RenderTarget>();
-  private historyWidth = 0;
-  private historyHeight = 0;
   /**
    * Phase per node and speed-like param (speed/rate/roll), as a function of
    * time -- see phase.ts. Keyed `nodeId:paramKey`.
@@ -310,6 +311,13 @@ export class Pipeline {
 
   private historyFor(nodeId: string, width: number, height: number): RenderTarget {
     let target = this.history.get(nodeId);
+    // Tied to its node's working size: a change of size throws the stored
+    // frame away rather than stretching it.
+    if (target && (target.width !== width || target.height !== height)) {
+      deleteTarget(this.gl, target);
+      this.history.delete(nodeId);
+      target = undefined;
+    }
     if (!target) {
       // Fresh texture storage is zero-filled, so a trail's first frame
       // reads black rather than whatever was in that memory.
@@ -753,6 +761,10 @@ export class Pipeline {
         const location = uniform(gl, compiled.program, compiled.uniforms, 'u_' + spec.key);
         setParamUniform(gl, location, spec, values[k]);
       });
+      if (pass.def.frame) {
+        const loc = uniform(gl, compiled.program, compiled.uniforms, 'u_input_frame');
+        gl.uniform2f(loc, this.inputFrame.width, this.inputFrame.height);
+      }
       for (const [phaseKey, phaseValue] of phases) {
         const loc = uniform(gl, compiled.program, compiled.uniforms, 'u_phase_' + phaseKey);
         if (loc !== null) gl.uniform1f(loc, phaseValue);
@@ -881,45 +893,50 @@ export class Pipeline {
 
   render(request: RenderRequest): void {
     const gl = this.gl;
-    const { plan, images, videos, primaryNodeId, canvasWidth, canvasHeight, maxWorkingSize } = request;
+    const { plan, images, videos, canvasWidth, canvasHeight, maxWorkingSize } = request;
     if (canvasWidth === 0 || canvasHeight === 0) return;
 
-    const primary = images.get(primaryNodeId) ?? videos?.get(primaryNodeId) ?? request.generators?.get(primaryNodeId);
-    if (!primary) return;
+    // Every picture's frame, in source pixels -- see frames.ts. Without a
+    // Resize/Crop in the graph they are all the head source's.
+    const frames = planFrames(plan, { image: (id) => images.get(id), video: (id) => videos?.get(id) });
+    const outputFrame = frames[plan.output];
+    if (!outputFrame) return;
 
     /*
      * Working resolution. An atomic chain is many full-screen passes -- a
      * CRT look is eight of them -- so running a 24MP photo through at its
      * native size is what actually stops the frame loop keeping up. Capping
      * the longest edge trades detail nobody can see in the preview for a
-     * chain that stays interactive.
+     * chain that stays interactive. Per frame, so a picture resized down
+     * runs at its own size rather than its source's.
      */
-    const scale =
-      request.workingScale !== undefined && request.workingScale > 0
-        ? request.workingScale
-        : Math.min(1, maxWorkingSize / Math.max(primary.width, primary.height));
-    const workWidth = Math.max(1, Math.round(primary.width * scale));
-    const workHeight = Math.max(1, Math.round(primary.height * scale));
-    // Measured off the rounded size, so a pixel param lands on the grid
-    // the effects actually run on.
-    this.pixelScale = workWidth / primary.width;
+    const workOf = (frame: Frame): Frame => {
+      const scale =
+        request.workingScale !== undefined && request.workingScale > 0
+          ? request.workingScale
+          : Math.min(1, maxWorkingSize / Math.max(frame.width, frame.height));
+      return {
+        width: Math.max(1, Math.round(frame.width * scale)),
+        height: Math.max(1, Math.round(frame.height * scale)),
+      };
+    };
+    /** Draw in `frame` from here on: pool size, viewport, `u_pixel_scale`. */
+    const enter = (frame: Frame): Frame => {
+      const work = workOf(frame);
+      this.pool.use(work.width, work.height);
+      gl.viewport(0, 0, work.width, work.height);
+      // Measured off the rounded size, so a pixel param lands on the grid
+      // the effects actually run on.
+      this.pixelScale = work.width / frame.width;
+      return work;
+    };
 
-    // Feedback buffers are tied to the working resolution, so a change of
-    // size throws the stored frames away rather than stretching them.
-    if (this.historyWidth !== workWidth || this.historyHeight !== workHeight) {
-      this.disposeHistory();
-      this.historyWidth = workWidth;
-      this.historyHeight = workHeight;
-    }
     const liveFeedback = new Set<string>();
     this.liveCaches.clear();
     const liveSources = new Set<string>();
     const liveVideoSources = new Set<string>();
     const livePhases = new Set<string>();
     const liveParticleSims = new Set<string>();
-
-    this.pool.resize(workWidth, workHeight);
-    gl.viewport(0, 0, workWidth, workHeight);
 
     /*
      * How many times each step is still going to be read. A step's target
@@ -940,64 +957,68 @@ export class Pipeline {
       if (readers[index] === 0 && target) this.pool.release(target);
     };
 
+    /** Scale `texture` to cover `work`, centred and cropped rather than stretched. */
+    const cover = (texture: WebGLTexture, from: Frame, to: Frame, work: Frame): RenderTarget => {
+      const target = this.pool.acquire();
+      gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
+      this.bindShared(this.importer, texture, texture, texture, work.width, work.height, request, 0, 0);
+      const toRatio = to.width / to.height;
+      const ratio = from.width / from.height;
+      const fit = ratio > toRatio ? [toRatio / ratio, 1] : [1, ratio / toRatio];
+      gl.uniform2f(uniform(gl, this.importer.program, this.importer.uniforms, 'u_cover'), fit[0], fit[1]);
+      drawQuad(gl);
+      return target;
+    };
+
     plan.steps.forEach((step, index) => {
-      if (step.kind === 'image') {
-        const image = images.get(step.nodeId)!;
-        const texture = this.sourceTextureFor(step.nodeId, image);
-        liveSources.add(step.nodeId);
+      const frame = frames[index];
+      const work = frame ? enter(frame) : null;
 
-        // Anything the same shape as the frame can be sampled as it is --
-        // the primary always is, by definition. Anything else is fitted
-        // first, so a layer of a different shape is cropped, not squashed.
-        const frameRatio = workWidth / workHeight;
-        const ratio = image.width / image.height;
-        if (Math.abs(ratio - frameRatio) < 1e-3) {
+      // A picture made for a reader of another shape -- read by two nodes
+      // in different frames -- is fitted to this one for this step only.
+      const temporary: RenderTarget[] = [];
+      const read = (from: number): WebGLTexture => {
+        const texture = textures[from];
+        const source = frames[from];
+        if (!texture) return this.blank;
+        if (!frame || !work || !source || sameShape(source, frame)) return texture;
+        const target = cover(texture, source, frame, work);
+        temporary.push(target);
+        return target.texture;
+      };
+
+      if (step.kind === 'image' || step.kind === 'video') {
+        const media = step.kind === 'image' ? images.get(step.nodeId) : videos?.get(step.nodeId);
+        if (!media || !frame || !work) return;
+        const texture =
+          step.kind === 'image'
+            ? this.sourceTextureFor(step.nodeId, media as LoadedImage)
+            : this.videoTextureFor(step.nodeId, media as LoadedVideo);
+        (step.kind === 'image' ? liveSources : liveVideoSources).add(step.nodeId);
+
+        // Anything the same shape as its frame can be sampled as it is --
+        // a source heading the main path always is, by definition. Anything
+        // else is fitted first, so a layer of a different shape is cropped,
+        // not squashed.
+        if (sameShape(media, frame)) {
           textures[index] = texture;
           owned[index] = null;
           return;
         }
-        const target = this.pool.acquire();
-        gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
-        this.bindShared(this.importer, texture, texture, texture, workWidth, workHeight, request, 0, 0);
-        const cover = ratio > frameRatio ? [frameRatio / ratio, 1] : [1, ratio / frameRatio];
-        gl.uniform2f(uniform(gl, this.importer.program, this.importer.uniforms, 'u_cover'), cover[0], cover[1]);
-        drawQuad(gl);
-        textures[index] = target.texture;
-        owned[index] = target;
-        return;
-      }
-
-      if (step.kind === 'video') {
-        const video = videos?.get(step.nodeId);
-        if (!video) return;
-        const texture = this.videoTextureFor(step.nodeId, video);
-        liveVideoSources.add(step.nodeId);
-
-        const frameRatio = workWidth / workHeight;
-        const ratio = video.width / video.height;
-        if (Math.abs(ratio - frameRatio) < 1e-3) {
-          textures[index] = texture;
-          owned[index] = null;
-          return;
-        }
-        const target = this.pool.acquire();
-        gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
-        this.bindShared(this.importer, texture, texture, texture, workWidth, workHeight, request, 0, 0);
-        const cover = ratio > frameRatio ? [frameRatio / ratio, 1] : [1, ratio / frameRatio];
-        gl.uniform2f(uniform(gl, this.importer.program, this.importer.uniforms, 'u_cover'), cover[0], cover[1]);
-        drawQuad(gl);
+        const target = cover(texture, media, frame, work);
         textures[index] = target.texture;
         owned[index] = target;
         return;
       }
 
       const fieldTextures = (bindings: FieldBinding[]): Map<string, WebGLTexture> =>
-        new Map(bindings.map((binding) => [binding.key, textures[binding.step] ?? this.blank]));
+        new Map(bindings.map((binding) => [binding.key, read(binding.step)]));
 
       if (step.kind === 'fill') {
+        if (!work) return;
         const target = this.pool.acquire(this.feedbackFormat);
         gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
-        this.bindShared(this.filler, this.blank, this.blank, this.blank, workWidth, workHeight, request, 0, 0);
+        this.bindShared(this.filler, this.blank, this.blank, this.blank, work.width, work.height, request, 0, 0);
         const value = evaluateSignal(step.signal, request.time);
         gl.uniform1f(uniform(gl, this.filler.program, this.filler.uniforms, 'u_value'), value);
         drawQuad(gl);
@@ -1007,19 +1028,23 @@ export class Pipeline {
       }
 
       if (step.kind === 'fieldOp') {
-        const target = this.runFieldOp(step, textures, workWidth, workHeight, request);
+        if (!work) return;
+        // The ports' pictures, fitted where they need it.
+        const local = textures.slice();
+        for (const port of Object.values(step.ports)) if ('step' in port) local[port.step] = read(port.step);
+        const target = this.runFieldOp(step, local, work.width, work.height, request);
         textures[index] = target.texture;
         owned[index] = target;
       } else if (step.kind === 'statistic') {
-        this.measure(step.nodeId, step.input === null ? null : textures[step.input], request);
-        gl.viewport(0, 0, workWidth, workHeight);
+        this.measure(step.nodeId, step.input === null ? null : textures[step.input] ?? null, request);
       } else if (step.kind === 'generator') {
+        if (!work) return;
         const { target, pooled } = this.runEffect(
           step.pass,
           this.blank,
           [],
-          workWidth,
-          workHeight,
+          work.width,
+          work.height,
           request,
           liveFeedback,
           livePhases,
@@ -1029,12 +1054,17 @@ export class Pipeline {
         textures[index] = target.texture;
         owned[index] = pooled ? target : null;
       } else {
+        if (!work) return;
+        // A frame-defining effect reads its input raw, whatever its shape:
+        // that picture is what it resizes.
+        const resizes = !!step.pass.def.frame;
+        this.inputFrame = frames[step.input] ?? frame ?? this.inputFrame;
         const { target, pooled } = this.runEffect(
           step.pass,
-          textures[step.input],
-          step.extras.map((extra) => (extra === null ? this.blank : textures[extra])),
-          workWidth,
-          workHeight,
+          resizes ? textures[step.input] ?? this.blank : read(step.input),
+          step.extras.map((extra) => (extra === null ? this.blank : read(extra))),
+          work.width,
+          work.height,
           request,
           liveFeedback,
           livePhases,
@@ -1045,8 +1075,10 @@ export class Pipeline {
         owned[index] = pooled ? target : null;
       }
 
-      for (const read of stepReads(step)) doneReading(read);
+      for (const target of temporary) this.pool.release(target);
+      for (const reading of stepReads(step)) doneReading(reading);
     });
+
 
     const result = textures[plan.output];
 
@@ -1073,10 +1105,11 @@ export class Pipeline {
 
     const isFill = request.fitMode === 'fill' || request.fitMode === 'cover';
     const fit = isFill
-      ? Math.max(canvasWidth / primary.width, canvasHeight / primary.height)
-      : Math.min(canvasWidth / primary.width, canvasHeight / primary.height);
-    const fitWidth = Math.round(primary.width * fit);
-    const fitHeight = Math.round(primary.height * fit);
+      ? Math.max(canvasWidth / outputFrame.width, canvasHeight / outputFrame.height)
+      : Math.min(canvasWidth / outputFrame.width, canvasHeight / outputFrame.height);
+    const fitWidth = Math.round(outputFrame.width * fit);
+    const fitHeight = Math.round(outputFrame.height * fit);
+    const { width: workWidth, height: workHeight } = workOf(outputFrame);
 
     /*
      * Shrinking the frame into the viewer, which is the usual case -- a

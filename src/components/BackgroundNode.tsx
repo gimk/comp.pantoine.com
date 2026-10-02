@@ -2,9 +2,7 @@ import React, { useCallback } from 'react';
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
 import { Wallpaper } from 'lucide-react';
 import { useGraph } from '../state/store';
-import { generatorsForPlan, type BackgroundNodeData } from '../state/graph';
-import { getImage } from '../engine/imageStore';
-import { getVideo } from '../engine/videoStore';
+import { outputFrameOf, type BackgroundNodeData } from '../state/graph';
 import { isPlaying, subscribeClock } from '../engine/clock';
 import { Slider } from './controlPrimitives';
 import { useResolvedChain, useUpstreamRender } from './viewerPipeline';
@@ -28,9 +26,7 @@ export const BackgroundNode: React.FC<NodeProps<Node<BackgroundNodeData, 'backgr
       : undefined;
 
   const { chain } = useResolvedChain(id);
-  const primarySource = chain
-    ? getImage(chain.sourceNodeId) ?? getVideo(chain.sourceNodeId) ?? generatorsForPlan(chain.plan).get(chain.sourceNodeId)
-    : undefined;
+  const primarySource = chain ? outputFrameOf(chain) ?? undefined : undefined;
   const isPlayingNow = React.useSyncExternalStore(subscribeClock, isPlaying);
 
   const isConnected = !!chain || (isRenderMode && hasRenderedAsset);

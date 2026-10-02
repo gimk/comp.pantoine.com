@@ -4,6 +4,7 @@ import {
   chainIsAnimated,
   findUpstreamRenderNode,
   generatorsForPlan,
+  outputFrameOf,
   resolveChain,
   type RenderNodeData,
   type ResolvedChain,
@@ -339,9 +340,9 @@ export const useViewerPipeline = ({ view, live, fitMode, liveWorkingSize, onFps,
     }
 
     const generators = generatorsForPlan(current.plan);
-    const primarySource =
-      getImage(current.sourceNodeId) ?? getVideo(current.sourceNodeId) ?? generators.get(current.sourceNodeId);
-    const maxDim = primarySource ? Math.max(primarySource.width, primarySource.height) : MAX_WORKING_SIZE;
+    // The output's frame, which a Resize/Crop may have made other than the source's.
+    const frame = outputFrameOf(current);
+    const maxDim = frame ? Math.max(frame.width, frame.height) : MAX_WORKING_SIZE;
     const maxWorkingSize = settings
       ? Math.max(16, Math.round(maxDim * settings.scale))
       : workingSize?.(target) ?? MAX_WORKING_SIZE;

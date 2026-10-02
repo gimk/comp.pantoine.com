@@ -12,6 +12,7 @@ import {
   type Signal,
 } from '../engine/modulators';
 import { getImage } from '../engine/imageStore';
+import { FALLBACK_FRAME, planFrames, type Frame } from '../engine/frames';
 import { getVideo } from '../engine/videoStore';
 import type { FieldBinding, FieldPort, Pass, RenderPlan, Step } from '../engine/pipeline';
 
@@ -258,7 +259,7 @@ export const carriesRenderAsset = (nodes: AppNode[], edges: Edge[], nodeId: stri
 };
 
 /** The frame a fill sets when nothing else in the chain does: a fresh generator's. */
-export const FILL_SIZE = { width: 1280, height: 720 } as const;
+export const FILL_SIZE = FALLBACK_FRAME;
 
 const effectDefOf = (node: AppNode): EffectDef | undefined =>
   node.type === 'effect'
@@ -388,7 +389,7 @@ export const hasTargetPort = (node: AppNode, handle: string | null | undefined):
   if (!def) return false;
   if (isParamPort(handle)) {
     const key = handle.slice(PARAM_PORT_PREFIX.length);
-    return paramsOf(def).some((spec) => spec.key === key);
+    return paramsOf(def).some((spec) => spec.key === key && !spec.portless);
   }
   return inputsOf(def).some((input) => input.key === handle);
 };
@@ -657,6 +658,7 @@ export const resolveChain = (
     const modulation: Record<string, Signal> = {};
     const fields: FieldBinding[] = [];
     for (const spec of paramsOf(def)) {
+      if (spec.portless) continue;
       const source = sourceOf(nodeId, paramPort(spec.key));
       if (source === undefined) continue;
       if (isField(source)) {
@@ -807,6 +809,16 @@ export const resolveChain = (
     formatter: activeFormatter,
   };
 };
+
+/** Every picture's frame in a chain, with media sized from what has loaded. */
+export const chainFrames = (chain: ResolvedChain): (Frame | null)[] =>
+  planFrames(chain.plan, { image: getImage, video: getVideo });
+
+/**
+ * The size and shape a chain's output comes out at, in source pixels: the
+ * source's, unless a Resize/Crop on the main path changed it.
+ */
+export const outputFrameOf = (chain: ResolvedChain): Frame | null => chainFrames(chain)[chain.plan.output] ?? null;
 
 /** Collect all generator node dimensions required by the plan. */
 export const generatorsForPlan = (plan: RenderPlan): Map<string, { width: number; height: number }> => {

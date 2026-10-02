@@ -1,10 +1,8 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Handle, Position, useReactFlow, useUpdateNodeInternals, type Node, type NodeProps } from '@xyflow/react';
 import { useGraph } from '../state/store';
-import { DEFAULT_PREVIEW_WIDTH, generatorsForPlan, type OutputNodeData } from '../state/graph';
+import { DEFAULT_PREVIEW_WIDTH, outputFrameOf, type OutputNodeData } from '../state/graph';
 import { isRendering } from '../state/renderJobs';
-import { getImage } from '../engine/imageStore';
-import { getVideo } from '../engine/videoStore';
 import { useResolvedChain, useUpstreamRender, useViewerPipeline } from './viewerPipeline';
 import { formatBytes, formatLabel, isMotionExtension } from './format';
 
@@ -76,10 +74,8 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
     onResize,
   });
 
-  const planGenerators = useMemo(() => (chain ? generatorsForPlan(chain.plan) : new Map()), [chain]);
-  const source = chain
-    ? getImage(chain.sourceNodeId) ?? getVideo(chain.sourceNodeId) ?? planGenerators.get(chain.sourceNodeId)
-    : undefined;
+  // What the chain puts out -- the source's size unless a Resize/Crop changed it.
+  const source = chain ? outputFrameOf(chain) ?? undefined : undefined;
   const sourceRatio = source ? source.width / source.height : DEFAULT_RATIO;
   const ratio = isRenderMode && asset ? asset.width / asset.height : sourceRatio;
 

@@ -1,7 +1,8 @@
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
-import { generatorsForPlan, type ExportFormat, type RenderNodeData, type ResolvedChain } from '../state/graph';
+import { chainFrames, generatorsForPlan, outputFrameOf, type ExportFormat, type RenderNodeData, type ResolvedChain } from '../state/graph';
 import { useGraph } from '../state/store';
 import { defaultParams } from './effects';
+import type { Frame } from './frames';
 import { Pipeline } from './pipeline';
 import { createContext } from './gl';
 import { getImage, type LoadedImage } from './imageStore';
@@ -506,7 +507,10 @@ type Inputs = {
   videos: Map<string, LoadedVideo>;
   generators: Map<string, { width: number; height: number }>;
   /** The source that sets the frame's shape. */
+  /** The output's frame, in source pixels. */
   source: { width: number; height: number };
+  /** The biggest frame anywhere in the chain. */
+  largest: { width: number; height: number };
   scale: number;
   width: number;
   height: number;
@@ -518,8 +522,18 @@ type Inputs = {
 /** Everything the chain reads, and the output size -- before any GPU work. */
 const gatherInputs = (chain: ResolvedChain, data: RenderNodeData, even: boolean): Inputs => {
   const generators = generatorsForPlan(chain.plan);
-  const source = getImage(chain.sourceNodeId) ?? getVideo(chain.sourceNodeId) ?? generators.get(chain.sourceNodeId);
+  if (!(getImage(chain.sourceNodeId) ?? getVideo(chain.sourceNodeId) ?? generators.get(chain.sourceNodeId))) {
+    throw new Error('Source media not loaded');
+  }
+  // The output's frame -- a Resize/Crop may have changed it -- and the
+  // biggest picture made on the way, which the GPU has to hold too.
+  const frames = chainFrames(chain).filter((frame): frame is Frame => frame !== null);
+  const source = outputFrameOf(chain);
   if (!source) throw new Error('Source media not loaded');
+  const largest = frames.reduce(
+    (big, frame) => (frame.width * frame.height > big.width * big.height ? frame : big),
+    source,
+  );
   const images = imagesForPlan(chain.plan);
   const videos = videosForPlan(chain.plan);
   if (!images || !videos) throw new Error('Missing input media in chain');
@@ -542,6 +556,7 @@ const gatherInputs = (chain: ResolvedChain, data: RenderNodeData, even: boolean)
     videos,
     generators,
     source: { width: source.width, height: source.height },
+    largest: { width: largest.width, height: largest.height },
     scale: data.scale,
     width,
     height,
@@ -561,8 +576,8 @@ const checkGpuLimits = (gl: WebGL2RenderingContext, inputs: Inputs): void => {
   const viewport = gl.getParameter(gl.MAX_VIEWPORT_DIMS) as Int32Array;
   const limit = Math.min(maxTexture, maxRenderbuffer, viewport[0], viewport[1]);
   // The working size can be a pixel over the output after even-rounding.
-  const workWidth = Math.max(inputs.width, Math.round(inputs.source.width * inputs.scale));
-  const workHeight = Math.max(inputs.height, Math.round(inputs.source.height * inputs.scale));
+  const workWidth = Math.max(inputs.width, Math.round(inputs.largest.width * inputs.scale));
+  const workHeight = Math.max(inputs.height, Math.round(inputs.largest.height * inputs.scale));
   if (workWidth > limit || workHeight > limit) {
     throw new Error(
       `The output would be ${inputs.width}×${inputs.height}, but this GPU can render at most ${limit}px per side. ` +

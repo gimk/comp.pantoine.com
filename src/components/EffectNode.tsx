@@ -196,7 +196,16 @@ export const ParamRow: React.FC<{
     return { read: (time) => readPort(spec, signal, time, range), moving: signalIsMoving(signal) };
   }, [signal, spec, derived]);
 
-  if (!port) return <Control spec={spec} value={value} onChange={onChange} />;
+  if (!port) {
+    if (!inactive) return <Control spec={spec} value={value} onChange={onChange} />;
+    return (
+      <div className="param-row is-inactive">
+        <div className="param-control">
+          <Control spec={spec} value={value} onChange={onChange} />
+        </div>
+      </div>
+    );
+  }
 
   /*
    * A picture has a value per pixel, and a signal into a toggle, a menu, a
@@ -311,7 +320,7 @@ export const EffectNode: React.FC<NodeProps<Node<EffectNodeData, 'effect'>>> = (
             nodeId={id}
             spec={spec}
             value={data.params[spec.key]}
-            port
+            port={!spec.portless}
             field={acceptsField(def, spec)}
             inactive={spec.activeWhen ? !spec.activeWhen(data.params) : false}
             onChange={(value) => setParam(id, spec.key, value)}

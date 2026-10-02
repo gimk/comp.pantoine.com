@@ -12,6 +12,7 @@
  */
 import { STDLIB } from './stdlib';
 import type { TimeCacheConfig } from './timeCache';
+import type { Frame } from './frames';
 
 export type Vec2 = [number, number];
 /** Straight RGB, each channel 0..1 -- what the shader wants, no conversion. */
@@ -32,6 +33,11 @@ type BaseSpec = {
    * length -- so it takes a single value, never a picture: a round port.
    */
   cpu?: boolean;
+  /**
+   * Shapes the plan itself -- a frame size -- so it is read as set, and a
+   * wire could not move it from one frame to the next: no port at all.
+   */
+  portless?: boolean;
 };
 
 /** A single tweakable knob, rendered as the control its kind implies. */
@@ -173,6 +179,14 @@ export type EffectDef = {
    * `mod(s, u_cache_layers)`.
    */
   timeCache?: (params: Record<string, ParamValue>) => TimeCacheConfig;
+  /**
+   * Makes a picture of a different size: the frame, in source pixels,
+   * that this node's output and everything after it on the main path run
+   * in (see frames.ts). Read from the params as set, never modulated. The
+   * shader gets the input's frame as `u_input_frame`, and reads its input
+   * raw -- it is the one effect whose main input may be another shape.
+   */
+  frame?: (input: Frame, params: Record<string, ParamValue>) => Frame;
   params: ParamSpec[];
   /** Extra image inputs, in port order. Most effects have none. */
   inputs?: InputSpec[];
@@ -380,6 +394,7 @@ export const buildFragmentSource = (def: EffectDef, passIndex: number, fields: r
     ),
     ...phaseUniforms,
     ...(def.timeCache ? [TIME_CACHE_UNIFORMS] : []),
+    ...(def.frame ? ['uniform vec2 u_input_frame;'] : []),
   ].join('\n');
 
   const reads = fieldSpecs.map((spec) => `  u_${spec.key} = ${fieldRead(spec)};\n`).join('');

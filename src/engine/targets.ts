@@ -137,39 +137,41 @@ export const deleteTarget = (gl: WebGL2RenderingContext, target: RenderTarget): 
  * last pass that reads it has run, so the pool only ever grows to the most
  * pictures that were alive at the same moment -- two for a plain chain,
  * three inside a multi-pass effect, a few more for a graph with branches.
- * Targets are kept across frames and reallocated only when the working
- * resolution changes. Each format has its own free list, so asking for a
- * half-float target never hands back an eight-bit one.
+ *
+ * Pictures come in more than one size once a Resize/Crop is in the graph,
+ * so targets are filed by format and size, and handed out at the size the
+ * pipeline last `use`d. They are kept across frames; a size no step asked
+ * for in a frame is freed at its end.
  */
 export class TargetPool {
   private gl: WebGL2RenderingContext;
   private all: RenderTarget[] = [];
-  /** Sets, so releasing twice cannot hand one target to two owners. */
-  private free: Record<TargetFormat, Set<RenderTarget>> = {
-    rgba8: new Set(),
-    rgba16f: new Set(),
-    rgba32f: new Set(),
-  };
+  /** By format and size. Sets, so releasing twice cannot hand one target to two owners. */
+  private free = new Map<string, Set<RenderTarget>>();
   private width = 0;
   private height = 0;
+  /** Sizes asked for since the last `endFrame`. */
+  private used = new Set<string>();
 
   constructor(gl: WebGL2RenderingContext) {
     this.gl = gl;
   }
 
-  resize(width: number, height: number): void {
-    if (this.width === width && this.height === height) return;
-    this.dispose();
+  /** The size targets are handed out at until the next call. */
+  use(width: number, height: number): void {
     this.width = width;
     this.height = height;
+    this.used.add(width + 'x' + height);
   }
 
   acquire(format: TargetFormat = 'rgba8'): RenderTarget {
-    if (this.width === 0) throw new Error('TargetPool used before resize()');
-    const free = this.free[format];
-    for (const target of free) {
-      free.delete(target);
-      return target;
+    if (this.width === 0) throw new Error('TargetPool used before use()');
+    const free = this.free.get(keyOf(format, this.width, this.height));
+    if (free) {
+      for (const target of free) {
+        free.delete(target);
+        return target;
+      }
     }
     const target = createTarget(this.gl, this.width, this.height, format);
     this.all.push(target);
@@ -177,19 +179,36 @@ export class TargetPool {
   }
 
   release(target: RenderTarget): void {
-    this.free[target.format].add(target);
+    const key = keyOf(target.format, target.width, target.height);
+    let free = this.free.get(key);
+    if (!free) this.free.set(key, (free = new Set()));
+    free.add(target);
   }
 
-  /** Everything back in the pool, at the end of a frame. */
+  /** Everything back in the pool, and any size this frame did not use freed. */
   releaseAll(): void {
-    for (const target of this.all) this.free[target.format].add(target);
+    const kept: RenderTarget[] = [];
+    this.free.clear();
+    for (const target of this.all) {
+      if (this.used.has(target.width + 'x' + target.height)) {
+        kept.push(target);
+        this.release(target);
+      } else {
+        deleteTarget(this.gl, target);
+      }
+    }
+    this.all = kept;
+    this.used.clear();
   }
 
   dispose(): void {
     for (const target of this.all) deleteTarget(this.gl, target);
     this.all = [];
-    for (const free of Object.values(this.free)) free.clear();
+    this.free.clear();
+    this.used.clear();
     this.width = 0;
     this.height = 0;
   }
 }
+
+const keyOf = (format: TargetFormat, width: number, height: number): string => `${format}:${width}x${height}`;
