@@ -352,7 +352,7 @@ const fieldRead = (spec: ParamSpec): string => {
     case 'int':
       return `max(int(luma(${f}.rgb)), ${Math.round(spec.min)})`;
     case 'enum':
-      return `clamp(int(luma(${f}.rgb)), 0, ${spec.options.length - 1})`;
+      return `int(clamp(floor(luma(${f}.rgb)), 0.0, ${glslFloat(spec.options.length - 1)}))`;
     case 'bool':
       return `luma(${f}.rgb) > 0.0`;
     case 'color':

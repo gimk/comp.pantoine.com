@@ -102,7 +102,7 @@ export const evalCurve = (points: Vec2[], x: number): number => {
 /** GLSL that sets `out` to curve `index` at `x`, in a block of its own. */
 const evalGlsl = (index: number, x: string, out: string) => `  {
     int base = ${index * MAX_POINTS};
-    int n = clamp(N[${index}], ${MIN_POINTS}, ${MAX_POINTS});
+    int n = int(clamp(float(N[${index}]), ${MIN_POINTS}.0, ${MAX_POINTS}.0));
     float x = ${x};
     float y;
     if (x <= P[base].x) {
