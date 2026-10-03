@@ -4,7 +4,7 @@ import { modulatorRegistry, type ModulatorDef } from '../engine/modulators';
 import { CATEGORY_LABELS, CATEGORY_ORDER, type Category, type EffectDef } from '../engine/effects';
 import { useGraph } from '../state/store';
 import { presetGraph, usePresets } from '../state/presets';
-import type { PaletteItem } from './paletteDrag';
+import { mediaKindOf, paletteDropOffset, type PaletteItem } from './paletteDrag';
 
 export type CatalogEntry = { key: string; label: string; payload: PaletteItem; tag?: string };
 export type CatalogGroup = { heading?: string; entries: CatalogEntry[] };
@@ -105,6 +105,28 @@ export const catalog: CatalogFolder[] = [
     ],
   },
 ];
+
+/**
+ * Files from outside the app -- dropped or pasted -- each become the module
+ * that reads it, already loaded. With a point, they land side by side from
+ * there, the first one carried by its title bar as a palette drop would be;
+ * without, each takes its default spot. Files neither module reads are
+ * passed over. Returns how many were placed.
+ */
+export const addMediaFiles = (files: Iterable<File>, at?: XYPosition): number => {
+  const store = useGraph.getState();
+  let placed = 0;
+  for (const file of files) {
+    const kind = mediaKindOf(file);
+    if (!kind) continue;
+    const offset = paletteDropOffset({ kind });
+    const position = at && { x: at.x - offset.x + placed * 220, y: at.y - offset.y };
+    placed += 1;
+    if (kind === 'image') void store.loadImage(store.addImageNode(position), file);
+    else void store.loadVideo(store.addVideoNode(position), file);
+  }
+  return placed;
+};
 
 /** Put one on the canvas: at `position` if given, else at its default spot. */
 export const addPaletteItem = (item: PaletteItem, position?: XYPosition): void => {

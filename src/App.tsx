@@ -18,10 +18,9 @@ import { LinkEdge } from './components/LinkEdge';
 import {
   PALETTE_DRAG_MIME,
   decodePaletteItem,
-  mediaKindOf,
   paletteDropOffset,
 } from './components/paletteDrag';
-import { addPaletteItem } from './components/paletteCatalog';
+import { addMediaFiles, addPaletteItem } from './components/paletteCatalog';
 import { QuickAdd } from './components/QuickAdd';
 import { useShallow } from 'zustand/react/shallow';
 import type { AppNode } from './state/graph';
@@ -255,27 +254,13 @@ const Editor: React.FC = () => {
         return;
       }
 
-      /*
-       * Files from the desktop: each one it can read becomes the module that
-       * reads it, already loaded. Several land side by side, left to right
-       * from the pointer; anything else in the bundle is passed over.
-       */
-      const files = Array.from(event.dataTransfer.files);
+      // Files from the desktop.
+      const files = event.dataTransfer.files;
       if (files.length === 0) return;
       // Even when nothing in it is usable, so the browser doesn't open the
       // file in place of the app.
       event.preventDefault();
-      const store = useGraph.getState();
-      let placed = 0;
-      for (const file of files) {
-        const kind = mediaKindOf(file);
-        if (!kind) continue;
-        const offset = paletteDropOffset({ kind });
-        const position = { x: point.x - offset.x + placed * 220, y: point.y - offset.y };
-        placed += 1;
-        if (kind === 'image') void store.loadImage(store.addImageNode(position), file);
-        else void store.loadVideo(store.addVideoNode(position), file);
-      }
+      addMediaFiles(files, point);
     },
     [screenToFlowPosition],
   );

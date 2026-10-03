@@ -4,6 +4,10 @@ import { redo, undo } from '../state/history';
 import { isDragging, setDragModifiers, setSnapping, useGraph } from '../state/store';
 import { usePresets } from '../state/presets';
 import { resetClock, togglePlaying } from '../engine/clock';
+import { addMediaFiles } from './paletteCatalog';
+
+/** Put on the system clipboard in place of copied modules; see onCopy. */
+const MODULES_MIME = 'application/x-comp-modules';
 
 /** How far a Ctrl+D copy lands from its original, in graph units. */
 const DUPLICATE_OFFSET = { x: 32, y: 32 };
@@ -51,7 +55,9 @@ const dialogIsOpen = (): boolean => document.querySelector('[aria-modal="true"]'
  *   Ctrl/Cmd + Z         undo
  *   Ctrl/Cmd + Shift + Z redo (Ctrl + Y too)
  *   Ctrl/Cmd + D         duplicate the selection
- *   Ctrl/Cmd + C / X / V copy, cut, paste (paste lands under the pointer)
+ *   Ctrl/Cmd + C / X / V copy, cut, paste (paste lands under the pointer;
+ *                        an image or video on the system clipboard pastes
+ *                        as its module)
  *   Ctrl/Cmd + G         group the selection; with Shift, ungroup it
  *   Ctrl/Cmd + S         save the selection (or a group) as a preset
  *   Ctrl/Cmd + A         select everything
@@ -83,6 +89,38 @@ export const useCanvasShortcuts = (
   quickAdd.current = onQuickAdd;
 
   useEffect(() => {
+    const pointerInFlow = () => (pointer.current ? screenToFlowPosition(pointer.current) : undefined);
+
+    /*
+     * Modules copied here live in the app's own clipboard, but an image
+     * copied earlier elsewhere would still sit in the system one and win
+     * the next paste. So a copy that took modules also overwrites the system
+     * clipboard with a marker, from the copy event that follows the keys.
+     */
+    let claimCopy = false;
+    const onCopy = (event: ClipboardEvent) => {
+      if (!claimCopy) return;
+      claimCopy = false;
+      event.clipboardData?.setData(MODULES_MIME, '1');
+      event.preventDefault();
+    };
+
+    /*
+     * Ctrl+V: an image or video on the system clipboard -- a screenshot, a
+     * picture copied from a page -- becomes its module under the pointer.
+     * Anything else pastes the app's own clipboard.
+     */
+    let pendingPaste = 0;
+    const onPaste = (event: ClipboardEvent) => {
+      if (isTypingInto(event.target) || isValueControl(event.target) || dialogIsOpen() || isDragging()) return;
+      window.clearTimeout(pendingPaste);
+      event.preventDefault();
+      const at = pointerInFlow();
+      const files = event.clipboardData?.files;
+      if (files && addMediaFiles(files, at) > 0) return;
+      useGraph.getState().paste(at);
+    };
+
     // Shift snaps, Ctrl lifts out of the chain, Alt duplicates: all three
     // follow the keys for the whole of a drag, not just how it started.
     const trackModifiers = (event: KeyboardEvent | PointerEvent) => {
@@ -126,16 +164,22 @@ export const useCanvasShortcuts = (
         event.preventDefault();
         store.duplicateSelection(DUPLICATE_OFFSET);
       } else if (mod && key === 'c') {
+        claimCopy = false;
         // Leave a text selection to the browser's own copy.
         if (window.getSelection()?.toString() || isValueControl(event.target)) return;
-        store.copySelection();
+        claimCopy = store.copySelection();
       } else if (mod && key === 'x') {
+        claimCopy = false;
         if (isValueControl(event.target)) return;
-        store.cutSelection();
+        claimCopy = store.cutSelection();
       } else if (mod && key === 'v') {
         if (isValueControl(event.target)) return;
-        event.preventDefault();
-        store.paste(pointer.current ? screenToFlowPosition(pointer.current) : undefined);
+        // Not prevented: that would cancel the paste event, the only place
+        // the system clipboard can be read. onPaste takes it from here, and
+        // the timer stands in for a browser that sends none.
+        const at = pointerInFlow();
+        window.clearTimeout(pendingPaste);
+        pendingPaste = window.setTimeout(() => useGraph.getState().paste(at), 0);
       } else if (mod && !event.altKey && key === 'g') {
         // Otherwise the browser's find-next.
         event.preventDefault();
@@ -197,11 +241,18 @@ export const useCanvasShortcuts = (
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
     window.addEventListener('blur', onBlur);
+    window.addEventListener('copy', onCopy);
+    window.addEventListener('cut', onCopy);
+    window.addEventListener('paste', onPaste);
     return () => {
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
+      window.removeEventListener('copy', onCopy);
+      window.removeEventListener('cut', onCopy);
+      window.removeEventListener('paste', onPaste);
+      window.clearTimeout(pendingPaste);
     };
   }, [fitView, fitPadding, screenToFlowPosition]);
 };

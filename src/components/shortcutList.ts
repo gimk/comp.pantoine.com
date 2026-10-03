@@ -72,7 +72,7 @@ export const SHORTCUT_COLUMNS: ShortcutSection[][] = [
         { label: 'Redo', keys: [[MOD, 'Shift', 'Z'], [MOD, 'Y']] },
         { label: 'Duplicate', keys: [[MOD, 'D']] },
         { label: 'Copy / cut', keys: [[MOD, 'C'], [MOD, 'X']] },
-        { label: 'Paste', note: 'Lands under the pointer', keys: [[MOD, 'V']] },
+        { label: 'Paste', note: 'Lands under the pointer; a copied image or video becomes its module', keys: [[MOD, 'V']] },
         { label: 'Delete', note: 'The chain closes up behind it', keys: [['Delete'], ['Backspace']] },
       ],
     },

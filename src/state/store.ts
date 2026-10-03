@@ -410,7 +410,7 @@ type GraphStore = {
   endAltDuplicate: () => (id: string) => string;
   duplicateSelection: (offset: XYPosition) => void;
   copySelection: () => boolean;
-  cutSelection: () => void;
+  cutSelection: () => boolean;
   paste: (at?: XYPosition) => void;
   removeNodes: (ids: string[]) => void;
   setAllSelected: (selected: boolean) => void;
@@ -1081,8 +1081,9 @@ export const useGraph = create<GraphStore>((set, get) => ({
   },
 
   cutSelection: () => {
-    if (!get().copySelection()) return;
+    if (!get().copySelection()) return false;
     get().removeNodes(get().nodes.filter((node) => node.selected).map((node) => node.id));
+    return true;
   },
 
   /**
