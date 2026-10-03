@@ -14,12 +14,17 @@ import { DEFAULT_PREVIEW_WIDTH, outputFrameOf, type OutputNodeData } from '../st
 import { isRendering } from '../state/renderJobs';
 import { useResolvedChain, useUpstreamRender, useViewerPipeline } from './viewerPipeline';
 import { formatBytes, formatLabel, isMotionExtension } from './format';
+import { FloatingViewer } from './FloatingViewer';
+import { PictureInPicture2 } from 'lucide-react';
 
 /** Shape of the empty frame, before there is a picture to take one from. */
 const DEFAULT_RATIO = 16 / 9;
 
 const MIN_PREVIEW_WIDTH = 160;
 const MAX_PREVIEW_WIDTH = 880;
+
+/** The card's width while its picture floats: wide enough for the footer's readouts. */
+const DOCKED_WIDTH = 240;
 
 /**
  * Tallest the picture may get.
@@ -87,7 +92,13 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
   const [fps, setFps] = useState<number | null>(null);
   const onResize = useCallback(() => updateNodeInternals(id), [id, updateNodeInternals]);
 
-  const displayScale = useStore(zoomStep);
+  // The picture lifted off the card into a window of its own. Not saved:
+  // how this screen is arranged is not part of the document.
+  const [floating, setFloating] = useState(false);
+
+  // A floating window is outside the graph, so the graph's zoom is not its.
+  const zoom = useStore(zoomStep);
+  const displayScale = floating ? 1 : zoom;
 
   const { canvasRef, unsupported, contextLost, animated, still, playing, looping } = useViewerPipeline({
     view,
@@ -159,7 +170,7 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
   // Re-measure handle positions in React Flow when card dimensions, ratio, or mode change
   useEffect(() => {
     updateNodeInternals(id);
-  }, [id, width, ratio, isRenderMode, displayWidth, displayHeight, updateNodeInternals]);
+  }, [id, width, ratio, isRenderMode, displayWidth, displayHeight, floating, updateNodeInternals]);
 
   useEffect(() => {
     const handle = requestAnimationFrame(() => {
@@ -171,62 +182,87 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
   const stageStyle = { '--stage-ratio': ratio } as React.CSSProperties;
   const requestedLabel = renderSettings ? formatLabel(renderSettings.format) : null;
 
+  const info = isRenderMode
+    ? asset
+      ? `${asset.width} × ${asset.height} · ${formatBytes(asset.blob.size)}`
+      : requestedLabel ?? '—'
+    : source
+      ? `${displayWidth} × ${displayHeight}`
+      : '—';
+
+  // The picture, wherever it is shown: on the card, or in its floating
+  // window. The canvas moves with it, and the pipeline follows the canvas.
+  const stageContent = isRenderMode ? (
+    asset ? (
+      isMotionExtension(asset.extension) ? (
+        <video
+          key={asset.url}
+          src={asset.url}
+          autoPlay
+          loop
+          muted
+          playsInline
+          className="render-canvas"
+          style={assetMediaStyle}
+        />
+      ) : (
+        <img key={asset.url} src={asset.url} alt="Rendered Preview" className="render-canvas" style={assetMediaStyle} />
+      )
+    ) : rendering ? (
+      <p className="render-empty">Rendering {requestedLabel} asset…</p>
+    ) : (
+      <p className="render-empty">
+        Click <strong>Render</strong> on upstream node.
+      </p>
+    )
+  ) : (
+    <>
+      <canvas ref={canvasRef} className="render-canvas" />
+      {unsupported && <p className="render-empty">This browser has no WebGL2.</p>}
+      {contextLost && <p className="render-empty">GPU context lost — restoring…</p>}
+      {!unsupported && !contextLost && !chain && <p className="render-empty">Wire an image in to see it here.</p>}
+    </>
+  );
+
   return (
-    <div className="node node-output" style={{ width }}>
+    <div className={'node node-output' + (floating ? ' is-floating' : '')} style={{ width: floating ? DOCKED_WIDTH : width }}>
       <div className="render-head">
         <span className="render-title">Viewer</span>
-        <span className="render-info">
-          {isRenderMode
-            ? asset
-              ? `${asset.width} × ${asset.height} · ${formatBytes(asset.blob.size)}`
-              : requestedLabel ?? '—'
-            : source
-              ? `${displayWidth} × ${displayHeight}`
-              : '—'}
-        </span>
-      </div>
-
-      <div className="render-stage" style={stageStyle}>
-        {isRenderMode ? (
-          asset ? (
-            isMotionExtension(asset.extension) ? (
-              <video
-                key={asset.url}
-                src={asset.url}
-                autoPlay
-                loop
-                muted
-                playsInline
-                className="render-canvas"
-                style={assetMediaStyle}
-              />
-            ) : (
-              <img
-                key={asset.url}
-                src={asset.url}
-                alt="Rendered Preview"
-                className="render-canvas"
-                style={assetMediaStyle}
-              />
-            )
-          ) : rendering ? (
-            <p className="render-empty">Rendering {requestedLabel} asset…</p>
-          ) : (
-            <p className="render-empty">
-              Click <strong>Render</strong> on upstream node.
-            </p>
-          )
-        ) : (
-          <>
-            <canvas ref={canvasRef} className="render-canvas" />
-            {unsupported && <p className="render-empty">This browser has no WebGL2.</p>}
-            {contextLost && <p className="render-empty">GPU context lost — restoring…</p>}
-            {!unsupported && !contextLost && !chain && (
-              <p className="render-empty">Wire an image in to see it here.</p>
-            )}
-          </>
+        <span className="render-info">{info}</span>
+        {!floating && (
+          <button
+            type="button"
+            className="render-head-button nodrag"
+            onClick={() => setFloating(true)}
+            title="Float the picture over the screen"
+          >
+            <PictureInPicture2 size={13} aria-hidden="true" />
+            <span>Float</span>
+          </button>
         )}
       </div>
+
+      {floating ? (
+        <button
+          type="button"
+          className="render-docked nodrag"
+          onClick={() => setFloating(false)}
+          title="Put the picture back on the card"
+        >
+          <PictureInPicture2 size={14} aria-hidden="true" />
+          <span>Floating on screen</span>
+          <span className="render-docked-action">Bring back</span>
+        </button>
+      ) : (
+        <div className="render-stage" style={stageStyle}>
+          {stageContent}
+        </div>
+      )}
+      {floating && (
+        <FloatingViewer nodeId={id} ratio={ratio} info={info} onDock={() => setFloating(false)}>
+          {stageContent}
+        </FloatingViewer>
+      )}
 
       <div className="render-foot">
         <span
@@ -270,20 +306,22 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
       </div>
 
       {/* nodrag, or dragging the grip would drag the whole card instead. */}
-      <div
-        className="render-grip nodrag"
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Resize preview"
-        tabIndex={0}
-        onPointerDown={beginResize}
-        onPointerMove={trackResize}
-        onPointerUp={endResize}
-        onPointerCancel={endResize}
-        onKeyDown={nudgeResize}
-        onDoubleClick={() => setPreviewWidth(id, DEFAULT_PREVIEW_WIDTH)}
-        title="Drag to resize · double-click to reset"
-      />
+      {!floating && (
+        <div
+          className="render-grip nodrag"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize preview"
+          tabIndex={0}
+          onPointerDown={beginResize}
+          onPointerMove={trackResize}
+          onPointerUp={endResize}
+          onPointerCancel={endResize}
+          onKeyDown={nudgeResize}
+          onDoubleClick={() => setPreviewWidth(id, DEFAULT_PREVIEW_WIDTH)}
+          title="Drag to resize · double-click to reset"
+        />
+      )}
 
       {/* Dual input: split circle (blue live picture / purple rendered asset) */}
       <Handle
