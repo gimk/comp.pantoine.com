@@ -15,6 +15,7 @@ import { getGenerator } from '../engine/generators';
 import { defaultParams, type ParamValue } from '../engine/effects';
 import { defaultModulatorParams, getModulator } from '../engine/modulators';
 import { decodeImage, dropImage, putImage, shareImage, swapImages } from '../engine/imageStore';
+import { clearStatistics } from '../engine/statistics';
 import {
   cloneVideo,
   configureVideo,
@@ -299,7 +300,8 @@ const orphanedHelpers = (nodes: AppNode[], edges: Edge[], gone: Set<string>): st
 /**
  * Let go of what the store holds for nodes leaving the graph: pixels, a
  * video's element (paused first -- an undo snapshot may keep it alive, and it
- * must not play on unseen), and a Render node's baked file.
+ * must not play on unseen), a Render node's baked file, and an Image
+ * Statistic's kept readings.
  */
 const retire = (nodes: AppNode[], gone: Set<string>): void => {
   for (const node of nodes) {
@@ -310,6 +312,7 @@ const retire = (nodes: AppNode[], gone: Set<string>): void => {
       dropVideo(node.id);
     }
     if (node.type === 'render') useRenderJobs.getState().clear(node.id);
+    if (node.type === 'modulator' && node.data.modulatorId === 'statistic') clearStatistics(node.id);
   }
 };
 

@@ -6,6 +6,7 @@ import { commitNow, redo, undo } from './history';
 import { useRenderJobs } from './renderJobs';
 import { getVideo, putVideo } from '../engine/videoStore';
 import { getImage } from '../engine/imageStore';
+import { readStatistic, setStatistics } from '../engine/statistics';
 
 /*
  * The tests run without a DOM. A video element is only ever poked at for its
@@ -343,5 +344,14 @@ describe('undo and redo', () => {
     undo();
     expect(element.loop).toBe(true);
     expect(element.playbackRate).toBe(1);
+  });
+});
+
+describe('deleting an Image Statistic', () => {
+  it('lets go of the readings it kept', () => {
+    graph([{ id: 'stat-1', type: 'modulator', position: at, data: { modulatorId: 'statistic', params: { statistic: 0 } } }]);
+    setStatistics('stat-1', [0.7, 0.7, 0.7, 0.7, 0.7], 1);
+    useGraph.getState().onNodesChange([{ type: 'remove', id: 'stat-1' }]);
+    expect(readStatistic('stat-1', 0)).toBe(0);
   });
 });
