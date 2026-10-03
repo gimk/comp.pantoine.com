@@ -27,6 +27,7 @@ import { isModulatable, readPort, signalIsMoving, signalKey, type Signal } from 
 import { useGraph } from '../state/store';
 import { getShaderError, subscribeShaderErrors } from '../engine/shaderErrors';
 import { ColorField, NumberField, Select, Slider, Toggle, Vec2Field, type LiveReading } from './controlPrimitives';
+import { CurvesEditor } from './CurvesEditor';
 
 const CATEGORY_ICONS: Record<Category, React.ComponentType<{ size?: number }>> = {
   color: Palette,
@@ -39,6 +40,14 @@ const CATEGORY_ICONS: Record<Category, React.ComponentType<{ size?: number }>> =
   temporal: History,
   composite: Layers,
   generator: Sparkles,
+};
+
+/**
+ * Editors drawn on a card above its rows, for params that are not a row
+ * each -- a curve's points, marked `hidden` in the effect's specs.
+ */
+const CARD_EDITORS: Record<string, React.ComponentType<{ nodeId: string; params: Record<string, ParamValue> }>> = {
+  curves: CurvesEditor,
 };
 
 /**
@@ -294,6 +303,7 @@ export const EffectNode: React.FC<NodeProps<Node<EffectNodeData, 'effect'>>> = (
 
   const inputs = inputsOf(def);
   const CategoryIcon = CATEGORY_ICONS[def.category] ?? Sparkles;
+  const CardEditor = CARD_EDITORS[def.id];
 
   return (
     <div className="node node-effect">
@@ -328,7 +338,8 @@ export const EffectNode: React.FC<NodeProps<Node<EffectNodeData, 'effect'>>> = (
             <span className="control-label">{input.label}</span>
           </div>
         ))}
-        {paramsOf(def).map((spec) => (
+        {CardEditor && <CardEditor nodeId={id} params={data.params} />}
+        {paramsOf(def).filter((spec) => !spec.hidden).map((spec) => (
           <ParamRow
             key={spec.key}
             nodeId={id}

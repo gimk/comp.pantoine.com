@@ -103,7 +103,7 @@ export const paramSpecsOf = (node: AppNode): ParamSpec[] => {
     return def ? modulatorParamsOf(def) : [];
   }
   const def = defOf(node);
-  return def ? paramsOf(def) : [];
+  return def ? paramsOf(def).filter((spec) => !spec.hidden) : [];
 };
 
 /**

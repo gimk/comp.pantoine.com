@@ -3635,6 +3635,128 @@ textarea,
   padding: 0;
 }
 
+/* Curves: the card's own editor for its points. */
+
+.curves-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 4px;
+}
+
+.curves-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.curves-tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.curves-tab {
+  min-width: 26px;
+  height: 20px;
+  padding: 0 6px;
+}
+
+.curves-tab.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+
+.curves-tab.is-active:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.curves-box {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--hairline);
+  background: rgba(var(--ink-rgb), 0.03);
+  cursor: crosshair;
+  touch-action: none;
+  user-select: none;
+  overflow: visible;
+}
+
+.curves-grid line,
+.curves-diagonal {
+  stroke: rgba(var(--ink-rgb), 0.1);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.curves-diagonal {
+  stroke-dasharray: 3 3;
+}
+
+.curves-line {
+  fill: none;
+  stroke-width: 1.75;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.curves-line-m { stroke: var(--text-primary); }
+.curves-line-r { stroke: #e5484d; }
+.curves-line-g { stroke: #30a46c; }
+.curves-line-b { stroke: #3e63dd; }
+
+.curves-line.is-faint {
+  stroke-width: 1;
+  opacity: 0.35;
+}
+
+.curves-point {
+  cursor: grab;
+}
+
+.curves-point:active {
+  cursor: grabbing;
+}
+
+.curves-point-hit {
+  fill: transparent;
+}
+
+.curves-point-dot {
+  fill: var(--paper-solid);
+  stroke: var(--text-primary);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+  transition: opacity 120ms ease;
+}
+
+.curves-box-r .curves-point-dot { stroke: #e5484d; }
+.curves-box-g .curves-point-dot { stroke: #30a46c; }
+.curves-box-b .curves-point-dot { stroke: #3e63dd; }
+
+.curves-point.is-selected .curves-point-dot {
+  fill: currentColor;
+}
+
+.curves-box-m .curves-point.is-selected .curves-point-dot { color: var(--text-primary); }
+.curves-box-r .curves-point.is-selected .curves-point-dot { color: #e5484d; }
+.curves-box-g .curves-point.is-selected .curves-point-dot { color: #30a46c; }
+.curves-box-b .curves-point.is-selected .curves-point-dot { color: #3e63dd; }
+
+/* Let go here and it is removed. */
+.curves-point.is-removing .curves-point-dot {
+  opacity: 0.3;
+  stroke-dasharray: 2 2;
+}
+
+.curves-readout .control-value {
+  font-variant-numeric: tabular-nums;
+}
+
 
 
 

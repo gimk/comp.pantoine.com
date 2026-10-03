@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Edge } from '@xyflow/react';
 import { MOD_OUTPUT, paramPort, resolveChain, type AppNode } from './graph';
-import { drawnEdges, isGroup, planGroup, realWire, type GroupNode } from './groups';
+import { drawnEdges, isGroup, paramSpecsOf, planGroup, realWire, type GroupNode } from './groups';
 import { deserializeGraph, serializeGraph } from './document';
 import { useGraph } from './store';
 
@@ -203,5 +203,12 @@ describe('saving a group', () => {
     const loaded = deserializeGraph(doc)!;
     expect(loaded.nodes.map((node) => node.id)).toEqual(['img']);
     expect(loaded.nodes[0].hidden).toBeUndefined();
+  });
+});
+
+describe('what a module offers to expose', () => {
+  it('leaves out params its card edits itself, such as a curve’s points', () => {
+    const keys = paramSpecsOf(effect('c', 'curves')).map((spec) => spec.key);
+    expect(keys).toEqual(['mix']);
   });
 });

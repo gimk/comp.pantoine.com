@@ -39,6 +39,9 @@ describe('effect registry and module definitions', () => {
       'kaleidoscope',
       'pixelSort',
       'feedback',
+      'curves',
+      'selectiveColor',
+      'channelMixer',
     ];
 
     for (const id of expectedNewModules) {

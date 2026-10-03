@@ -38,6 +38,12 @@ type BaseSpec = {
    * wire could not move it from one frame to the next: no port at all.
    */
   portless?: boolean;
+  /**
+   * Edited by the card's own editor -- a curve's points -- rather than as a
+   * row of its own: no row, and nothing a group or preset can expose.
+   * Declare it portless as well.
+   */
+  hidden?: boolean;
 };
 
 /** A single tweakable knob, rendered as the control its kind implies. */

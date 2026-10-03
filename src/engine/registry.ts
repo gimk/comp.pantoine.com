@@ -9,6 +9,9 @@ import { chromaBleed } from './modules/chromaBleed';
 import { chromaticAberration } from './modules/chromaticAberration';
 import { chromaKey } from './modules/chromaKey';
 import { colorBalance } from './modules/colorBalance';
+import { selectiveColor } from './modules/selectiveColor';
+import { channelMixer } from './modules/channelMixer';
+import { curves } from './modules/curves';
 import { directionalBlur } from './modules/directionalBlur';
 import { displace } from './modules/displace';
 import { dither } from './modules/dither';
@@ -72,12 +75,15 @@ import { glitchMachine } from './modules/glitchMachine';
 export const registry: EffectDef[] = [
   // Color & Tone
   levels,
+  curves,
   exposure,
   shadowsHighlights,
   saturation,
   vibrance,
   whiteBalance,
   colorBalance,
+  selectiveColor,
+  channelMixer,
   blackwhite,
   invert,
 
