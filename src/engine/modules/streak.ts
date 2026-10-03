@@ -14,11 +14,11 @@ const THRESHOLD = `  vec4 src = texture(u_src, v_uv);
 
 const STREAK_PASS_1 = `  float rad = radians(u_angle);
   vec2 dir = vec2(cos(rad), sin(rad));
-  fragColor = blurAxis(u_src, v_uv, u_resolution, dir, u_length * 0.35 * u_pixel_scale);`;
+  fragColor = glowAxis(u_src, v_uv, u_resolution, dir, u_length * 0.35 * u_pixel_scale);`;
 
 const STREAK_PASS_2 = `  float rad = radians(u_angle);
   vec2 dir = vec2(cos(rad), sin(rad));
-  fragColor = blurAxis(u_src, v_uv, u_resolution, dir, u_length * u_pixel_scale);`;
+  fragColor = glowAxis(u_src, v_uv, u_resolution, dir, u_length * u_pixel_scale);`;
 
 const COMBINE = `  vec4 base = texture(u_orig, v_uv);
   vec3 flare = texture(u_src, v_uv).rgb * u_tint * u_intensity;

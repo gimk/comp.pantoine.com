@@ -22,7 +22,7 @@ const THRESHOLD = `  vec4 src = texture(u_src, v_uv);
   fragColor = vec4(src.rgb * keep, 1.0);`;
 
 const AXIS = `  vec2 dir = (u_pass == 1) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
-  fragColor = blurAxis(u_src, v_uv, u_resolution, dir, u_radius * u_pixel_scale);`;
+  fragColor = glowAxis(u_src, v_uv, u_resolution, dir, u_radius * u_pixel_scale);`;
 
 const COMBINE = `  vec4 base = texture(u_orig, v_uv);
   vec3 glow = texture(u_src, v_uv).rgb;

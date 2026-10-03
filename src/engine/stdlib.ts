@@ -211,8 +211,17 @@ vec4 sampleEdge(sampler2D tex, vec2 uv, int mode) {
  * one up. The trade is that very large radii start to show their taps.
  *
  * At radius 0 every tap lands on the same texel and this is the identity.
+ *
+ * Taps that fall off the frame are never read through the clamp: that
+ * would count the edge row once for every tap past it, so a bright line
+ * sitting on the edge -- a scanline just scrolling in -- would weigh half
+ * the kernel and flash. With \`darkOutside\` they count as black, which is
+ * right for a glow: nothing beyond the frame gives off light, and a line
+ * glows the same on the edge as anywhere else. Without it they are left
+ * out and the rest renormalised, so a plain blur neither smears the edge
+ * row inward nor darkens the border.
  */
-vec4 blurAxis(sampler2D tex, vec2 uv, vec2 resolution, vec2 dir, float radius) {
+vec4 blurAxis(sampler2D tex, vec2 uv, vec2 resolution, vec2 dir, float radius, bool darkOutside) {
   const int TAPS = 8;
   vec2 stepUv = dir * radius / (float(TAPS) * resolution);
   vec4 sum = vec4(0.0);
@@ -220,10 +229,24 @@ vec4 blurAxis(sampler2D tex, vec2 uv, vec2 resolution, vec2 dir, float radius) {
   for (int i = -TAPS; i <= TAPS; i++) {
     float t = float(i) / float(TAPS);
     float w = exp(-2.5 * t * t);
-    sum += texture(tex, uv + stepUv * float(i)) * w;
-    total += w;
+    vec2 p = uv + stepUv * float(i);
+    if (p.x >= 0.0 && p.x <= 1.0 && p.y >= 0.0 && p.y <= 1.0) {
+      sum += texture(tex, p) * w;
+      total += w;
+    } else if (darkOutside) {
+      total += w;
+    }
   }
   return sum / total;
+}
+
+vec4 blurAxis(sampler2D tex, vec2 uv, vec2 resolution, vec2 dir, float radius) {
+  return blurAxis(tex, uv, resolution, dir, radius, false);
+}
+
+/** A blur for spreading light: off the frame is dark. See blurAxis. */
+vec4 glowAxis(sampler2D tex, vec2 uv, vec2 resolution, vec2 dir, float radius) {
+  return blurAxis(tex, uv, resolution, dir, radius, true);
 }
 
 /**
