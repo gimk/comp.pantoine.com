@@ -28,7 +28,10 @@ import type { EffectDef } from '../effects';
  *
  * Only the fractional part of a phase is ever seen, so the scans keep
  * their sums modulo one. That keeps them small and exact in full float,
- * and still usable where the GPU only has half float to give.
+ * and still usable where the GPU only has half float to give. The whole
+ * cycles are counted alongside, modulo LINE_IDS, which numbers each line
+ * the same on every row it runs through -- enough for Scatter to give each
+ * one its own random offset.
  *
  * Normalising by the row length means Carrier is a count of lines across
  * the frame, like Scanlines' Lines, and a preview and a full-size export
@@ -39,6 +42,8 @@ import type { EffectDef } from '../effects';
 const BLOCK = 64;
 /** Blocks the block scan will walk: rows up to 16384 pixels. */
 const MAX_BLOCKS = 256;
+/** Lines are numbered modulo this; exact in half float, which runs out at 2048. */
+const LINE_IDS = 1024;
 
 /** The driver signal, 0..1, from the Modulator input or else the picture. */
 const DRIVER = `  vec4 driverSrc = textureSize(u_modulator, 0).x > 1 ? texture(u_modulator, v_uv) : texture(u_orig, v_uv);
@@ -82,18 +87,22 @@ const LOCAL_SCAN = `${SCAN_AXIS}
     sum += texelFetch(u_src, ${AT('j')}, 0).r;
   }
   // R: running phase within the block, mod 1. G: this pixel's own rate,
-  // carried on for the render pass.
-  fragColor = vec4(fract(sum), texelFetch(u_src, here, 0).r, 0.0, 1.0);`;
+  // carried on for the render pass. B: whole cycles within the block.
+  fragColor = vec4(fract(sum), texelFetch(u_src, here, 0).r, floor(sum), 1.0);`;
 
 const BLOCK_SCAN = `${SCAN_AXIS}
   vec4 local = texelFetch(u_src, here, 0);
   float sum = local.r;
+  float count = local.b;
   int block = i / ${BLOCK};
   for (int b = 0; b < ${MAX_BLOCKS}; b++) {
     if (b >= block) break;
-    sum += texelFetch(u_src, ${AT(`b * ${BLOCK} + ${BLOCK - 1}`)}, 0).r;
+    vec4 end = texelFetch(u_src, ${AT(`b * ${BLOCK} + ${BLOCK - 1}`)}, 0);
+    sum += end.r;
+    count += end.b;
   }
-  fragColor = vec4(fract(sum), local.g, 0.0, 1.0);`;
+  // B: whole cycles so far along the row, which numbers the lines.
+  fragColor = vec4(fract(sum), local.g, mod(count + floor(sum), ${LINE_IDS}.0), 1.0);`;
 
 const RENDER = `  vec4 data = texelFetch(u_src, ivec2(floor(v_uv * u_resolution)), 0);
   float rate = data.g;
@@ -103,14 +112,45 @@ const RENDER = `  vec4 data = texelFetch(u_src, ivec2(floor(v_uv * u_resolution)
   float duty = clamp(u_duty, 0.02, 0.98);
 
   float wave = 0.0;
-  if (u_waveform == 0) {
-    // Hairline: lit only where the phase crosses a whole cycle inside this
-    // pixel. The stored sum is the phase at the pixel's far edge, so the
-    // fraction past the last crossing over the rate is how many pixels ago
-    // that crossing was. One pixel wide and full strength whatever the
+  if (u_waveform == 0 || u_waveform >= 4) {
+    // Hairline and its variations: lit only where the phase crosses a whole
+    // cycle inside this pixel. The stored sum is the phase at the pixel's
+    // far edge, so the fraction past the last crossing over the rate is how
+    // many pixels ago that crossing was. Full strength whatever the
     // density; where there is more than one crossing a pixel, solid.
     float since = fract(data.r - u_phase_speed) / max(rate, 1e-6);
-    wave = clamp(max(u_width, 1.0) - floor(since), 0.0, 1.0);
+    float along = floor(since);
+    float width = max(u_width, 1.0);
+    float spacing = max(u_spacing, 2.0);
+    // Pixel centre on the other axis, along the line rather than across it.
+    vec2 px = floor(v_uv * u_resolution) + 0.5;
+    float across = u_axis == 0 ? px.y : px.x;
+    // Which line this is, the same on every row it crosses. Scatter slides
+    // each line's dots or dashes along it by its own random amount, so they
+    // stop lining up in rows from one line to the next.
+    float line = floor(data.b + data.r - u_phase_speed);
+    across += u_scatter * spacing * hash11(line);
+    if (u_waveform == 4) {
+      // Dots: the line broken into round dots Spacing pixels apart, each
+      // Line Width across. Scatter also nudges each dot within its own
+      // slot, never so far that it is cut off by the next one.
+      float slot = floor(across / spacing);
+      float jitter = (hash12(vec2(line, slot)) - 0.5) * u_scatter * max(spacing - width, 0.0);
+      vec2 offset = vec2(along + 0.5 - 0.5 * width, mod(across, spacing) - 0.5 * spacing - jitter);
+      wave = clamp(0.5 * width - length(offset) + 0.5, 0.0, 1.0);
+    } else if (u_waveform == 5) {
+      // Dashes: the line broken every Spacing pixels, Duty of each one ink.
+      wave = step(along, width - 1.0) * step(mod(across, spacing), spacing * duty);
+    } else if (u_waveform == 6) {
+      // Double: each line drawn twice, Spacing pixels apart, like a ruling pen.
+      wave = along < width || (along >= width + spacing && along < 2.0 * width + spacing) ? 1.0 : 0.0;
+    } else if (u_waveform == 7) {
+      // Trail: a hairline with a tail fading out behind it along the scan,
+      // longer the wider the line, like phosphor decaying after the beam.
+      wave = exp(-along / (2.0 * width));
+    } else {
+      wave = clamp(width - along, 0.0, 1.0);
+    }
   } else {
     // Box-filter the wave over the pixel's footprint along the scan, so lines
     // too dense to draw settle to the tint they would make instead of
@@ -141,6 +181,9 @@ ${DRIVER}
   vec3 ink = u_output == 0 ? u_lineColor : src.rgb * u_lineColor;
   fragColor = vec4(mix(u_bgColor, ink, intensity), src.a);`;
 
+/** Hairline and the waveforms drawn from its crossings rather than from a wave. */
+const isHairline = (waveform: unknown): boolean => (waveform ?? 0) === 0 || (waveform as number) >= 4;
+
 export const fmScanlines: EffectDef = {
   id: 'fmScanlines',
   label: 'Frequency Modulation',
@@ -161,8 +204,15 @@ export const fmScanlines: EffectDef = {
     },
     /** Named for the lines drawn: vertical lines are a scan along each row. */
     { kind: 'enum', key: 'axis', label: 'Axis', options: ['Vertical Lines', 'Horizontal Lines'], default: 0 },
-    { kind: 'enum', key: 'waveform', label: 'Waveform', options: ['Hairline', 'Sine', 'Pulse', 'Saw'], default: 0 },
-    /** Hairline only: pixels per line. */
+    /** Appended, never reordered: documents store the index. */
+    {
+      kind: 'enum',
+      key: 'waveform',
+      label: 'Waveform',
+      options: ['Hairline', 'Sine', 'Pulse', 'Saw', 'Dots', 'Dashes', 'Double', 'Trail'],
+      default: 0,
+    },
+    /** Hairline and its variations: pixels per line, per dot, or the trail's length. */
     {
       kind: 'float',
       key: 'width',
@@ -171,9 +221,31 @@ export const fmScanlines: EffectDef = {
       max: 8,
       step: 0.5,
       default: 1,
-      activeWhen: (params) => (params.waveform ?? 0) === 0,
+      activeWhen: (params) => isHairline(params.waveform),
     },
-    /** Sine, Pulse and Saw: share of each cycle that is line. */
+    /** Dots and Dashes: pixels between them along the line. Double: pixels between the pair. */
+    {
+      kind: 'float',
+      key: 'spacing',
+      label: 'Spacing',
+      min: 2,
+      max: 64,
+      step: 1,
+      default: 6,
+      activeWhen: (params) => [4, 5, 6].includes(params.waveform as number),
+    },
+    /** Dots and Dashes: how far each line's pattern is shifted at random, so they don't line up across lines. */
+    {
+      kind: 'float',
+      key: 'scatter',
+      label: 'Scatter',
+      min: 0,
+      max: 1,
+      step: 0.01,
+      default: 0,
+      activeWhen: (params) => [4, 5].includes(params.waveform as number),
+    },
+    /** Sine, Pulse and Saw: share of each cycle that is line. Dashes: share of each dash. */
     {
       kind: 'float',
       key: 'duty',
@@ -182,7 +254,7 @@ export const fmScanlines: EffectDef = {
       max: 0.95,
       step: 0.01,
       default: 0.5,
-      activeWhen: (params) => (params.waveform ?? 0) !== 0,
+      activeWhen: (params) => !isHairline(params.waveform) || params.waveform === 5,
     },
     { kind: 'float', key: 'lumMask', label: 'Luma Mask', min: 0, max: 1, step: 0.01, default: 0 },
     { kind: 'float', key: 'speed', label: 'Drift', min: -2, max: 2, step: 0.01, default: 0 },
