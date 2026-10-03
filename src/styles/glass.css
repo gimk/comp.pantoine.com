@@ -707,9 +707,22 @@ textarea,
   background: var(--accent);
 }
 
-/* The info readout takes the slack, so the float button sits at the end. */
+/*
+ * The info readout takes the slack, so the float button sits at the end.
+ * It is also the one that gives way: a long one (a baked asset's size and
+ * weight) trims itself rather than pushing the button off the card.
+ */
 .render-head .render-info {
   margin-left: auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.render-head .render-title,
+.render-head-button {
+  flex: none;
 }
 
 /* Labelled, and outlined like a button, so it is found without hunting. */

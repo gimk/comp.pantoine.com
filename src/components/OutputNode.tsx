@@ -20,7 +20,8 @@ import { PictureInPicture2 } from 'lucide-react';
 /** Shape of the empty frame, before there is a picture to take one from. */
 const DEFAULT_RATIO = 16 / 9;
 
-const MIN_PREVIEW_WIDTH = 160;
+/** Narrowest the card gets: room for the header's title, readout and Float button. */
+const MIN_PREVIEW_WIDTH = 260;
 const MAX_PREVIEW_WIDTH = 880;
 
 /** The card's width while its picture floats: wide enough for the footer's readouts. */
@@ -228,7 +229,7 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
     <div className={'node node-output' + (floating ? ' is-floating' : '')} style={{ width: floating ? DOCKED_WIDTH : width }}>
       <div className="render-head">
         <span className="render-title">Viewer</span>
-        <span className="render-info">{info}</span>
+        <span className="render-info" title={info}>{info}</span>
         {!floating && (
           <button
             type="button"
