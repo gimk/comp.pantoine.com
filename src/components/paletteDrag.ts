@@ -22,7 +22,18 @@ export type PaletteItem =
   | { kind: 'export' }
   | { kind: 'preset'; presetId: string };
 
-export const encodePaletteItem = (item: PaletteItem): string => JSON.stringify(item);
+/**
+ * Which source module a file from the desktop belongs in, or null if none
+ * takes it. The extension check covers containers some systems hand over
+ * with no MIME type at all -- an .mkv often arrives as "".
+ */
+export const mediaKindOf = (file: File): 'image' | 'video' | null => {
+  if (file.type.startsWith('image/')) return 'image';
+  if (file.type.startsWith('video/') || /\.(mp4|webm|mov|mkv)$/i.test(file.name)) return 'video';
+  return null;
+};
+
+export const encodePaletteItem =(item: PaletteItem): string => JSON.stringify(item);
 
 /**
  * Parse a dropped payload, or null if it is not one of ours.

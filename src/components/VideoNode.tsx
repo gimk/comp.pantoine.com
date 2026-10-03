@@ -6,6 +6,8 @@ import { useGraph } from '../state/store';
 import { type ParamSpec } from '../engine/effects';
 import { Toggle } from './controlPrimitives';
 import { ParamRow } from './EffectNode';
+import { SourceMeta, formatDuration } from './sourceMeta';
+import { mediaKindOf } from './paletteDrag';
 
 const SPEED_SPEC: ParamSpec = {
   kind: 'float',
@@ -15,13 +17,6 @@ const SPEED_SPEC: ParamSpec = {
   max: 4,
   step: 0.05,
   default: 1,
-};
-
-const formatDuration = (sec: number): string => {
-  if (!Number.isFinite(sec) || sec <= 0) return '0:00';
-  const m = Math.floor(sec / 60);
-  const s = Math.floor(sec % 60);
-  return `${m}:${s.toString().padStart(2, '0')}`;
 };
 
 /**
@@ -71,7 +66,7 @@ export const VideoNode: React.FC<NodeProps<Node<VideoNodeData, 'video'>>> = ({ i
 
       <button
         type="button"
-        className="node-body image-drop nodrag"
+        className={'node-body image-drop nodrag' + (data.src ? ' has-media' : '')}
         aria-label={data.src ? `Replace video ${data.name}` : undefined}
         onClick={() => inputRef.current?.click()}
         onMouseEnter={(e) => {
@@ -89,14 +84,17 @@ export const VideoNode: React.FC<NodeProps<Node<VideoNodeData, 'video'>>> = ({ i
         }}
       >
         {data.src ? (
-          <video
-            className="image-thumb"
-            src={data.src}
-            muted
-            playsInline
-            preload="auto"
-            onError={() => setLocalError({ src: data.src, message: 'This video could not be previewed.' })}
-          />
+          <span className="image-frame">
+            <video
+              className="image-thumb"
+              src={data.src}
+              muted
+              playsInline
+              preload="auto"
+              onError={() => setLocalError({ src: data.src, message: 'This video could not be previewed.' })}
+            />
+            {data.duration > 0 && <span className="image-badge">{formatDuration(data.duration)}</span>}
+          </span>
         ) : (
           <span className="image-empty">
             <VideoIcon size={18} />
@@ -105,15 +103,7 @@ export const VideoNode: React.FC<NodeProps<Node<VideoNodeData, 'video'>>> = ({ i
         )}
       </button>
 
-      {data.src && (
-        <div className="node-meta">
-          <span className="node-meta-name">{data.name}</span>
-          <span>
-            {data.width} &times; {data.height}
-            {data.duration > 0 && ` (${formatDuration(data.duration)})`}
-          </span>
-        </div>
-      )}
+      {data.src && <SourceMeta name={data.name} width={data.width} height={data.height} />}
 
       <div className="node-body">
         <ParamRow
@@ -123,13 +113,7 @@ export const VideoNode: React.FC<NodeProps<Node<VideoNodeData, 'video'>>> = ({ i
           port={true}
           onChange={(val) => setVideoData(id, { speed: val as number, playbackRate: val as number })}
         />
-        <div style={{ paddingTop: 4, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <Toggle
-            label="Loop"
-            value={data.loop !== false}
-            onChange={(loop) => setVideoData(id, { loop })}
-          />
-        </div>
+        <Toggle label="Loop" value={data.loop !== false} onChange={(loop) => setVideoData(id, { loop })} />
       </div>
 
       <input
@@ -151,7 +135,7 @@ export const VideoNode: React.FC<NodeProps<Node<VideoNodeData, 'video'>>> = ({ i
   function accept(files: FileList | null) {
     const file = files?.[0];
     if (!file) return;
-    if (file.type.startsWith('video/') || /\.(mp4|webm|mov|mkv)$/i.test(file.name)) {
+    if (mediaKindOf(file) === 'video') {
       setLocalError(null);
       void loadVideo(id, file);
     } else {

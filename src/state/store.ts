@@ -31,13 +31,11 @@ import {
   DEFAULT_EXPORT_DATA,
   DEFAULT_PREVIEW_WIDTH,
   DEFAULT_RENDER_DATA,
-  MOD_OUTPUT,
   identityAliases,
   carriesRenderAsset,
   clampRenderData,
   isModulationEdge,
   isRenderEdge,
-  paramPort,
   samePort,
   type AppNode,
   type BackgroundNodeData,
@@ -386,8 +384,9 @@ type GraphStore = {
   addEffectNode: (effectId: string, position?: XYPosition) => void;
   addGeneratorNode: (generatorId: string, position?: XYPosition) => void;
   addModulatorNode: (modulatorId: string, position?: XYPosition) => void;
-  addImageNode: (position?: XYPosition) => void;
-  addVideoNode: (position?: XYPosition) => void;
+  /** Both return the new node's id, so a dropped file can be loaded straight into it. */
+  addImageNode: (position?: XYPosition) => string;
+  addVideoNode: (position?: XYPosition) => string;
   addOutputNode: (position?: XYPosition) => void;
   addRenderNode: (position?: XYPosition) => void;
   addExportNode: (position?: XYPosition) => void;
@@ -715,16 +714,15 @@ export const useGraph = create<GraphStore>((set, get) => ({
       data: { src: null, name: '', width: 0, height: 0 },
     };
     set({ nodes: [...get().nodes, node] });
+    return node.id;
   },
 
   addVideoNode: (position) => {
     const fallback = defaultNodePosition(get().nodes.length, 196, 140);
-    const videoPos = position ?? fallback;
-    const videoId = nextId('video');
-    const videoNode: AppNode = {
-      id: videoId,
+    const node: AppNode = {
+      id: nextId('video'),
       type: 'video',
-      position: videoPos,
+      position: position ?? fallback,
       data: {
         src: null,
         name: '',
@@ -737,36 +735,8 @@ export const useGraph = create<GraphStore>((set, get) => ({
         playbackRate: 1,
       },
     };
-
-    const mathDef = getModulator('math');
-    const mathParams = mathDef ? defaultModulatorParams(mathDef) : { op: 0, a: 0, b: 0 };
-
-    const speedNodeId = nextId('math');
-    const speedNode: AppNode = {
-      id: speedNodeId,
-      type: 'modulator',
-      position: { x: videoPos.x - 220, y: videoPos.y },
-      data: {
-        modulatorId: 'math',
-        params: { ...mathParams, op: 2, a: 1, b: 1 },
-        // Marked, so deleting the video can take it along (see orphanedHelpers).
-        helperFor: videoId,
-      },
-    };
-
-    const speedEdge: Edge = {
-      id: nextId('edge'),
-      source: speedNodeId,
-      sourceHandle: MOD_OUTPUT,
-      target: videoId,
-      targetHandle: paramPort('speed'),
-      type: 'link',
-    };
-
-    set({
-      nodes: [...get().nodes, speedNode, videoNode],
-      edges: [...get().edges, speedEdge],
-    });
+    set({ nodes: [...get().nodes, node] });
+    return node.id;
   },
 
   addOutputNode: (position) => {

@@ -12,7 +12,7 @@ import {
 import { useRenderJob, type RenderJob } from '../state/renderJobs';
 import { Pipeline, type RenderRequest } from '../engine/pipeline';
 import { createContext } from '../engine/gl';
-import { clockSeconds, isPlaying, resetCount, subscribeClock } from '../engine/clock';
+import { clockSeconds, isPlaying, requestClock, resetCount, subscribeClock } from '../engine/clock';
 import { getImage } from '../engine/imageStore';
 import { getVideo, type LoadedVideo } from '../engine/videoStore';
 import { evaluateSignal, signalKey } from '../engine/modulators';
@@ -294,6 +294,9 @@ export const useViewerPipeline = ({
   // The frame loop runs only for a chain that moves, and only while the
   // transport is playing and the canvas is on screen.
   const looping = live && !still && animated && playing;
+  // A still pins its own time, so only a moving chain sets the clock going.
+  const needsClock = animated && !still;
+  useEffect(() => (needsClock ? requestClock() : undefined), [needsClock]);
 
   // Read through a ref so the draw callback can stay stable: it is called
   // from the frame loop, the resize observer and context restore alike.

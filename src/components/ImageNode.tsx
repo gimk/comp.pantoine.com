@@ -3,6 +3,8 @@ import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
 import { ImagePlus, ImageUp } from 'lucide-react';
 import type { ImageNodeData } from '../state/graph';
 import { useGraph } from '../state/store';
+import { SourceMeta } from './sourceMeta';
+import { mediaKindOf } from './paletteDrag';
 
 /**
  * The source node. Empty until an image lands on it, by click or by drop.
@@ -15,10 +17,20 @@ export const ImageNode: React.FC<NodeProps<Node<ImageNodeData, 'image'>>> = ({ i
   const loadImage = useGraph((state) => state.loadImage);
   const inputRef = useRef<HTMLInputElement>(null);
   const [isOver, setIsOver] = useState(false);
+  /* A dropped file that isn't an image never reaches the store; keyed to the
+     src it was raised against, so a new picture clears it. */
+  const [localError, setLocalError] = useState<{ src: string | null; message: string } | null>(null);
+  const shownError = data.error ?? (localError && localError.src === data.src ? localError.message : undefined);
 
   const accept = (files: FileList | null) => {
     const file = files?.[0];
-    if (file && file.type.startsWith('image/')) void loadImage(id, file);
+    if (!file) return;
+    if (mediaKindOf(file) === 'image') {
+      setLocalError(null);
+      void loadImage(id, file);
+    } else {
+      setLocalError({ src: data.src, message: `${file.name} is not an image file.` });
+    }
   };
 
   return (
@@ -40,15 +52,22 @@ export const ImageNode: React.FC<NodeProps<Node<ImageNodeData, 'image'>>> = ({ i
         <span>Image</span>
       </div>
 
-      {data.error && (
-        <div className="node-body node-warning" title={data.error}>
-          {data.error}
+      {shownError && (
+        <div className="node-body node-warning" title={shownError} role="alert">
+          {shownError}
         </div>
       )}
 
-      <button className="node-body image-drop nodrag" onClick={() => inputRef.current?.click()}>
+      <button
+        type="button"
+        className={'node-body image-drop nodrag' + (data.src ? ' has-media' : '')}
+        aria-label={data.src ? `Replace image ${data.name}` : undefined}
+        onClick={() => inputRef.current?.click()}
+      >
         {data.src ? (
-          <img className="image-thumb" src={data.src} alt={data.name} />
+          <span className="image-frame">
+            <img className="image-thumb" src={data.src} alt={data.name} />
+          </span>
         ) : (
           <span className="image-empty">
             <ImageUp size={18} />
@@ -57,14 +76,7 @@ export const ImageNode: React.FC<NodeProps<Node<ImageNodeData, 'image'>>> = ({ i
         )}
       </button>
 
-      {data.src && (
-        <div className="node-meta">
-          <span className="node-meta-name">{data.name}</span>
-          <span>
-            {data.width} &times; {data.height}
-          </span>
-        </div>
-      )}
+      {data.src && <SourceMeta name={data.name} width={data.width} height={data.height} />}
 
       <input
         ref={inputRef}

@@ -945,19 +945,34 @@ textarea,
   color: var(--text-muted);
 }
 
+/* A source's file: the name on its own line, the numbers under it. */
 .node-meta {
   display: flex;
-  justify-content: space-between;
-  gap: 8px;
+  flex-direction: column;
+  gap: 2px;
   padding: 0 12px 11px;
   color: var(--text-dim);
   font-size: 11px;
+  line-height: 1.4;
 }
 
 .node-meta-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.node-meta-detail {
+  display: flex;
+  flex-wrap: wrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.node-meta-detail > span + span::before {
+  content: '·';
+  margin: 0 5px;
 }
 
 /* Selection and drop feedback both read as a firmer ring, not a color. */
@@ -1224,12 +1239,43 @@ textarea,
   line-height: 1.5;
 }
 
+.image-drop.has-media {
+  min-height: 0;
+}
+
+/* Sized to the picture, so the badge and the hover hint sit on its corners
+   rather than the card's. The checks show through wherever it's transparent. */
+.image-frame {
+  position: relative;
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 auto;
+  border-radius: var(--radius-sm);
+  background: repeating-conic-gradient(rgba(23, 23, 26, 0.08) 0 25%, transparent 0 50%) 0 0 / 12px 12px;
+  box-shadow: 0 0 0 1px var(--hairline);
+}
+
 .image-thumb {
   display: block;
   max-width: 100%;
   max-height: 120px;
   margin: 0 auto;
   border-radius: var(--radius-sm);
+}
+
+.image-badge {
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(23, 23, 26, 0.62);
+  color: #fff;
+  font-size: 10px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
 }
 
 /* Output node */

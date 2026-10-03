@@ -18,6 +18,7 @@ import { LinkEdge } from './components/LinkEdge';
 import {
   PALETTE_DRAG_MIME,
   decodePaletteItem,
+  mediaKindOf,
   paletteDropOffset,
 } from './components/paletteDrag';
 import { addPaletteItem } from './components/paletteCatalog';
@@ -222,15 +223,16 @@ const Editor: React.FC = () => {
   }, [flowStore]);
 
   /*
-   * An item dragged in from the palette.
+   * An item dragged in from the palette, or files from the desktop.
    *
    * `dragover` may only inspect the payload's types, not read it -- the
    * browser withholds the data until the drop -- so the check that this is
-   * one of ours and not a file or a link from another tab has to be made
+   * one of ours or a file, and not a link from another tab, has to be made
    * against `types` here, and against the value itself on drop.
    */
   const handleDragOver = useCallback((event: React.DragEvent) => {
-    if (!event.dataTransfer.types.includes(PALETTE_DRAG_MIME)) return;
+    const { types } = event.dataTransfer;
+    if (!types.includes(PALETTE_DRAG_MIME) && !types.includes('Files')) return;
     // Omitting this leaves the default handler in place, which refuses
     // every drop; the canvas would simply never accept one.
     event.preventDefault();
@@ -239,15 +241,41 @@ const Editor: React.FC = () => {
 
   const handleDrop = useCallback(
     (event: React.DragEvent) => {
-      const item = decodePaletteItem(event.dataTransfer.getData(PALETTE_DRAG_MIME));
-      if (!item) return;
-      event.preventDefault();
+      // An Image or Video card under the pointer has already taken the file.
+      if (event.defaultPrevented) return;
 
       // The pointer is in screen pixels; the graph has its own pan and zoom.
       const point = screenToFlowPosition({ x: event.clientX, y: event.clientY });
-      const offset = paletteDropOffset(item);
 
-      addPaletteItem(item, { x: point.x - offset.x, y: point.y - offset.y });
+      const item = decodePaletteItem(event.dataTransfer.getData(PALETTE_DRAG_MIME));
+      if (item) {
+        event.preventDefault();
+        const offset = paletteDropOffset(item);
+        addPaletteItem(item, { x: point.x - offset.x, y: point.y - offset.y });
+        return;
+      }
+
+      /*
+       * Files from the desktop: each one it can read becomes the module that
+       * reads it, already loaded. Several land side by side, left to right
+       * from the pointer; anything else in the bundle is passed over.
+       */
+      const files = Array.from(event.dataTransfer.files);
+      if (files.length === 0) return;
+      // Even when nothing in it is usable, so the browser doesn't open the
+      // file in place of the app.
+      event.preventDefault();
+      const store = useGraph.getState();
+      let placed = 0;
+      for (const file of files) {
+        const kind = mediaKindOf(file);
+        if (!kind) continue;
+        const offset = paletteDropOffset({ kind });
+        const position = { x: point.x - offset.x + placed * 220, y: point.y - offset.y };
+        placed += 1;
+        if (kind === 'image') void store.loadImage(store.addImageNode(position), file);
+        else void store.loadVideo(store.addVideoNode(position), file);
+      }
     },
     [screenToFlowPosition],
   );

@@ -6,6 +6,11 @@
  * shows the value the picture is actually using at that moment. Pausing
  * it pauses everything at once; resetting it sends everything back to
  * zero together.
+ *
+ * It also holds at zero until something needs it: a viewer showing a chain
+ * that moves (an animated module, a modulation, a video). A comp of stills,
+ * or one with no viewer plugged, opens on 0.00 rather than counting from
+ * the moment the page loaded.
  */
 
 /**
@@ -24,6 +29,10 @@ let origin = performance.now();
 let pausedAt: number | null = null;
 /** Bumped by every reset, so viewers know to drop their feedback history. */
 let resets = 0;
+/** Held at zero until a viewer asks for time; see `requestClock`. */
+let held = true;
+/** How many viewers are showing something that moves. */
+let demand = 0;
 
 const listeners = new Set<() => void>();
 const notify = (): void => {
@@ -32,7 +41,7 @@ const notify = (): void => {
 
 /** Seconds since time zero, wrapped. What shaders see as `u_time`. */
 export const clockSeconds = (now: number = performance.now()): number =>
-  (((pausedAt ?? now) - origin) / 1000) % TIME_WRAP;
+  held ? 0 : (((pausedAt ?? now) - origin) / 1000) % TIME_WRAP;
 
 export const isPlaying = (): boolean => pausedAt === null;
 
@@ -61,8 +70,29 @@ export const resetClock = (): void => {
   const now = performance.now();
   origin = now;
   if (pausedAt !== null) pausedAt = now;
+  // With nothing moving on screen, back to holding at zero as at load.
+  held = demand === 0;
   resets += 1;
   notify();
+};
+
+/**
+ * Called by a viewer while it shows a chain that moves; the returned
+ * function lets go. The first request starts time from zero there and
+ * then. Letting go does not stop it: time carries on until a reset.
+ */
+export const requestClock = (): (() => void) => {
+  demand += 1;
+  if (held) {
+    const now = performance.now();
+    origin = now;
+    if (pausedAt !== null) pausedAt = now;
+    held = false;
+    notify();
+  }
+  return () => {
+    demand -= 1;
+  };
 };
 
 /** For `useSyncExternalStore`: called on play, pause and reset. */

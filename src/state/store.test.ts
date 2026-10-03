@@ -59,36 +59,40 @@ afterEach(() => {
 });
 
 describe('useGraph store video actions', () => {
-  it('addVideoNode adds a video node and a connected Math node for speed', () => {
+  it('addVideoNode adds a lone video node', () => {
     graph([]);
     useGraph.getState().addVideoNode({ x: 500, y: 300 });
 
     const { nodes, edges } = useGraph.getState();
-    const videoNode = nodes.find((n) => n.type === 'video');
-    expect(videoNode).toBeDefined();
-    expect(videoNode?.data.speed).toBe(1);
-
-    const mathNodes = nodes.filter(
-      (n): n is Node<ModulatorNodeData, 'modulator'> => n.type === 'modulator' && n.data.modulatorId === 'math',
-    );
-    expect(mathNodes).toHaveLength(1);
-
-    const speedMath = mathNodes.find((m) => m.data.params.op === 2); // Multiply
-    expect(speedMath).toBeDefined();
-    expect(speedMath?.data.params.a).toBe(1);
-    expect(speedMath?.data.params.b).toBe(1);
-    expect(speedMath?.data.helperFor).toBe(videoNode?.id);
-
-    const speedEdge = edges.find(
-      (e) => e.target === videoNode?.id && e.targetHandle === 'param:speed' && e.source === speedMath?.id,
-    );
-    expect(speedEdge).toBeDefined();
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0].type).toBe('video');
+    expect(nodes[0].type === 'video' && nodes[0].data.speed).toBe(1);
+    expect(edges).toHaveLength(0);
   });
 
+  /* Older documents still carry a Math helper wired into each video's speed. */
+  const videoWithHelper = (): { video: AppNode; helper: Node<ModulatorNodeData, 'modulator'>; edges: Edge[] } => {
+    const video: AppNode = {
+      id: 'video-h',
+      type: 'video',
+      position: at,
+      data: { src: null, name: '', width: 0, height: 0, duration: 0, speed: 1, loop: true, muted: true, playbackRate: 1 },
+    };
+    const helper: Node<ModulatorNodeData, 'modulator'> = {
+      id: 'math-h',
+      type: 'modulator',
+      position: at,
+      data: { modulatorId: 'math', params: { op: 2, a: 1, b: 1 }, helperFor: video.id },
+    };
+    const edges: Edge[] = [
+      { id: 'e-h', source: helper.id, sourceHandle: 'mod', target: video.id, targetHandle: 'param:speed', type: 'link' },
+    ];
+    graph([helper, video], edges);
+    return { video, helper, edges };
+  };
+
   it('deleting a video takes its untouched speed helper along, and pauses it', () => {
-    graph([]);
-    useGraph.getState().addVideoNode(at);
-    const video = useGraph.getState().nodes.find((n) => n.type === 'video')!;
+    const { video } = videoWithHelper();
     const element = withVideo(video.id);
     useGraph.getState().removeNodes([video.id]);
     expect(useGraph.getState().nodes).toHaveLength(0);
@@ -97,14 +101,10 @@ describe('useGraph store video actions', () => {
   });
 
   it('keeps a speed helper the user has wired to something else', () => {
-    graph([]);
-    useGraph.getState().addVideoNode(at);
-    const { nodes, edges } = useGraph.getState();
-    const video = nodes.find((n) => n.type === 'video')!;
-    const helper = nodes.find((n) => n.type === 'modulator')!;
+    const { video, helper, edges } = videoWithHelper();
     const other: AppNode = { id: 'fx-x', type: 'effect', position: at, data: { effectId: 'blend', params: {} } };
     graph(
-      [...nodes, other],
+      [helper, video, other],
       [...edges, { id: 'e-x', source: helper.id, sourceHandle: 'mod', target: 'fx-x', targetHandle: 'param:mix' }],
     );
     useGraph.getState().onNodesChange([{ type: 'remove', id: video.id }]);
