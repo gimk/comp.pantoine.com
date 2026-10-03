@@ -4,6 +4,7 @@ import { Bookmark, BookmarkPlus, Group, Import, MonitorPlay, Pencil, Plus, Trash
 import { useGraph } from '../state/store';
 import { planGroup } from '../state/groups';
 import { capturePreset, usePresets, type Preset } from '../state/presets';
+import { BUILTIN_PRESETS } from '../state/builtinPresets';
 import { PALETTE_DRAG_MIME, encodePaletteItem, paletteCenterOffset, type PaletteItem as PaletteItemPayload } from './paletteDrag';
 import { addPaletteItem, catalog, type CatalogEntry, type CatalogFolder } from './paletteCatalog';
 
@@ -131,7 +132,8 @@ const SelectionActions: React.FC = () => {
 const PresetEntry: React.FC<{
   preset: Preset;
   onSelect: (preset: Preset) => void;
-  onEdit: (preset: Preset) => void;
+  /** Absent for a built-in, which cannot be edited or deleted. */
+  onEdit?: (preset: Preset) => void;
   onDone: () => void;
 }> = ({ preset, onSelect, onEdit, onDone }) => {
   const remove = usePresets((state) => state.remove);
@@ -158,32 +160,34 @@ const PresetEntry: React.FC<{
           {shown}
         </span>
       )}
-      <span className="preset-actions">
-        <button
-          type="button"
-          className="preset-action"
-          title="Edit name and parameters"
-          onClick={(event) => {
-            event.stopPropagation();
-            onEdit(preset);
-          }}
-        >
-          <Pencil size={12} />
-        </button>
-        <button
-          type="button"
-          className={'preset-action' + (confirming ? ' is-confirming' : '')}
-          title={confirming ? 'Click again to delete' : 'Delete'}
-          onClick={(event) => {
-            event.stopPropagation();
-            if (confirming) remove(preset.id);
-            else setConfirming(true);
-          }}
-        >
-          <Trash2 size={12} />
-          {confirming && <span>Delete?</span>}
-        </button>
-      </span>
+      {onEdit && (
+        <span className="preset-actions">
+          <button
+            type="button"
+            className="preset-action"
+            title="Edit name and parameters"
+            onClick={(event) => {
+              event.stopPropagation();
+              onEdit(preset);
+            }}
+          >
+            <Pencil size={12} />
+          </button>
+          <button
+            type="button"
+            className={'preset-action' + (confirming ? ' is-confirming' : '')}
+            title={confirming ? 'Click again to delete' : 'Delete'}
+            onClick={(event) => {
+              event.stopPropagation();
+              if (confirming) remove(preset.id);
+              else setConfirming(true);
+            }}
+          >
+            <Trash2 size={12} />
+            {confirming && <span>Delete?</span>}
+          </button>
+        </span>
+      )}
     </div>
   );
 };
@@ -270,15 +274,24 @@ export const Toolbar: React.FC = () => {
 
       {openMenu === 'presets' && (
         <div className="glass toolbar-menu">
-          {presets.length === 0 ? (
-            <p className="toolbar-menu-empty">
-              No presets yet. Select a group, or modules wired together, and press Save (Ctrl+S).
-            </p>
-          ) : (
-            presets.map((preset) => (
-              <PresetEntry key={preset.id} preset={preset} onSelect={handlePreset} onEdit={handleEdit} onDone={close} />
-            ))
-          )}
+          <div className="toolbar-menu-group">
+            <span className="toolbar-menu-heading">Built-in</span>
+            {BUILTIN_PRESETS.map((preset) => (
+              <PresetEntry key={preset.id} preset={preset} onSelect={handlePreset} onDone={close} />
+            ))}
+          </div>
+          <div className="toolbar-menu-group">
+            <span className="toolbar-menu-heading">Yours</span>
+            {presets.length === 0 ? (
+              <p className="toolbar-menu-empty">
+                No presets yet. Select a group, or modules wired together, and press Save (Ctrl+S).
+              </p>
+            ) : (
+              presets.map((preset) => (
+                <PresetEntry key={preset.id} preset={preset} onSelect={handlePreset} onEdit={handleEdit} onDone={close} />
+              ))
+            )}
+          </div>
         </div>
       )}
 

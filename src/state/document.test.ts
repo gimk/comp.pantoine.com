@@ -481,3 +481,15 @@ describe('document versions and repair', () => {
     }
   });
 });
+
+describe('a module saved before a param existed', () => {
+  it('reloads a Pixelate without a shape as square pixels', () => {
+    const restored = deserializeGraph({
+      version: 1,
+      nodes: [{ id: 'px', type: 'effect', position: { x: 0, y: 0 }, effectId: 'pixelate', params: { size: 12 } }],
+      edges: [],
+    } as never);
+    const node = restored?.nodes.find((candidate) => candidate.id === 'px');
+    expect(node?.type === 'effect' && node.data.params).toMatchObject({ size: 12, shape: 0 });
+  });
+});

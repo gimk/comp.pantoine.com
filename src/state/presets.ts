@@ -10,7 +10,7 @@
  * Like the document, a preset holds no pixels: an image module in one comes
  * back empty, naming the file it wants.
  *
- * Presets are the user's own, kept in local storage beside the document but
+ * The user's presets are kept in local storage beside the document but
  * not in it, so they outlive any one graph and are not undone by Ctrl+Z.
  */
 import { create } from 'zustand';
@@ -18,6 +18,7 @@ import type { Edge } from '@xyflow/react';
 import type { AppNode, ExposedParam } from './graph';
 import { deserializeGraph, readExposed, serializeGraph, type SerializedGraph } from './document';
 import { TOO_FEW, isGroup, planGroup } from './groups';
+import { BUILTIN_PRESETS } from './builtinPresets';
 
 export type Preset = { id: string; name: string; graph: SerializedGraph; exposed: ExposedParam[] };
 
@@ -67,6 +68,10 @@ export const capturePreset = (
     ...(group ? { groupId: group.id } : {}),
   };
 };
+
+/** A preset by id: one that ships with the app, or one of the user's. */
+export const findPreset = (id: string): Preset | undefined =>
+  BUILTIN_PRESETS.find((preset) => preset.id === id) ?? usePresets.getState().presets.find((preset) => preset.id === id);
 
 /** A preset's modules and wires, read back as checked as any document is. */
 export const presetGraph = (preset: Preset): { nodes: AppNode[]; edges: Edge[] } | null =>

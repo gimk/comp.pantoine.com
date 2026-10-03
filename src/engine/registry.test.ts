@@ -42,6 +42,8 @@ describe('effect registry and module definitions', () => {
       'curves',
       'selectiveColor',
       'channelMixer',
+      'emboss',
+      'crystalMosaic',
     ];
 
     for (const id of expectedNewModules) {

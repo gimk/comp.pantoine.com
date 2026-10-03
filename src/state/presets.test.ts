@@ -1,8 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { Edge } from '@xyflow/react';
 import { MOD_OUTPUT, paramPort, type AppNode } from './graph';
-import { isGroup, realWire } from './groups';
-import { capturePreset, presetGraph, usePresets } from './presets';
+import { isGroup, planGroup, realWire } from './groups';
+import { capturePreset, findPreset, presetGraph, usePresets } from './presets';
+import { BUILTIN_PRESETS } from './builtinPresets';
+import { getEffect } from '../engine/registry';
+import { paramsOf } from '../engine/effects';
 import { deserializeGraph, serializeGraph } from './document';
 import { useGraph } from './store';
 
@@ -278,5 +281,29 @@ describe('renamed exposed entries', () => {
 
     state().setGroupExposed(group.id, [{ node: 'blend', key: 'layer', input: true }]);
     expect(portFor('layer')?.label).toBe('Blend · Layer');
+  });
+});
+
+describe('built-in presets', () => {
+  it.each(BUILTIN_PRESETS.map((preset) => [preset.name, preset] as const))('%s reads back as one flow that groups', (_, preset) => {
+    const graph = presetGraph(preset);
+    expect(graph).not.toBeNull();
+    const result = planGroup(graph!.nodes, graph!.edges, graph!.nodes.map((node) => node.id));
+    expect('reason' in result).toBe(false);
+  });
+
+  it.each(BUILTIN_PRESETS.map((preset) => [preset.name, preset] as const))('%s only exposes params its modules have', (_, preset) => {
+    const graph = presetGraph(preset)!;
+    for (const param of preset.exposed) {
+      const node = graph.nodes.find((candidate) => candidate.id === param.node);
+      expect(node?.type).toBe('effect');
+      const def = node?.type === 'effect' ? getEffect(node.data.effectId) : undefined;
+      expect(def && paramsOf(def).some((spec) => spec.key === param.key)).toBe(true);
+    }
+  });
+
+  it('are found by id beside the user’s own', () => {
+    expect(findPreset('builtin:toon')?.name).toBe('Toon');
+    expect(findPreset('no-such-preset')).toBeUndefined();
   });
 });

@@ -20,6 +20,8 @@ import { echo } from './modules/echo';
 import { flames } from './modules/flames';
 import { fmScanlines } from './modules/fmScanlines';
 import { edgeDetect } from './modules/edgeDetect';
+import { emboss } from './modules/emboss';
+import { crystalMosaic } from './modules/crystalMosaic';
 import { exposure } from './modules/exposure';
 import { gradientMap } from './modules/gradientMap';
 import { grain } from './modules/grain';
@@ -90,7 +92,9 @@ export const registry: EffectDef[] = [
   // Stylize
   dither,
   pixelate,
+  crystalMosaic,
   edgeDetect,
+  emboss,
   halftone,
   gradientMap,
   iridescentMetal,

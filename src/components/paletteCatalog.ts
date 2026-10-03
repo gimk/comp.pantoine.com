@@ -3,7 +3,7 @@ import { registry } from '../engine/registry';
 import { modulatorRegistry, type ModulatorDef } from '../engine/modulators';
 import { CATEGORY_LABELS, CATEGORY_ORDER, type Category, type EffectDef } from '../engine/effects';
 import { useGraph } from '../state/store';
-import { presetGraph, usePresets } from '../state/presets';
+import { findPreset, presetGraph } from '../state/presets';
 import { mediaKindOf, paletteDropOffset, type PaletteItem } from './paletteDrag';
 
 export type CatalogEntry = { key: string; label: string; payload: PaletteItem; tag?: string };
@@ -140,7 +140,7 @@ export const addPaletteItem = (item: PaletteItem, position?: XYPosition): void =
   else if (item.kind === 'export') store.addExportNode(position);
   else if (item.kind === 'background') store.addBackgroundNode(position);
   else if (item.kind === 'preset') {
-    const preset = usePresets.getState().presets.find((candidate) => candidate.id === item.presetId);
+    const preset = findPreset(item.presetId);
     const graph = preset && presetGraph(preset);
     if (graph) store.insertPreset(graph, { name: preset.name, exposed: preset.exposed }, position);
   }
