@@ -20,9 +20,11 @@ import {
   MOD_OUTPUT,
   hasTargetPort,
   isParamPort,
+  paramPort,
   portTakesField,
   samePort,
   type AppNode,
+  type ExposedParam,
   type GroupNodeData,
   type GroupPort,
 } from './graph';
@@ -94,7 +96,8 @@ export const moduleLabel = (node: AppNode): string => {
   return node.type;
 };
 
-const specsOf = (node: AppNode): ParamSpec[] => {
+/** The params a module has, as its card shows them; none for a picture. */
+export const paramSpecsOf = (node: AppNode): ParamSpec[] => {
   if (node.type === 'modulator') {
     const def = getModulator(node.data.modulatorId);
     return def ? modulatorParamsOf(def) : [];
@@ -104,6 +107,24 @@ const specsOf = (node: AppNode): ParamSpec[] => {
 };
 
 /**
+ * A module's named picture inputs -- a Blend's Layer, a mask -- beyond the
+ * main one, which is where a flow begins and always has a port.
+ */
+export const pictureInputsOf = (node: AppNode): { key: string; label: string }[] => {
+  const def = defOf(node);
+  return def ? inputsOf(def).map((input) => ({ key: input.key, label: input.label })) : [];
+};
+
+/** The member handle an exposed param or input is reached through. */
+export const exposedHandle = (param: ExposedParam): string => (param.input ? param.key : paramPort(param.key));
+
+/** Whether a module still has what an exposed entry names. */
+export const canExpose = (node: AppNode, param: ExposedParam): boolean =>
+  param.input
+    ? pictureInputsOf(node).some((input) => input.key === param.key)
+    : paramSpecsOf(node).some((spec) => spec.key === param.key);
+
+/**
  * A member port as the group's card shows it: the module's name, and the
  * port's after it unless it is the main picture -- "Blur", "Blur · Radius".
  */
@@ -111,7 +132,7 @@ const describeInput = (node: AppNode, handle: string | null): GroupPort => {
   const name = moduleLabel(node);
   if (isParamPort(handle)) {
     const key = handle.slice('param:'.length);
-    const spec = specsOf(node).find((candidate) => candidate.key === key);
+    const spec = paramSpecsOf(node).find((candidate) => candidate.key === key);
     return {
       node: node.id,
       handle,
@@ -159,6 +180,10 @@ const isConnected = (ids: Set<string>, edges: Edge[]): boolean => {
   return seen.size === ids.size;
 };
 
+/** Why a selection cannot be grouped. */
+export const TOO_FEW = 'Select at least two modules to group';
+export const NOT_ONE_FLOW = 'Only modules wired together in one flow can be grouped';
+
 export type GroupPlan = {
   /** Where the card goes: where the members' top-left corner was. */
   position: XYPosition;
@@ -192,9 +217,9 @@ export const planGroup = (
     else if (node && canJoinGroup(node)) picked.add(id);
   }
   const members = nodes.filter((node) => picked.has(node.id) && GROUPABLE.has(node.type));
-  if (members.length < 2) return { reason: 'Select at least two modules to group' };
+  if (members.length < 2) return { reason: TOO_FEW };
   const memberIds = new Set(members.map((node) => node.id));
-  if (!isConnected(memberIds, edges)) return { reason: 'Only modules wired together in one flow can be grouped' };
+  if (!isConnected(memberIds, edges)) return { reason: NOT_ONE_FLOW };
 
   // Top to bottom, then left to right: the order a reader meets them in.
   const order = [...members].sort((a, b) => a.position.y - b.position.y || a.position.x - b.position.x);
@@ -234,6 +259,50 @@ export const planGroup = (
       data: { name: 'Group', members: order.map((node) => node.id), inputs, outputs },
     },
   };
+};
+
+/**
+ * A group's inputs once `exposed` is what its card shows.
+ *
+ * An exposed param or input takes a wire on the card, as it does on its
+ * module, so it needs an input port -- unless a wire from inside the group
+ * already drives it, which leaves nothing to plug in. A port no longer
+ * exposed goes again, unless a wire from outside still uses it; a main
+ * picture input always stays.
+ */
+export const exposePorts = (group: GroupNode, nodes: AppNode[], edges: Edge[], exposed: ExposedParam[]): GroupPort[] => {
+  const members = new Set(group.data.members);
+  const wiredFrom = (port: { node: string; handle: string | null }) =>
+    edges.filter((edge) => edge.target === port.node && samePort(edge.targetHandle, port.handle));
+  const entryFor = (port: { node: string; handle: string | null }) =>
+    exposed.find((param) => param.node === port.node && port.handle === exposedHandle(param));
+  const isExposed = (port: GroupPort) => entryFor(port) !== undefined;
+  const labelOf = (port: { node: string; handle: string | null }) => entryFor(port)?.label?.trim() || undefined;
+
+  // A main input is where the flow begins and always keeps its port.
+  const inputs = group.data.inputs
+    .filter(
+      (port) =>
+        port.handle === null ||
+        isExposed(port) ||
+        wiredFrom(port).some((edge) => !members.has(edge.source)),
+    )
+    // Each port named afresh: by the name the user gave it, or else the
+    // module's own, so a name given and then cleared goes back.
+    .map((port) => {
+      const node = nodes.find((candidate) => candidate.id === port.node);
+      return node ? { ...port, label: labelOf(port) ?? describeInput(node, port.handle).label } : port;
+    });
+  for (const param of exposed) {
+    const node = nodes.find((candidate) => candidate.id === param.node);
+    const handle = exposedHandle(param);
+    if (!node || !members.has(node.id) || !hasTargetPort(node, handle)) continue;
+    if (inputs.some((port) => port.node === node.id && port.handle === handle)) continue;
+    if (wiredFrom({ node: node.id, handle }).some((edge) => members.has(edge.source))) continue;
+    const port = describeInput(node, handle);
+    inputs.push({ ...port, label: labelOf(port) ?? port.label });
+  }
+  return inputs;
 };
 
 /** The real wire behind a drawn one, carried on the drawn one for its colour. */

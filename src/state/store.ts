@@ -42,6 +42,7 @@ import {
   type AppNode,
   type BackgroundNodeData,
   type ExportNodeData,
+  type ExposedParam,
   type RenderNodeData,
   type VideoNodeData,
 } from './graph';
@@ -49,7 +50,7 @@ import { highestIdSuffix, loadGraph, saveGraph } from './document';
 import { snapDrag, type Box, type SnapGuide } from './snapping';
 import { isValidConnection, wouldCreateCycle } from './connections';
 import { useRenderJobs } from './renderJobs';
-import { isGroup, planGroup, realWire, ungroupOffset, withMembers } from './groups';
+import { exposePorts, isGroup, planGroup, realWire, ungroupOffset, withMembers } from './groups';
 
 /**
  * Whatever was left in local storage, restored before anything else runs.
@@ -98,13 +99,13 @@ const rewire = (edge: Edge, source: string, target: string): Edge => ({
  * A node's data as a copy of it should carry it: deep-copied, and with any
  * reference to another node's id renamed through `rename` -- or dropped, if
  * that node is not coming along: a speed helper's mark, and a group's
- * members and the ports it shows for them.
+ * members and the ports and params it shows for them.
  */
 const copyData = (node: AppNode, rename: (id: string) => string | undefined): AppNode['data'] => {
   const data = structuredClone(node.data);
   if (node.type === 'moduleGroup') {
     const group = data as typeof node.data;
-    const renamePorts = (ports: typeof group.inputs) =>
+    const renamePorts = <P extends { node: string }>(ports: P[]): P[] =>
       ports.flatMap((port) => {
         const id = rename(port.node);
         return id ? [{ ...port, node: id }] : [];
@@ -112,6 +113,7 @@ const copyData = (node: AppNode, rename: (id: string) => string | undefined): Ap
     group.members = group.members.flatMap((member) => rename(member) ?? []);
     group.inputs = renamePorts(group.inputs);
     group.outputs = renamePorts(group.outputs);
+    if (group.exposed) group.exposed = renamePorts(group.exposed);
   }
   if (node.type === 'modulator' && node.data.helperFor) {
     const helperFor = rename(node.data.helperFor);
@@ -417,6 +419,17 @@ type GraphStore = {
   groupSelection: () => string | null;
   /** Open a group back out into its modules, where the card has been moved to. */
   ungroup: (groupId: string) => void;
+  /** The member params a group shows on its card. */
+  setGroupExposed: (groupId: string, exposed: ExposedParam[]) => void;
+  /**
+   * Stamp out a preset's modules, grouped under its name with its params
+   * exposed, top-left at `position`.
+   */
+  insertPreset: (
+    preset: { nodes: AppNode[]; edges: Edge[] },
+    settings: { name: string; exposed: ExposedParam[] },
+    position?: XYPosition,
+  ) => void;
   renameGroup: (groupId: string, name: string) => void;
 };
 
@@ -1205,6 +1218,48 @@ export const useGraph = create<GraphStore>((set, get) => ({
         return node.selected ? [{ ...node, selected: false }] : [node];
       }),
     });
+  },
+
+  /*
+   * A preset is a macro: fresh copies of its modules, wired among themselves
+   * and to nothing else, then grouped as though the user had selected them
+   * and pressed Ctrl+G. Its pictures come from a key no node holds, so an
+   * image module in it arrives empty even when its old id matches a live one.
+   */
+  insertPreset: (preset, settings, position) => {
+    if (preset.nodes.length === 0) return;
+    const { nodes, edges } = get();
+    const left = Math.min(...preset.nodes.map((node) => node.position.x));
+    const top = Math.min(...preset.nodes.map((node) => node.position.y));
+    const at = position ?? defaultNodePosition(nodes.length, 220);
+    const copy = copySubgraph(preset.nodes, preset.edges, new Set(), { x: at.x - left, y: at.y - top }, (id) => 'preset:' + id);
+    set({
+      nodes: [...nodes.map((node) => (node.selected ? { ...node, selected: false } : node)), ...copy.nodes],
+      edges: [...edges.map((edge) => (edge.selected ? { ...edge, selected: false } : edge)), ...copy.edges],
+    });
+    if (get().groupSelection() !== null) return;
+    const group = get().nodes.find((node) => node.selected && isGroup(node));
+    if (!group) return;
+    get().renameGroup(group.id, settings.name);
+    // The copies come back in the preset's order, so the nth is the nth's.
+    const renamed = new Map(preset.nodes.map((node, index) => [node.id, copy.nodes[index].id]));
+    get().setGroupExposed(
+      group.id,
+      settings.exposed.flatMap((param) => {
+        const node = renamed.get(param.node);
+        return node ? [{ ...param, node }] : [];
+      }),
+    );
+  },
+
+  // An exposed param takes a wire on the card, so it brings a port with it.
+  setGroupExposed: (groupId, exposed) => {
+    const { nodes: all, edges } = get();
+    const nodes = updateNode(all, groupId, (node) => {
+      if (!isGroup(node)) return node;
+      return { ...node, data: { ...node.data, exposed, inputs: exposePorts(node, all, edges, exposed) } };
+    });
+    if (nodes !== get().nodes) set({ nodes });
   },
 
   renameGroup: (groupId, name) => {

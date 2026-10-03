@@ -42,6 +42,7 @@ import { SnapGuides } from './components/SnapGuides';
 import { Toolbar } from './components/Toolbar';
 import { Transport } from './components/Transport';
 import { AboutModal } from './components/AboutModal';
+import { PresetModal } from './components/PresetModal';
 import { useCanvasShortcuts } from './components/useCanvasShortcuts';
 import { canSpliceInto, dragMode, setDragModifiers, setVisibleAreaSource, useGraph } from './state/store';
 import { commitNow } from './state/history';
@@ -390,6 +391,7 @@ export const App: React.FC = () => (
       <Toolbar />
       <Transport />
       <AboutModal />
+      <PresetModal />
       <AutosaveNotice />
     </ReactFlowProvider>
   </div>

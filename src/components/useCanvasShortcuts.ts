@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useReactFlow } from '@xyflow/react';
 import { redo, undo } from '../state/history';
 import { isDragging, setDragModifiers, setSnapping, useGraph } from '../state/store';
+import { usePresets } from '../state/presets';
 import { resetClock, togglePlaying } from '../engine/clock';
 
 /** How far a Ctrl+D copy lands from its original, in graph units. */
@@ -52,6 +53,7 @@ const dialogIsOpen = (): boolean => document.querySelector('[aria-modal="true"]'
  *   Ctrl/Cmd + D         duplicate the selection
  *   Ctrl/Cmd + C / X / V copy, cut, paste (paste lands under the pointer)
  *   Ctrl/Cmd + G         group the selection; with Shift, ungroup it
+ *   Ctrl/Cmd + S         save the selection (or a group) as a preset
  *   Ctrl/Cmd + A         select everything
  *   Escape               clear the selection
  *   F                    frame the selection, or the whole graph
@@ -142,6 +144,11 @@ export const useCanvasShortcuts = (
         } else {
           store.groupSelection();
         }
+      } else if (mod && !event.altKey && !event.shiftKey && key === 's') {
+        // Otherwise the browser offers to save the page, which is never
+        // what Ctrl+S on the canvas means here, saveable selection or not.
+        event.preventDefault();
+        usePresets.getState().openSave(store.nodes, store.edges);
       } else if (mod && key === 'a') {
         event.preventDefault();
         store.setAllSelected(true);

@@ -1,17 +1,24 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useReactFlow } from '@xyflow/react';
-import { Group, Import, MonitorPlay, Plus } from 'lucide-react';
+import { Bookmark, BookmarkPlus, Group, Import, MonitorPlay, Pencil, Plus, Trash2 } from 'lucide-react';
 import { useGraph } from '../state/store';
 import { planGroup } from '../state/groups';
-import { PALETTE_DRAG_MIME, encodePaletteItem, paletteCenterOffset } from './paletteDrag';
+import { capturePreset, usePresets, type Preset } from '../state/presets';
+import { PALETTE_DRAG_MIME, encodePaletteItem, paletteCenterOffset, type PaletteItem as PaletteItemPayload } from './paletteDrag';
 import { addPaletteItem, catalog, type CatalogEntry, type CatalogFolder } from './paletteCatalog';
 
-type MenuId = CatalogFolder['id'];
+type MenuId = CatalogFolder['id'] | 'presets';
 
 const ICONS: Record<MenuId, React.ReactNode> = {
   input: <Import size={14} />,
   module: <Plus size={14} />,
   output: <MonitorPlay size={14} />,
+  presets: <Bookmark size={14} />,
+};
+
+const startDrag = (event: React.DragEvent, payload: PaletteItemPayload) => {
+  event.dataTransfer.setData(PALETTE_DRAG_MIME, encodePaletteItem(payload));
+  event.dataTransfer.effectAllowed = 'copy';
 };
 
 /**
@@ -29,10 +36,7 @@ const PaletteItem: React.FC<{
     type="button"
     className="toolbar-menu-item"
     draggable
-    onDragStart={(event) => {
-      event.dataTransfer.setData(PALETTE_DRAG_MIME, encodePaletteItem(entry.payload));
-      event.dataTransfer.effectAllowed = 'copy';
-    }}
+    onDragStart={(event) => startDrag(event, entry.payload)}
     // Left open during the drag: removing the element being dragged
     // mid-gesture cancels it in some browsers.
     onDragEnd={onDone}
@@ -60,7 +64,6 @@ const GroupButton: React.FC = () => {
   if (reason === null) return null;
   return (
     <>
-      <span className="toolbar-sep" />
       <button
         type="button"
         className="toolbar-button"
@@ -72,6 +75,116 @@ const GroupButton: React.FC = () => {
         <span>Group</span>
       </button>
     </>
+  );
+};
+
+/**
+ * Save the selection as a preset, beside Group and shown on the same
+ * terms -- plus for a single group, which is a preset's natural source.
+ */
+const SavePresetButton: React.FC = () => {
+  const reason = useGraph((state) => {
+    const selected = state.nodes.filter((node) => node.selected);
+    if (selected.length === 0 || (selected.length === 1 && selected[0].type !== 'moduleGroup')) return null;
+    const result = capturePreset(state.nodes, state.edges, selected.map((node) => node.id));
+    return 'reason' in result ? result.reason : '';
+  });
+  if (reason === null) return null;
+  return (
+    <button
+      type="button"
+      className="toolbar-button"
+      disabled={reason !== ''}
+      title={reason || 'Save the selection as a preset (Ctrl+S)'}
+      onClick={() => {
+        const { nodes, edges } = useGraph.getState();
+        usePresets.getState().openSave(nodes, edges);
+      }}
+    >
+      <BookmarkPlus size={14} />
+      <span>Save</span>
+    </button>
+  );
+};
+
+/** What can be done with the selection, set off from the menus by a rule. */
+const SelectionActions: React.FC = () => {
+  const shown = useGraph((state) => {
+    const selected = state.nodes.filter((node) => node.selected);
+    return selected.length > 1 || (selected.length === 1 && selected[0].type === 'moduleGroup');
+  });
+  if (!shown) return null;
+  return (
+    <>
+      <span className="toolbar-sep" />
+      <GroupButton />
+      <SavePresetButton />
+    </>
+  );
+};
+
+/**
+ * A saved preset in the Presets menu. Dragged or clicked like any other
+ * entry, and it lands as a group. Edit opens the preset dialog on it, and
+ * the bin asks once more before a preset is gone for good.
+ */
+const PresetEntry: React.FC<{
+  preset: Preset;
+  onSelect: (preset: Preset) => void;
+  onEdit: (preset: Preset) => void;
+  onDone: () => void;
+}> = ({ preset, onSelect, onEdit, onDone }) => {
+  const remove = usePresets((state) => state.remove);
+  const [confirming, setConfirming] = useState(false);
+  const shown = preset.exposed.length;
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      className="toolbar-menu-item preset-entry"
+      draggable
+      onDragStart={(event) => startDrag(event, { kind: 'preset', presetId: preset.id })}
+      onDragEnd={onDone}
+      onClick={() => onSelect(preset)}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') onSelect(preset);
+      }}
+      onPointerLeave={() => setConfirming(false)}
+    >
+      <span className="preset-name">{preset.name}</span>
+      {shown > 0 && (
+        <span className="tag" title={`${shown} parameter${shown === 1 ? '' : 's'} on the card`}>
+          {shown}
+        </span>
+      )}
+      <span className="preset-actions">
+        <button
+          type="button"
+          className="preset-action"
+          title="Edit name and parameters"
+          onClick={(event) => {
+            event.stopPropagation();
+            onEdit(preset);
+          }}
+        >
+          <Pencil size={12} />
+        </button>
+        <button
+          type="button"
+          className={'preset-action' + (confirming ? ' is-confirming' : '')}
+          title={confirming ? 'Click again to delete' : 'Delete'}
+          onClick={(event) => {
+            event.stopPropagation();
+            if (confirming) remove(preset.id);
+            else setConfirming(true);
+          }}
+        >
+          <Trash2 size={12} />
+          {confirming && <span>Delete?</span>}
+        </button>
+      </span>
+    </div>
   );
 };
 
@@ -97,21 +210,29 @@ export const Toolbar: React.FC = () => {
 
   const { screenToFlowPosition } = useReactFlow();
 
+  const presets = usePresets((state) => state.presets);
+
   const close = () => setOpenMenu(null);
   const toggle = (menu: MenuId) => setOpenMenu((open) => (open === menu ? null : menu));
   const folder = catalog.find((f) => f.id === openMenu);
 
-  const handleSelect = (entry: CatalogEntry) => {
+  const place = (payload: PaletteItemPayload) => {
     const center = screenToFlowPosition({
       x: window.innerWidth / 2,
       y: window.innerHeight / 2,
     });
-    const offset = paletteCenterOffset(entry.payload);
-    addPaletteItem(entry.payload, {
+    const offset = paletteCenterOffset(payload);
+    addPaletteItem(payload, {
       x: Math.round(center.x - offset.x),
       y: Math.round(center.y - offset.y),
     });
     close();
+  };
+  const handleSelect = (entry: CatalogEntry) => place(entry.payload);
+  const handlePreset = (preset: Preset) => place({ kind: 'preset', presetId: preset.id });
+  const handleEdit = (preset: Preset) => {
+    close();
+    usePresets.getState().openEdit(preset.id);
   };
 
   return (
@@ -131,7 +252,7 @@ export const Toolbar: React.FC = () => {
       <div className="glass toolbar-pill">
         <span className="brand">COMP</span>
         <span className="toolbar-sep" />
-        {catalog.map((f) => (
+        {[...catalog, { id: 'presets' as const, label: 'Presets' }].map((f) => (
           <button
             key={f.id}
             type="button"
@@ -144,8 +265,22 @@ export const Toolbar: React.FC = () => {
             <span>{f.label}</span>
           </button>
         ))}
-        <GroupButton />
+        <SelectionActions />
       </div>
+
+      {openMenu === 'presets' && (
+        <div className="glass toolbar-menu">
+          {presets.length === 0 ? (
+            <p className="toolbar-menu-empty">
+              No presets yet. Select a group, or modules wired together, and press Save (Ctrl+S).
+            </p>
+          ) : (
+            presets.map((preset) => (
+              <PresetEntry key={preset.id} preset={preset} onSelect={handlePreset} onEdit={handleEdit} onDone={close} />
+            ))
+          )}
+        </div>
+      )}
 
       {folder && (
         <div className="glass toolbar-menu">

@@ -191,7 +191,21 @@ export type GroupNodeData = {
   members: string[];
   inputs: GroupPort[];
   outputs: GroupPort[];
+  /**
+   * Member params shown as controls on the card, in this order. They edit
+   * the member itself: the card is a second place to reach the same value.
+   */
+  exposed?: ExposedParam[];
 };
+
+/**
+ * One member param a group shows on its card -- or, with `input`, one of a
+ * member's picture inputs (a Blend's Layer), which the card shows as a port
+ * with no control, so it can be wired while nothing reaches it yet.
+ * `label` is what the card calls it in place of the module's own name for
+ * it -- "Glow" for a Bloom's Intensity.
+ */
+export type ExposedParam = { node: string; key: string; input?: true; label?: string };
 
 export type AppNode =
   | Node<GroupNodeData, 'moduleGroup'>

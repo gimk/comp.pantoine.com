@@ -348,8 +348,8 @@ describe('document versions and repair', () => {
     expect(loaded).not.toBeNull();
     expect(loaded!.nodes.map((node) => node.type)).toEqual(['generator', 'render', 'video']);
     expect(loaded!.edges).toHaveLength(1);
-    expect(DOCUMENT_VERSION).toBe(4);
-    expect(serializeGraph(loaded!.nodes, loaded!.edges).version).toBe(4);
+    expect(DOCUMENT_VERSION).toBe(5);
+    expect(serializeGraph(loaded!.nodes, loaded!.edges).version).toBe(5);
     expect(deserializeGraph({ version: 1, nodes: [], edges: [] })).not.toBeNull();
   });
 

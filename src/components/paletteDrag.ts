@@ -19,7 +19,8 @@ export type PaletteItem =
   | { kind: 'output' }
   | { kind: 'background' }
   | { kind: 'render' }
-  | { kind: 'export' };
+  | { kind: 'export' }
+  | { kind: 'preset'; presetId: string };
 
 export const encodePaletteItem = (item: PaletteItem): string => JSON.stringify(item);
 
@@ -38,6 +39,7 @@ export const decodePaletteItem = (raw: string): PaletteItem | null => {
     if (item.kind === 'effect') return typeof item.effectId === 'string' ? item : null;
     if (item.kind === 'generator') return typeof item.generatorId === 'string' ? item : null;
     if (item.kind === 'modulator') return typeof item.modulatorId === 'string' ? item : null;
+    if (item.kind === 'preset') return typeof item.presetId === 'string' ? item : null;
     if (
       item.kind === 'image' ||
       item.kind === 'video' ||
@@ -63,7 +65,8 @@ export const decodePaletteItem = (raw: string): PaletteItem | null => {
  *
  * The 98 is half of `.node { width: 196px }` in the stylesheet; change one
  * and change the other. A viewer is wider than an ordinary node, so it gets
- * its own figure. Height is never mirrored: it varies with an effect's
+ * its own figure, and so is a preset, which lands as a group's card
+ * (`.node-group`, 220px). Height is never mirrored: it varies with an effect's
  * parameter count and with the picture's shape, and there is nothing to read
  * it from before the node exists.
  */
@@ -71,7 +74,7 @@ export const paletteDropOffset = (item: PaletteItem): { x: number; y: number } =
   x:
     item.kind === 'output'
       ? DEFAULT_PREVIEW_WIDTH / 2
-      : item.kind === 'render' || item.kind === 'export' || item.kind === 'background'
+      : item.kind === 'render' || item.kind === 'export' || item.kind === 'background' || item.kind === 'preset'
         ? 110
         : 98,
   y: 18,

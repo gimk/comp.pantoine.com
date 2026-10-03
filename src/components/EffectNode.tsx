@@ -176,8 +176,14 @@ export const ParamRow: React.FC<{
   derived?: number;
   /** Has no effect given the node's other params: dimmed, still editable. */
   inactive?: boolean;
+  /**
+   * The socket's handle id, when the row is drawn on another card -- a
+   * group's, which has its own ids for its ports. Null draws no socket
+   * while still showing what drives the param.
+   */
+  handleId?: string | null;
   onChange: (value: ParamValue) => void;
-}> = ({ nodeId, spec, value, port, field = false, derived, inactive = false, onChange }) => {
+}> = ({ nodeId, spec, value, port, field = false, derived, inactive = false, handleId, onChange }) => {
   const handle = paramPort(spec.key);
   // What the wire into this port carries, if there is one -- a string, so
   // the row re-renders only when that changes.
@@ -220,9 +226,9 @@ export const ParamRow: React.FC<{
     <div
       className={'param-row' + (spec.kind === 'float' && spec.field ? ' is-field' : '') + (inactive ? ' is-inactive' : '')}
     >
-      <Handle
+      {handleId !== null && <Handle
         type="target"
-        id={handle}
+        id={handleId ?? handle}
         position={Position.Left}
         className={
           'port port-param' +
@@ -235,7 +241,7 @@ export const ParamRow: React.FC<{
             ? `${spec.label} needs a single number, but a picture reaches it through a Math`
             : (field ? 'Drive with a number or a picture: ' : 'Drive with a number: ') + spec.label
         }
-      />
+      />}
       <div
         className={'param-control' + (locked ? ' is-locked' : '')}
         aria-disabled={locked || undefined}

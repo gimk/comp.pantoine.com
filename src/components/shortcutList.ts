@@ -60,6 +60,7 @@ export const SHORTCUT_COLUMNS: ShortcutSection[][] = [
       items: [
         { label: 'Group', keys: [[MOD, 'G']] },
         { label: 'Ungroup', keys: [[MOD, 'Shift', 'G']] },
+        { label: 'Save as preset', note: 'The selection, or a group', keys: [[MOD, 'S']] },
       ],
     },
   ],

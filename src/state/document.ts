@@ -26,9 +26,10 @@ import {
   samePort,
   type AppNode,
   type ExportFormat,
+  type ExposedParam,
   type GroupPort,
 } from './graph';
-import { canJoinGroup } from './groups';
+import { canExpose, canJoinGroup } from './groups';
 import { isValidConnection, wouldCreateCycle } from './connections';
 
 /**
@@ -49,11 +50,15 @@ import { isValidConnection, wouldCreateCycle } from './connections';
  * 4 added groups. A build that knows only 3 would drop them and show their
  * members loose, which loses nothing -- but it would then save that over
  * the document, so the bump keeps it out.
+ *
+ * 5 added the params a group shows on its card. A build that knows only 4
+ * would load the groups without them and save that back, quietly losing
+ * the choice; the bump keeps it out.
  */
-export const DOCUMENT_VERSION = 4;
+export const DOCUMENT_VERSION = 5;
 
 /** Older versions this build still reads, migrated on the way in. */
-const READABLE_VERSIONS = new Set([1, 2, 3, DOCUMENT_VERSION]);
+const READABLE_VERSIONS = new Set([1, 2, 3, 4, DOCUMENT_VERSION]);
 
 /*
  * The largest things a document may ask for. Anything outside is a
@@ -138,6 +143,7 @@ type SerializedNode =
       members: string[];
       inputs: GroupPort[];
       outputs: GroupPort[];
+      exposed?: ExposedParam[];
     };
 
 /** Ports are named only where they are not the main one. */
@@ -168,6 +174,7 @@ export const serializeGraph = (nodes: AppNode[], edges: Edge[]): SerializedGraph
         members: node.data.members,
         inputs: node.data.inputs,
         outputs: node.data.outputs,
+        ...(node.data.exposed?.length ? { exposed: node.data.exposed } : {}),
       };
     }
     if (node.type === 'image') {
@@ -349,6 +356,27 @@ const readPorts = (value: unknown): GroupPort[] =>
       )
     : [];
 
+/** Saved exposed params and inputs, keeping only the well-formed ones, each once. */
+export const readExposed = (value: unknown): ExposedParam[] => {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  return value.flatMap((entry: Partial<ExposedParam> | null): ExposedParam[] => {
+    if (!entry || typeof entry.node !== 'string' || typeof entry.key !== 'string') return [];
+    const id = [entry.node, entry.key, entry.input === true ? 'input' : 'param'].join('\u0000');
+    if (seen.has(id)) return [];
+    seen.add(id);
+    const label = typeof entry.label === 'string' ? entry.label.trim() : '';
+    return [
+      {
+        node: entry.node,
+        key: entry.key,
+        ...(entry.input === true ? { input: true as const } : {}),
+        ...(label ? { label } : {}),
+      },
+    ];
+  });
+};
+
 /**
  * Rebuild a graph from a parsed document, or null if it is not one.
  *
@@ -511,6 +539,7 @@ export const deserializeGraph = (raw: unknown): { nodes: AppNode[]; edges: Edge[
           members: Array.isArray(entry.members) ? entry.members.filter((id) => typeof id === 'string') : [],
           inputs: readPorts(entry.inputs),
           outputs: readPorts(entry.outputs),
+          exposed: readExposed(entry.exposed),
         },
       });
     }
@@ -538,6 +567,12 @@ export const deserializeGraph = (raw: unknown): { nodes: AppNode[]; edges: Edge[
     group.data.members = members;
     group.data.inputs = group.data.inputs.filter((port) => inside.has(port.node));
     group.data.outputs = group.data.outputs.filter((port) => inside.has(port.node));
+    // A param or input the member no longer has -- renamed, taken away -- is not shown.
+    const exposed = group.data.exposed?.filter(
+      (param) => inside.has(param.node) && canExpose(loaded.get(param.node)!, param),
+    );
+    if (exposed?.length) group.data.exposed = exposed;
+    else delete group.data.exposed;
     for (const id of members) {
       claimed.add(id);
       loaded.get(id)!.hidden = true;

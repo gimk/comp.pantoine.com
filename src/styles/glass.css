@@ -290,6 +290,69 @@ textarea,
   background: rgba(23, 23, 26, 0.07);
 }
 
+/* Presets: a name, with rename and delete that show on hover only, so a
+   column of them reads as a list of names. */
+.preset-entry {
+  padding-top: 6px;
+  padding-bottom: 6px;
+  min-height: 34px;
+  cursor: grab;
+}
+
+.preset-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preset-actions {
+  display: flex;
+  gap: 2px;
+  flex: none;
+  opacity: 0;
+  transition: opacity 140ms ease;
+}
+
+.preset-entry:hover .preset-actions,
+.preset-entry:focus-within .preset-actions {
+  opacity: 1;
+}
+
+.preset-action {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.preset-action:hover {
+  background: rgba(23, 23, 26, 0.08);
+  color: var(--text-primary);
+}
+
+.preset-action.is-confirming {
+  background: rgba(220, 38, 38, 0.1);
+  color: #b91c1c;
+}
+
+.toolbar-menu-empty {
+  max-width: 220px;
+  margin: 0;
+  padding: 8px 11px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .tag {
   padding: 2px 6px;
   border-radius: 999px;
@@ -719,26 +782,39 @@ textarea,
 /* --------------------------------------------------------------------------
    Group
 
-   Several modules behind one card. Two more sheets peek out from under it,
-   stepped down and right, so a group reads as a stack of modules at a
-   glance -- and never as one more module.
+   Several modules behind one card. Two more sheets peek out from under its
+   bottom edge, each a step narrower, so a group reads as a stack of modules
+   at a glance -- and never as one more module.
    -------------------------------------------------------------------------- */
 
 /* Drawn as shadows rather than extra elements: an outer shadow is never
    painted under the card, so it cannot show through the translucent glass.
-   Each sheet is a fill with a hairline ring one pixel outside it. */
+   Each sheet is a fill with a hairline ring one pixel outside it, shrunk by
+   a negative spread so it clears the card's sides: the ports live there,
+   and a sheet edge running past one reads as cutting it.
+
+   The order is the paint order, first on top. The card's own outline (and
+   the selection ring, when there is one) comes before the sheets, so they
+   tuck under it rather than drawing over it; the lift comes last, under all. */
 .node-group {
+  --group-rim:
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.55),
+    0 0 0 1px rgba(23, 23, 26, 0.07);
   --group-stack:
-    5px 5px 0 -1px rgba(255, 255, 255, 0.78),
-    5px 5px 0 0 rgba(23, 23, 26, 0.12),
-    10px 10px 0 -1px rgba(255, 255, 255, 0.55),
-    10px 10px 0 0 rgba(23, 23, 26, 0.08);
+    0 9px 0 -4px rgba(255, 255, 255, 0.82),
+    0 9px 0 -3px rgba(23, 23, 26, 0.1),
+    0 17px 0 -8px rgba(255, 255, 255, 0.6),
+    0 17px 0 -7px rgba(23, 23, 26, 0.07);
+  --group-lift:
+    0 1px 2px rgba(23, 23, 26, 0.04),
+    0 20px 34px rgba(23, 23, 26, 0.1);
   width: 220px;
-  box-shadow: var(--group-stack), var(--glass-shadow);
+  box-shadow: var(--group-rim), var(--group-stack), var(--group-lift);
 }
 
 .react-flow__node.selected .node-group {
-  box-shadow: var(--group-stack), var(--glass-shadow), 0 0 0 2px var(--accent-soft);
+  box-shadow: var(--group-rim), 0 0 0 2px var(--accent-soft), var(--group-stack), var(--group-lift);
 }
 
 .group-name {
@@ -821,6 +897,32 @@ textarea,
 }
 
 /* The other ports, below a hairline: inputs left, outputs right, in pairs. */
+/* Exposed params: each module's under its name, set off from the tags above
+   by the same hairline the ports use. */
+.group-params {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 12px -12px 0;
+  padding: 11px 12px 0;
+  border-top: 1px solid var(--hairline);
+}
+
+.group-params-module {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.group-params-heading {
+  margin-bottom: -4px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
 .group-ports {
   display: flex;
   flex-direction: column;
@@ -2478,6 +2580,288 @@ textarea,
   /* Room for the scrollbar, so it does not sit on the content. */
   margin-right: -14px;
   padding-right: 14px;
+}
+
+/* --------------------------------------------------------------------------
+   Preset dialog
+
+   The About dialog's sheet, narrower, with a footer of actions pinned
+   under a body that scrolls when a preset holds many modules.
+   -------------------------------------------------------------------------- */
+
+.preset-modal {
+  width: 520px;
+}
+
+.preset-modal-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.preset-field {
+  display: flex;
+  flex-direction: column;
+}
+
+.preset-field .about-section-title {
+  margin-bottom: 6px;
+}
+
+.preset-modal-name {
+  padding: 9px 12px;
+  border: 1px solid rgba(23, 23, 26, 0.12);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 14px;
+  outline: none;
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.preset-modal-name:focus {
+  border-color: rgba(23, 23, 26, 0.3);
+  box-shadow: 0 0 0 3px rgba(23, 23, 26, 0.06);
+}
+
+.preset-params .about-desc {
+  margin: -4px 0 10px;
+}
+
+/* The controls chosen so far: one row each, module dimmed before the param,
+   the way the group's card names its ports. */
+.preset-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.preset-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px 6px 12px;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.75);
+}
+
+/* The module, dimmed, then the name the card will use: a field that reads
+   as plain text until hovered or focused, with the module's own name as its
+   placeholder while nothing is typed over it. */
+.preset-control-module {
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.preset-control-name {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 6px;
+  margin: -3px 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+  transition: background 140ms ease, border-color 140ms ease;
+}
+
+.preset-control-name::placeholder {
+  color: var(--text-primary);
+  opacity: 1;
+}
+
+.preset-control-name:hover {
+  background: rgba(23, 23, 26, 0.04);
+}
+
+.preset-control-name:focus {
+  border-color: rgba(23, 23, 26, 0.2);
+  background: #fff;
+}
+
+/* Once focused, the placeholder is a hint again, not the name. */
+.preset-control-name:focus::placeholder {
+  color: var(--text-muted);
+}
+
+.preset-add-control {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px dashed rgba(23, 23, 26, 0.2);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
+}
+
+.preset-add-control:hover {
+  background: rgba(255, 255, 255, 0.8);
+  border-color: rgba(23, 23, 26, 0.3);
+  color: var(--text-primary);
+}
+
+/* The picker: a search, a short scrolling list, and its own actions. */
+.control-picker {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(23, 23, 26, 0.12);
+  border-radius: 12px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.control-picker-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--hairline);
+  color: var(--text-muted);
+}
+
+.control-picker-search input {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+}
+
+.control-picker-list {
+  max-height: 260px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px 6px;
+}
+
+.control-picker-module + .control-picker-module {
+  margin-top: 4px;
+}
+
+.control-picker-heading {
+  display: block;
+  padding: 8px 8px 4px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.control-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 8px;
+  border-radius: 7px;
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.control-picker-item .tag {
+  margin-left: auto;
+}
+
+.control-picker-item:hover {
+  background: rgba(23, 23, 26, 0.05);
+}
+
+.control-picker-item input {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.control-picker-empty {
+  margin: 0;
+  padding: 14px 8px;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  text-align: center;
+}
+
+.control-picker-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 8px;
+  border-top: 1px solid var(--hairline);
+}
+
+.preset-modal-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--hairline);
+}
+
+.preset-modal-count {
+  flex: 1;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.preset-modal-button {
+  padding: 8px 14px;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.8);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease;
+}
+
+.preset-modal-button:hover {
+  background: #fff;
+  border-color: rgba(23, 23, 26, 0.18);
+}
+
+.preset-modal-button.is-primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.preset-modal-button.is-primary:hover:not(:disabled) {
+  background: #2c2c31;
+}
+
+.preset-modal-button:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .about-intro {
