@@ -363,6 +363,21 @@ export const ungroupOffset = (group: GroupNode, members: AppNode[]): XYPosition 
   };
 };
 
+/**
+ * Where a group sits in a chain, if it can sit in one: the member whose
+ * main input is the card's first picture input, and the member whose main
+ * result is its first picture output. Both have to be effects -- a group
+ * that starts at an image or a generator makes its own picture and has
+ * nothing to take from a wire.
+ */
+export const chainEnds = (nodes: AppNode[], group: GroupNode): { entry: string; exit: string } | null => {
+  const entry = group.data.inputs.find((port) => port.kind === 'picture' && port.handle === null);
+  const exit = group.data.outputs.find((port) => port.kind === 'picture' && port.handle === null);
+  if (!entry || !exit) return null;
+  const isEffect = (id: string) => nodes.some((node) => node.id === id && node.type === 'effect');
+  return isEffect(entry.node) && isEffect(exit.node) ? { entry: entry.node, exit: exit.node } : null;
+};
+
 /** A set of node ids with every selected group's members added. */
 export const withMembers = (nodes: AppNode[], ids: Iterable<string>): Set<string> => {
   const all = new Set(ids);

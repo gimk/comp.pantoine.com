@@ -27,7 +27,7 @@ import { PendingWire, type PendingWireShape } from './components/PendingWire';
 import { useShallow } from 'zustand/react/shallow';
 import type { AppNode } from './state/graph';
 import { isValidConnection as isConnectionAllowed } from './state/connections';
-import { drawnEdges, isGroup, realWire } from './state/groups';
+import { chainEnds, drawnEdges, isGroup, realWire } from './state/groups';
 import { GroupNode } from './components/GroupNode';
 import { withNodeBoundary } from './components/NodeBoundary';
 import { ImageNode } from './components/ImageNode';
@@ -143,18 +143,20 @@ const Editor: React.FC = () => {
     const { nodes: all, edges: current, setInsertTarget } = useGraph.getState();
     // A Ctrl-drag lifts modules out of the flow, the opposite of splicing
     // one in, so it never offers to.
-    if (node.type !== 'effect' || dragMode() === 'detach') {
+    // A group goes in as the chain it holds, if it holds one.
+    const insertable = node.type === 'effect' || (isGroup(node) && chainEnds(all, node) !== null);
+    if (!insertable || dragMode() === 'detach') {
       setInsertTarget(null);
       return;
     }
-    // The node's own wires are always underneath it, and neither a
-    // modulation wire nor one carrying a baked file has a live picture on it
-    // to put an effect into -- the same test the drop itself applies.
+    // The node's own wires are always underneath it -- a group's are its
+    // members' -- and neither a modulation wire nor one carrying a baked
+    // file has a live picture on it to put an effect into: the same test
+    // the drop itself applies.
+    const mine = new Set(isGroup(node) ? [node.id, ...node.data.members] : [node.id]);
     const own = new Set(
       current
-        .filter(
-          (edge) => edge.source === node.id || edge.target === node.id || !canSpliceInto(all, current, edge),
-        )
+        .filter((edge) => mine.has(edge.source) || mine.has(edge.target) || !canSpliceInto(all, current, edge))
         .map((edge) => edge.id),
     );
     const width = node.measured?.width ?? 196;

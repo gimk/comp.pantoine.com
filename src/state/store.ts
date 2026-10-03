@@ -48,7 +48,7 @@ import { highestIdSuffix, loadGraph, saveGraph } from './document';
 import { snapDrag, type Box, type SnapGuide } from './snapping';
 import { isValidConnection, wouldCreateCycle } from './connections';
 import { useRenderJobs } from './renderJobs';
-import { exposePorts, isGroup, planGroup, realWire, ungroupOffset, withMembers } from './groups';
+import { chainEnds, exposePorts, isGroup, planGroup, realWire, ungroupOffset, withMembers } from './groups';
 
 /**
  * Whatever was left in local storage, restored before anything else runs.
@@ -476,6 +476,12 @@ export const useGraph = create<GraphStore>((set, get) => ({
    * anyway. Its extra inputs and modulation wires stay, since they belong
    * to how the node is set up rather than to where it sits in the flow.
    *
+   * A group goes in the same way, as the chain it holds: the link feeds
+   * the member behind the card's first picture input, and the member
+   * behind its first picture output feeds on. Wires among the members are
+   * left alone; only the ones crossing the card at those two ends are
+   * dropped, as a single node's would be.
+   *
    * Nor does a wire carrying a baked file: an effect works on live
    * pictures, and there is no picture on it to work on. And a splice that
    * would close a loop through the node's extra inputs is refused, like any
@@ -485,17 +491,20 @@ export const useGraph = create<GraphStore>((set, get) => ({
     const { nodes, edges } = get();
     const node = nodes.find((candidate) => candidate.id === nodeId);
     const edge = edges.find((candidate) => candidate.id === edgeId);
-    if (!node || !edge || node.type !== 'effect' || !canSpliceInto(nodes, edges, edge)) return;
-    if (edge.source === nodeId || edge.target === nodeId) return;
+    if (!node || !edge || !canSpliceInto(nodes, edges, edge)) return;
+    const ends = isGroup(node) ? chainEnds(nodes, node) : node.type === 'effect' ? { entry: nodeId, exit: nodeId } : null;
+    if (!ends) return;
+    const members = new Set(isGroup(node) ? node.data.members : [nodeId]);
+    if (members.has(edge.source) || members.has(edge.target)) return;
 
     const kept = edges.filter(
       (candidate) =>
         candidate.id !== edgeId &&
-        candidate.source !== nodeId &&
-        !(candidate.target === nodeId && samePort(candidate.targetHandle, null)),
+        !(candidate.source === ends.exit && !members.has(candidate.target)) &&
+        !(candidate.target === ends.entry && samePort(candidate.targetHandle, null) && !members.has(candidate.source)),
     );
-    const into: Edge = { ...rewire(edge, edge.source, nodeId), targetHandle: null };
-    const out: Edge = { ...rewire(edge, nodeId, edge.target), sourceHandle: null };
+    const into: Edge = { ...rewire(edge, edge.source, ends.entry), targetHandle: null };
+    const out: Edge = { ...rewire(edge, ends.exit, edge.target), sourceHandle: null };
     if (wouldCreateCycle(kept, into) || wouldCreateCycle([...kept, into], out)) return;
 
     set({

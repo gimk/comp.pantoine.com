@@ -212,3 +212,39 @@ describe('what a module offers to expose', () => {
     expect(keys).toEqual(['mix']);
   });
 });
+
+describe('dropping a group on a wire', () => {
+  /* image -> viewer, with a blur -> grain chain beside it, grouped. */
+  const loose = () => {
+    useGraph.setState({
+      nodes: [image('img', 0, 0), effect('blur', 'blur', 200, 300), effect('grain', 'grain', 400, 300), viewer('out')],
+      edges: [wire('pic', 'img', 'out'), wire('inner', 'blur', 'grain')],
+    });
+    selectOnly(['blur', 'grain']);
+    state().groupSelection();
+    return state().nodes.find(isGroup)!;
+  };
+
+  it('splices the chain it holds into the wire', () => {
+    const group = loose();
+    state().insertNodeOnEdge(group.id, 'pic');
+    const edges = state().edges;
+    expect(edges.find((edge) => edge.id === 'pic')).toBeUndefined();
+    expect(edges.some((edge) => edge.source === 'img' && edge.target === 'blur' && !edge.targetHandle)).toBe(true);
+    expect(edges.some((edge) => edge.source === 'grain' && edge.target === 'out')).toBe(true);
+    expect(edges.some((edge) => edge.id === 'inner')).toBe(true);
+  });
+
+  it('refuses a group that makes its own picture', () => {
+    useGraph.setState({
+      nodes: [image('src', 0, 0), effect('blur', 'blur', 200, 0), image('img', 0, 300), viewer('out')],
+      edges: [wire('feed', 'src', 'blur'), wire('pic', 'img', 'out')],
+    });
+    selectOnly(['src', 'blur']);
+    state().groupSelection();
+    const group = state().nodes.find(isGroup)!;
+    const before = state().edges;
+    state().insertNodeOnEdge(group.id, 'pic');
+    expect(state().edges).toBe(before);
+  });
+});
