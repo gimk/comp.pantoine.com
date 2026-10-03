@@ -41,6 +41,21 @@ export type ModulatorDef = {
    */
   sample: (params: Record<string, ParamValue>, time: number, seed: number, nodeId?: string) => number;
   /**
+   * For a node that looks at its inputs at other moments than now -- one
+   * that holds, smooths or reacts to edges. `read(key, at)` is that port's
+   * value at `at`: what is wired into it, evaluated then, or the typed
+   * number. Inputs are pure functions of time, so this keeps the node one
+   * too, and a render replays it exactly. Used in place of `sample` when
+   * present. An Image Statistic is the exception: it only knows its latest
+   * reading, so a node looking back through one sees it as live.
+   */
+  sampleAt?: (
+    read: (key: string, at: number) => number,
+    params: Record<string, ParamValue>,
+    time: number,
+    seed: number,
+  ) => number;
+  /**
    * The same operation, per pixel -- for when a picture arrives on one of
    * the node's ports and its output becomes a field, as a Blender Math node
    * does when a texture is plugged into it.
@@ -131,10 +146,11 @@ export const isModulatable = (spec: ParamSpec): spec is Extract<ParamSpec, { kin
 
 /**
  * Every number on a modulator takes a wire, as every socket does in a node
- * editor -- unless the node opts out.
+ * editor -- unless the node opts out, or the param is one its card edits
+ * itself (a sequencer's steps).
  */
 export const modulatorPortsOf = (def: ModulatorDef): string[] =>
-  def.ports === false ? [] : def.params.filter(isModulatable).map((spec) => spec.key);
+  def.ports === false ? [] : def.params.filter((spec) => isModulatable(spec) && !spec.portless).map((spec) => spec.key);
 
 export const defaultModulatorParams = (def: ModulatorDef): Record<string, ParamValue> => {
   const params: Record<string, ParamValue> = {};
@@ -564,8 +580,236 @@ export const statistic: ModulatorDef = {
   bounds: () => [0, 1],
 };
 
+/** The most steps a Step Sequencer holds. */
+export const MAX_STEPS = 16;
+export const stepKey = (index: number): string => `s${index}`;
+
+/** The steps a sequencer plays, in order: Steps of them, each 0..1. */
+export const stepValues = (params: Record<string, ParamValue>): number[] => {
+  const count = clamp(Math.round(num(params.steps, 8)), 2, MAX_STEPS);
+  return Array.from({ length: count }, (_, i) => clamp(num(params[stepKey(i)], 0), 0, 1));
+};
+
+/**
+ * A row of values played in turn, Rate steps a second, round and round --
+ * a melody for a knob. Glide is the share of each step spent sliding
+ * into the next, eased, rather than jumping on the beat.
+ *
+ * The steps are set on the card as bars, so they are params the card
+ * edits itself: no rows, no ports.
+ */
+export const stepSequencer: ModulatorDef = {
+  id: 'stepSequencer',
+  label: 'Step Sequencer',
+  role: 'source',
+  params: [
+    { kind: 'int', key: 'steps', label: 'Steps', min: 2, max: MAX_STEPS, default: 8 },
+    { kind: 'float', key: 'rate', label: 'Rate (steps/s)', min: 0, max: 16, step: 0.05, default: 4 },
+    { kind: 'float', key: 'glide', label: 'Glide', min: 0, max: 1, step: 0.01, default: 0 },
+    ...AMPLITUDE_OFFSET,
+    ...Array.from({ length: MAX_STEPS }, (_, i): ParamSpec => ({
+      kind: 'float',
+      key: stepKey(i),
+      label: `Step ${i + 1}`,
+      min: 0,
+      max: 1,
+      step: 0.01,
+      // A rising-and-falling default, so a fresh node shows what it does.
+      default: [0, 0.25, 0.5, 0.75, 1, 0.75, 0.5, 0.25][i % 8],
+      hidden: true,
+      portless: true,
+    })),
+  ],
+  sample: (params, time) => {
+    const values = stepValues(params);
+    const x = time * num(params.rate, 0);
+    const n = values.length;
+    const index = ((Math.floor(x) % n) + n) % n;
+    const here = values[index];
+    const glide = clamp(num(params.glide, 0), 0, 1);
+    const into = fract(x) - (1 - glide);
+    if (glide <= 0 || into <= 0) return scaled(params, here);
+    const next = values[(index + 1) % n];
+    return scaled(params, here + (next - here) * smooth(into / glide));
+  },
+  moving: sourceMoving,
+  bounds: (ranges, params) => {
+    const values = stepValues(params);
+    return scaledBounds([Math.min(...values), Math.max(...values)], ranges);
+  },
+};
+
+/** Above this a gate or trigger counts as on. */
+const GATE = 0.5;
+
+/**
+ * When a port last went on (or off) at or before `time`, looking no
+ * further back than `lookback` seconds; null if it did not. Found by
+ * stepping back -- never more than 512 reads, so one evaluation stays
+ * cheap -- and reported as the first step on the far side of the edge.
+ * A port already on at time 0 counts as switched on then: nothing comes
+ * before the start.
+ */
+export const lastEdge = (
+  read: (key: string, at: number) => number,
+  key: string,
+  time: number,
+  rising: boolean,
+  lookback: number,
+): number | null => {
+  const step = Math.max(1 / 240, lookback / 512);
+  let later = read(key, time) > GATE;
+  for (let k = 1; k * step <= lookback + 1e-9; k += 1) {
+    const at = time - k * step;
+    if (at < 0) return rising && later ? 0 : null;
+    const earlier = read(key, at) > GATE;
+    if (rising ? !earlier && later : earlier && !later) return at + step;
+    later = earlier;
+  }
+  return null;
+};
+
+/** How far back Sample & Hold looks for a trigger before holding what it had then. */
+const HOLD_LOOKBACK = 8;
+
+/**
+ * Holds its Input still and takes a fresh reading now and then: Rate times
+ * a second, or each time Trigger switches on. An LFO through it becomes a
+ * staircase; a Noise becomes random steps.
+ *
+ * It reads the Input at the moment of the last sample rather than keeping
+ * one, so it stays a function of time and a render replays it exactly.
+ */
+export const sampleHold: ModulatorDef = {
+  id: 'sampleHold',
+  label: 'Sample & Hold',
+  role: 'operator',
+  params: [
+    field('input', 'Input', 0),
+    { kind: 'enum', key: 'mode', label: 'Mode', options: ['Rate', 'Trigger'], default: 0 },
+    {
+      kind: 'float',
+      key: 'rate',
+      label: 'Rate (Hz)',
+      min: 0.01,
+      max: 30,
+      step: 0.01,
+      default: 4,
+      activeWhen: (params) => params.mode !== 1,
+    },
+    { ...field('trigger', 'Trigger', 0), activeWhen: (params) => params.mode === 1 },
+  ],
+  sample: (params) => num(params.input, 0),
+  sampleAt: (read, params, time) => {
+    if (num(params.mode, 0) === 1) {
+      const edge = lastEdge(read, 'trigger', time, true, HOLD_LOOKBACK);
+      return read('input', edge ?? Math.max(0, time - HOLD_LOOKBACK));
+    }
+    const rate = Math.max(num(params.rate, 4), 0.01);
+    return read('input', Math.floor(time * rate) / rate);
+  },
+  moving: () => false,
+  bounds: (ranges) => ranges.input,
+};
+
+const SMOOTH_TAPS = 32;
+
+/**
+ * Its Input, smoothed over the last Time seconds: jitter calmed, jumps
+ * turned into glides. Recent moments count most -- the weights fall away
+ * exponentially -- so it lags behind like a damped needle rather than
+ * blurring evenly. Nothing before the start: the window is cut at 0.
+ */
+export const smoothSignal: ModulatorDef = {
+  id: 'smooth',
+  label: 'Smooth',
+  role: 'operator',
+  params: [
+    field('input', 'Input', 0),
+    { kind: 'float', key: 'time', label: 'Time (s)', min: 0, max: 10, step: 0.01, default: 0.5 },
+  ],
+  sample: (params) => num(params.input, 0),
+  sampleAt: (read, params, time) => {
+    const window = Math.max(num(params.time, 0), 0);
+    if (window === 0) return read('input', time);
+    let sum = 0;
+    let total = 0;
+    for (let k = 0; k < SMOOTH_TAPS; k += 1) {
+      const w = Math.exp((-3 * k) / SMOOTH_TAPS);
+      sum += read('input', Math.max(0, time - (k * window) / SMOOTH_TAPS)) * w;
+      total += w;
+    }
+    return sum / total;
+  },
+  moving: () => false,
+  bounds: (ranges) => ranges.input,
+};
+
+/**
+ * Attack, decay, sustain, release -- a synth envelope, played by a gate.
+ * When Gate switches on the output rises to 1 over Attack, falls to
+ * Sustain over Decay and stays there while the gate is held; when it
+ * switches off it fades to 0 over Release, from wherever it had got to.
+ * A Pulse into Gate makes a flash on every beat.
+ *
+ * Worked out from when the gate last switched, read back through its
+ * input, so it is a function of time like everything else here.
+ */
+export const envelope: ModulatorDef = {
+  id: 'envelope',
+  label: 'Envelope',
+  role: 'operator',
+  params: [
+    field('gate', 'Gate', 0),
+    { kind: 'float', key: 'attack', label: 'Attack (s)', min: 0, max: 5, step: 0.01, default: 0.05 },
+    { kind: 'float', key: 'decay', label: 'Decay (s)', min: 0, max: 5, step: 0.01, default: 0.2 },
+    { kind: 'float', key: 'sustain', label: 'Sustain', min: 0, max: 1, step: 0.01, default: 0.5 },
+    { kind: 'float', key: 'release', label: 'Release (s)', min: 0, max: 5, step: 0.01, default: 0.3 },
+    ...AMPLITUDE_OFFSET,
+  ],
+  sample: (params) => scaled(params, 0),
+  sampleAt: (read, params, time) => {
+    const attack = Math.max(num(params.attack, 0), 0);
+    const decay = Math.max(num(params.decay, 0), 0);
+    const sustain = clamp(num(params.sustain, 0.5), 0, 1);
+    const release = Math.max(num(params.release, 0), 0);
+
+    // The level `held` seconds after the gate went on, while it stays on.
+    const on = (held: number): number => {
+      if (held < attack) return held / attack;
+      if (held < attack + decay) return 1 - ((1 - sustain) * (held - attack)) / decay;
+      return sustain;
+    };
+    // The level at a moment the gate is on, from when it went on.
+    const levelWhileOn = (at: number): number => {
+      const rise = lastEdge(read, 'gate', at, true, attack + decay);
+      return rise === null ? sustain : on(at - rise);
+    };
+
+    if (read('gate', time) > GATE) return scaled(params, levelWhileOn(time));
+    const fall = lastEdge(read, 'gate', time, false, release);
+    if (fall === null || release === 0) return scaled(params, 0);
+    const from = levelWhileOn(Math.max(0, fall - 1e-4));
+    return scaled(params, from * Math.max(0, 1 - (time - fall) / release));
+  },
+  moving: () => false,
+  bounds: (ranges) => scaledBounds([0, 1], ranges),
+};
+
 /** Every modulator the app knows about, in menu order within its role. */
-export const modulatorRegistry: ModulatorDef[] = [lfo, noise, pulse, value, math, mapRange, statistic];
+export const modulatorRegistry: ModulatorDef[] = [
+  lfo,
+  noise,
+  pulse,
+  value,
+  stepSequencer,
+  math,
+  mapRange,
+  statistic,
+  sampleHold,
+  smoothSignal,
+  envelope,
+];
 
 const byId = new Map(modulatorRegistry.map((def) => [def.id, def]));
 
@@ -674,9 +918,24 @@ export const signalBounds = (signal: Signal): Interval | null => {
 
 /** A signal's value at `time`. */
 export const evaluateSignal = (signal: Signal, time: number): number => {
-  const out = signal.def.sample(effectiveParams(signal, time), time, signal.seed, signal.nodeId);
+  const { def } = signal;
+  const params = effectiveParams(signal, time);
+  const out = def.sampleAt
+    ? def.sampleAt(portReader(signal), params, time, signal.seed)
+    : def.sample(params, time, signal.seed, signal.nodeId);
   return Number.isFinite(out) ? out : 0;
 };
+
+/** A node's ports as functions of time: the wire evaluated then, or the typed number. */
+const portReader =
+  (signal: Signal) =>
+  (key: string, at: number): number => {
+    const spec = signal.def.params.find((candidate) => candidate.key === key);
+    const input = signal.inputs[key];
+    if (input && spec && isModulatable(spec)) return readPort(spec, input, at, !(spec.kind === 'float' && spec.field));
+    const fallback = spec && typeof spec.default === 'number' ? spec.default : 0;
+    return num(signal.params[key], fallback);
+  };
 
 /**
  * Whether a signal can change without anyone touching a knob.

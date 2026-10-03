@@ -18,6 +18,13 @@ import { ParamRow } from './EffectNode';
 import { useLivePaint, type LiveReading } from './controlPrimitives';
 import { useStatisticMeter } from './statisticMeter';
 import { useResolvedChain } from './viewerPipeline';
+import { StepEditor } from './StepEditor';
+import type { ParamValue } from '../engine/effects';
+
+/** Editors drawn on a card above its rows, for params it edits itself -- a sequencer's steps. */
+const CARD_EDITORS: Record<string, React.ComponentType<{ nodeId: string; params: Record<string, ParamValue> }>> = {
+  stepSequencer: StepEditor,
+};
 
 const SCOPE_WIDTH = 170;
 const SCOPE_HEIGHT = 34;
@@ -130,6 +137,7 @@ export const ModulatorNode: React.FC<NodeProps<Node<ModulatorNodeData, 'modulato
   // in effect in the same way, so it is shown the same way.
   const derived = isField ? fieldDerived : signal ? derivedParams(signal) : {};
   const Icon = def.picture ? ScanEye : def.role === 'operator' ? Sigma : Activity;
+  const CardEditor = CARD_EDITORS[def.id];
 
   return (
     <div className="node node-modulator">
@@ -149,7 +157,8 @@ export const ModulatorNode: React.FC<NodeProps<Node<ModulatorNodeData, 'modulato
             draw, and a measurement is shown as the number it is. */}
         {signal && def.picture && <StatReadout nodeId={id} signal={signal} />}
         {signal && !isField && !def.picture && signalIsMoving(signal) && <Scope signal={signal} />}
-        {modulatorParamsOf(def).map((spec) => (
+        {CardEditor && <CardEditor nodeId={id} params={data.params} />}
+        {modulatorParamsOf(def).filter((spec) => !spec.hidden).map((spec) => (
           <ParamRow
             key={spec.key}
             nodeId={id}
@@ -158,6 +167,7 @@ export const ModulatorNode: React.FC<NodeProps<Node<ModulatorNodeData, 'modulato
             port={ports.has(spec.key)}
             field={!!def.field && ports.has(spec.key)}
             derived={derived[spec.key]}
+            inactive={spec.activeWhen ? !spec.activeWhen(data.params) : false}
             onChange={(value) => setParam(id, spec.key, value)}
           />
         ))}

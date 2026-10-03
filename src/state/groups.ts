@@ -100,7 +100,7 @@ export const moduleLabel = (node: AppNode): string => {
 export const paramSpecsOf = (node: AppNode): ParamSpec[] => {
   if (node.type === 'modulator') {
     const def = getModulator(node.data.modulatorId);
-    return def ? modulatorParamsOf(def) : [];
+    return def ? modulatorParamsOf(def).filter((spec) => !spec.hidden) : [];
   }
   const def = defOf(node);
   return def ? paramsOf(def).filter((spec) => !spec.hidden) : [];

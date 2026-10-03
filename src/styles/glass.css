@@ -3899,6 +3899,44 @@ textarea,
 
 /* The tour, from the About dialog: a card like the credits, but a button. */
 .about-tour-card {
+/* Step Sequencer: its steps as bars on the card. */
+
+.step-editor {
+  padding-top: 2px;
+}
+
+.step-row {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  height: 56px;
+  padding: 3px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--hairline);
+  background: rgba(var(--ink-rgb), 0.03);
+  cursor: ns-resize;
+  touch-action: none;
+  user-select: none;
+}
+
+.step-cell {
+  flex: 1;
+  display: flex;
+  align-items: flex-end;
+  min-width: 0;
+}
+
+.step-bar {
+  width: 100%;
+  border-radius: 2px;
+  background: var(--port-mod);
+  opacity: 0.85;
+}
+
+.step-cell:hover .step-bar {
+  opacity: 1;
+}
+
   display: flex;
   align-items: center;
   gap: 12px;
