@@ -1,6 +1,6 @@
 import React, { useSyncExternalStore } from 'react';
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
-import { SlidersHorizontal, Waves, Sparkles } from 'lucide-react';
+import { Grid3x3, Hexagon, Rainbow, SlidersHorizontal, Sparkles, Waves } from 'lucide-react';
 import { type GeneratorNodeData } from '../state/graph';
 import { getGenerator, RESOLUTION_PRESETS } from '../engine/generators';
 import { getEffect } from '../engine/registry';
@@ -13,6 +13,9 @@ import { GradientEditor } from './GradientEditor';
 const GENERATOR_ICONS: Record<string, React.ComponentType<{ size?: number }>> = {
   ramp: SlidersHorizontal,
   noise: Waves,
+  plasma: Rainbow,
+  cellular: Hexagon,
+  pattern: Grid3x3,
 };
 
 /**
@@ -107,7 +110,8 @@ export const GeneratorNode: React.FC<NodeProps<Node<GeneratorNodeData, 'generato
               spec={spec}
               value={data.params[spec.key]}
               port
-            field={acceptsField(def, spec)}
+              field={acceptsField(def, spec)}
+              inactive={spec.activeWhen ? !spec.activeWhen(data.params) : false}
               onChange={(value) => setParam(id, spec.key, value)}
             />
           ))}

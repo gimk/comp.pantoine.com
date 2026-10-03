@@ -1,4 +1,5 @@
 import type { EffectDef } from './effects';
+import { generatorRegistry } from './generators';
 import { blackwhite } from './modules/blackwhite';
 import { blend } from './modules/blend';
 import { blockGlitch } from './modules/blockGlitch';
@@ -72,9 +73,7 @@ import { vibrance } from './modules/vibrance';
 import { vignette } from './modules/vignette';
 import { whiteBalance } from './modules/whiteBalance';
 import { wobble } from './modules/wobble';
-import { ramp } from './modules/ramp';
 import { resize } from './modules/resize';
-import { noiseGenerator } from './modules/noiseGenerator';
 import { signalRot } from './modules/signalRot';
 import { iridescentMetal } from './modules/iridescentMetal';
 import { glitchMachine } from './modules/glitchMachine';
@@ -183,8 +182,7 @@ export const registry: EffectDef[] = [
   chromaKey,
 
   // Generators
-  ramp,
-  noiseGenerator,
+  ...generatorRegistry,
 ];
 
 const byId = new Map(registry.map((def) => [def.id, def]));

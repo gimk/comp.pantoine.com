@@ -1,6 +1,9 @@
 import type { EffectDef } from './effects';
 import { ramp } from './modules/ramp';
 import { noiseGenerator } from './modules/noiseGenerator';
+import { plasma } from './modules/plasma';
+import { cellular } from './modules/cellular';
+import { pattern } from './modules/pattern';
 
 export type ResolutionPreset = {
   label: string;
@@ -19,6 +22,9 @@ export const RESOLUTION_PRESETS: ResolutionPreset[] = [
 export const generatorRegistry: EffectDef[] = [
   ramp,
   noiseGenerator,
+  plasma,
+  cellular,
+  pattern,
 ];
 
 const byId = new Map(generatorRegistry.map((def) => [def.id, def]));

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { registry, getEffect } from './registry';
+import { generatorRegistry } from './generators';
 import { CATEGORY_ORDER, defaultParams, paramsOf, inputsOf, buildFragmentSource, passesOf, isPhasedParam } from './effects';
 
 describe('effect registry and module definitions', () => {
@@ -154,5 +155,15 @@ describe('temporal modules that keep a frame', () => {
     expect(def.feedback).toBe(true);
     expect(def.feedbackPass).toBe(0);
     expect(passesOf(def).length).toBeGreaterThan(1);
+  });
+});
+
+describe('generators', () => {
+  it('are all generators, and all reachable through the registry', () => {
+    for (const def of generatorRegistry) {
+      expect(def.category).toBe('generator');
+      expect(getEffect(def.id)).toBe(def);
+      passesOf(def).forEach((_, index) => expect(() => buildFragmentSource(def, index)).not.toThrow());
+    }
   });
 });

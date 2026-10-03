@@ -1,5 +1,6 @@
 import type { XYPosition } from '@xyflow/react';
 import { registry } from '../engine/registry';
+import { generatorRegistry } from '../engine/generators';
 import { modulatorRegistry, type ModulatorDef } from '../engine/modulators';
 import { CATEGORY_LABELS, CATEGORY_ORDER, type Category, type EffectDef } from '../engine/effects';
 import { useGraph } from '../state/store';
@@ -68,10 +69,12 @@ const unsorted: CatalogFolder[] = [
       },
       {
         heading: 'Generated Media',
-        entries: [
-          { key: 'generator:ramp', label: 'Ramp', payload: { kind: 'generator', generatorId: 'ramp' } },
-          { key: 'generator:noise', label: 'Noise', payload: { kind: 'generator', generatorId: 'noise' }, tag: 'animated' },
-        ],
+        entries: generatorRegistry.map((def) => ({
+          key: `generator:${def.id}`,
+          label: def.label,
+          payload: { kind: 'generator', generatorId: def.id } as const,
+          tag: def.animated !== false ? 'animated' : undefined,
+        })),
       },
       {
         heading: 'Modulation',
