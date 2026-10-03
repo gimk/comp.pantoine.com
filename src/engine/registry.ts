@@ -76,8 +76,8 @@ import { glitchMachine } from './modules/glitchMachine';
  * Every effect the app knows about. Add one here and it appears in the UI,
  * filed under its own category.
  *
- * Ordered within a category by how often it is reached for, not
- * alphabetically -- the menu is something to pick from, not to look up in.
+ * The menu lists each category alphabetically (see paletteCatalog), so the
+ * order here is free.
  */
 export const registry: EffectDef[] = [
   // Color & Tone

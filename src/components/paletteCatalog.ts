@@ -54,7 +54,7 @@ const effectGroups = (): CatalogGroup[] => {
  * Built from the registries, so a new effect or modulator shows up in the
  * toolbar and in the Shift+A menu the moment it is registered.
  */
-export const catalog: CatalogFolder[] = [
+const unsorted: CatalogFolder[] = [
   {
     id: 'input',
     label: 'Input',
@@ -105,6 +105,18 @@ export const catalog: CatalogFolder[] = [
     ],
   },
 ];
+
+/**
+ * The catalog, each group alphabetical: a menu of a dozen names is easier
+ * to find one in when they are in an order everyone already knows.
+ */
+export const catalog: CatalogFolder[] = unsorted.map((folder) => ({
+  ...folder,
+  groups: folder.groups.map((group) => ({
+    ...group,
+    entries: [...group.entries].sort((a, b) => a.label.localeCompare(b.label)),
+  })),
+}));
 
 /**
  * Files from outside the app -- dropped or pasted -- each become the module
