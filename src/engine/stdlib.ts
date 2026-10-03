@@ -196,7 +196,10 @@ vec4 sampleEdge(sampler2D tex, vec2 uv, int mode) {
   } else if (mode == 2) {
     if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return vec4(0.0);
   } else if (mode == 3) {
-    uv = abs(fract(uv * 0.5) * 2.0 - 1.0);
+    // A triangle wave that is the identity across 0..1 and reflects past
+    // either edge. Without the "1 -", 0..1 itself came out flipped on both
+    // axes, which read as the picture turned upside down.
+    uv = 1.0 - abs(fract(uv * 0.5) * 2.0 - 1.0);
   }
   return texture(tex, clamp(uv, 0.0, 1.0));
 }

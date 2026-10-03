@@ -89,7 +89,7 @@ export const ramp: EffectDef = {
   } else if (u_extend == 1) {
     t = fract(t);
   } else if (u_extend == 2) {
-    t = abs(fract(t * 0.5) * 2.0 - 1.0);
+    t = 1.0 - abs(fract(t * 0.5) * 2.0 - 1.0);
   }
 
   // Multi-stop color evaluation (2 to 8 stops)
