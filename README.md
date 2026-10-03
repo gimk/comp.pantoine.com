@@ -7,6 +7,8 @@ Bring in an image or a video, wire it through effects, animate them, and
 render the result. Nothing to install, and your pictures never leave your
 machine.
 
+https://github.com/user-attachments/assets/744cf0b5-6c35-4dbb-b4b0-60784ec5c7e9
+
 ## What's inside
 
 - **80+ effects**: colour grading, CRT and tape artifacts, glitch, blur and
