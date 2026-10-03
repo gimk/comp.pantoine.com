@@ -72,7 +72,7 @@ export const ExportNode: React.FC<NodeProps<Node<ExportNodeData, 'export'>>> = (
           <div className="export-recipe-desc">
             {isConnected ? (
               rendering ? (
-                <span>Baking in Render node…</span>
+                <span>Baking in Render module…</span>
               ) : asset ? (
                 <>
                   <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
@@ -83,10 +83,10 @@ export const ExportNode: React.FC<NodeProps<Node<ExportNodeData, 'export'>>> = (
                   </span>
                 </>
               ) : (
-                <span>Click Render in node</span>
+                <span>Click Render on the Render module</span>
               )
             ) : (
-              <span>Connect a Render node</span>
+              <span>Connect a Render module</span>
             )}
           </div>
         </div>
@@ -113,11 +113,11 @@ export const ExportNode: React.FC<NodeProps<Node<ExportNodeData, 'export'>>> = (
           onClick={handleDownload}
           title={
             !isConnected
-              ? 'Connect a Render node to export'
+              ? 'Connect a Render module to export'
               : rendering
                 ? 'Rendering in progress…'
                 : !asset
-                  ? 'Render asset first in upstream node'
+                  ? 'Render the file first, on the Render module'
                   : `Download ${label} file`
           }
         >

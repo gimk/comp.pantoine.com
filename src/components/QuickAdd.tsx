@@ -192,8 +192,12 @@ export const QuickAdd: React.FC<{ at: { x: number; y: number }; from?: Handle; o
 
   const entryButton = (entry: CatalogEntry, hint?: string) => (
     <button key={entry.key} type="button" className="quick-add-item" data-qa-item onClick={() => pick(entry)}>
-      <span>{entry.label}</span>
-      {hint && <span className="quick-add-hint">{hint}</span>}
+      {/* The folder goes under the name, not beside it: side by side, a long
+          name and a long folder both wrap in a panel this narrow. */}
+      <span className="quick-add-text">
+        <span className="quick-add-label">{entry.label}</span>
+        {hint && <span className="quick-add-hint">{hint}</span>}
+      </span>
       {entry.tag && <span className="tag">{entry.tag}</span>}
     </button>
   );

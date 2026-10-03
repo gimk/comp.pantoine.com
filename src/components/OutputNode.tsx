@@ -213,7 +213,7 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
       <p className="render-empty">Rendering {requestedLabel} asset…</p>
     ) : (
       <p className="render-empty">
-        Click <strong>Render</strong> on upstream node.
+        Click <strong>Render</strong> on the Render module.
       </p>
     )
   ) : (

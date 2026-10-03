@@ -1,6 +1,6 @@
 # COMP STUDIO
 
-A node-based compositing tool for the browser, at
+A modular compositing tool for the browser, at
 [comp.pantoine.com](https://comp.pantoine.com). Bring in an image or a video,
 or generate one, wire it through effect modules, drive their knobs with
 modulators, and watch the result in a viewer — or render it out to a file.

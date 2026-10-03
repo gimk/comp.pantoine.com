@@ -70,7 +70,7 @@ export const AboutModal: React.FC = () => {
             <div className="about-modal-body">
               <div className="about-intro">
                 <h2 id="about-dialog-title" className="about-title">
-                  Node-based visual compositor
+                  Modular visual compositor
                 </h2>
                 <p className="about-desc">
                   An open canvas for live shader effects, analog CRT &amp; tape artifacts,

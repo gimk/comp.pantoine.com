@@ -178,6 +178,56 @@ textarea,
   width: 100%;
 }
 
+/*
+ * Scrollbars, everywhere at once: a slim pill of ink with air around it,
+ * on no track, so a scrolling menu or dialog keeps the glass look instead
+ * of growing the system's grey bar and arrows.
+ *
+ * WebKit and Blink take the pseudo-elements. The standard properties are
+ * kept for engines without them, and only there: set alongside, Chrome
+ * gives them priority and throws the pill away for its own native bar.
+ */
+::-webkit-scrollbar {
+  width: 16px;
+  height: 16px;
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Kept clear of the ends, where a panel's corners round off: run to the
+   very top and bottom, the pill is clipped by the curve. */
+::-webkit-scrollbar-track {
+  margin: 6px;
+}
+
+/*
+ * Drawn inside a transparent border so the thumb reads as a slim pill with
+ * air around it: 4px wide, 6px in from the panel's edge. The border is the
+ * same all round on purpose -- the pill's rounding is the box's minus the
+ * border on each side, so a thicker border on one side flattens that end.
+ */
+::-webkit-scrollbar-thumb {
+  background: rgba(var(--ink-rgb), 0.18);
+  background-clip: content-box;
+  border: 6px solid transparent;
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(var(--ink-rgb), 0.3);
+  background-clip: content-box;
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(var(--ink-rgb), 0.22) transparent;
+  }
+}
+
 /* --------------------------------------------------------------------------
    The glass surface
    -------------------------------------------------------------------------- */
@@ -312,30 +362,6 @@ textarea,
   /* Reaching the end of the list must not hand the rest of the scroll to
      the graph behind, which would pan or zoom it. */
   overscroll-behavior: contain;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(var(--ink-rgb), 0.22) transparent;
-}
-
-.toolbar-menu::-webkit-scrollbar {
-  width: 10px;
-}
-
-.toolbar-menu::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-/* Drawn inside a transparent border so the thumb reads as a slim pill with
-   air around it rather than a bar wedged against the edge. */
-.toolbar-menu::-webkit-scrollbar-thumb {
-  background: rgba(var(--ink-rgb), 0.18);
-  background-clip: content-box;
-  border: 3px solid transparent;
-  border-radius: 999px;
-}
-
-.toolbar-menu::-webkit-scrollbar-thumb:hover {
-  background: rgba(var(--ink-rgb), 0.3);
-  background-clip: content-box;
 }
 
 .toolbar-menu-item {
@@ -1024,7 +1050,7 @@ textarea,
 .node-body {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 14px;
   padding: 12px;
 }
 
@@ -1828,7 +1854,7 @@ textarea,
 .control {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 
 .control-row {
@@ -1852,15 +1878,34 @@ textarea,
   font-variant-numeric: tabular-nums;
 }
 
+/*
+ * Taller than it looks. The visible track is 4px, drawn by the track
+ * pseudo-elements below; the input itself is 18px of transparent hit area,
+ * so a press a few pixels off the line still lands on the slider rather
+ * than on the card, which would start dragging the module. The negative
+ * margins hand the extra height back, so the layout is as it was.
+ */
 .control-slider {
   -webkit-appearance: none;
   appearance: none;
   width: 100%;
+  height: 18px;
+  margin: -7px 0;
+  background: transparent;
+  outline: none;
+  cursor: pointer;
+}
+
+.control-slider::-webkit-slider-runnable-track {
   height: 4px;
   border-radius: 999px;
   background: rgba(var(--ink-rgb), 0.14);
-  outline: none;
-  cursor: pointer;
+}
+
+.control-slider::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(var(--ink-rgb), 0.14);
 }
 
 /* One axis of a point: its letter, its slider, its value, on one line. The
@@ -1888,6 +1933,8 @@ textarea,
   appearance: none;
   width: 13px;
   height: 13px;
+  /* Centred on the 4px track, which WebKit does not do by itself. */
+  margin-top: -4.5px;
   border: 1px solid rgba(var(--ink-rgb), 0.2);
   border-radius: 50%;
   background: var(--knob);
@@ -1903,6 +1950,22 @@ textarea,
   background: var(--knob);
   box-shadow: 0 1px 3px rgba(var(--shadow-rgb), 0.25);
   cursor: grab;
+}
+
+/* Held: the hand closes, wherever the press began -- on the thumb or on
+   the track, which jumps the thumb there and drags it all the same. */
+.control-slider:active {
+  cursor: grabbing;
+}
+
+/* Each engine's thumb in a rule of its own: a selector one engine does not
+   know throws out the whole list it is in. */
+.control-slider:active::-webkit-slider-thumb {
+  cursor: grabbing;
+}
+
+.control-slider:active::-moz-range-thumb {
+  cursor: grabbing;
 }
 
 /* Controls whose value is small enough to sit beside its label rather than
@@ -2102,8 +2165,6 @@ textarea,
   max-height: calc(100vh - var(--gutter) * 2 - 50px);
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(var(--ink-rgb), 0.22) transparent;
 }
 
 .quick-add-sub {
@@ -2113,8 +2174,6 @@ textarea,
   max-height: calc(100vh - var(--gutter) * 2);
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(var(--ink-rgb), 0.22) transparent;
 }
 
 .quick-add-sub.is-flipped {
@@ -2144,6 +2203,7 @@ textarea,
 
 .quick-add-list {
   max-height: 320px;
+  overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -2175,9 +2235,29 @@ textarea,
   color: var(--text-muted);
 }
 
+.quick-add-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+/* One line each, trimmed if it must be, so every result is the same height
+   and the list scans as a column. */
+.quick-add-label,
+.quick-add-hint {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .quick-add-hint {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: 10px;
+}
+
+.quick-add-item .tag {
+  flex: none;
 }
 
 .quick-add-empty {
@@ -3862,43 +3942,6 @@ textarea,
   font-variant-numeric: tabular-nums;
 }
 
-
-
-
-
-/* --------------------------------------------------------------------------
-   Busy spinner
-
-   For the Loader2 icons on the render and export nodes. With reduced
-   motion the icon simply sits still: the label beside it already says the
-   job is running.
-   -------------------------------------------------------------------------- */
-
-.spin {
-  animation: spin 0.9s linear infinite;
-  transform-origin: center;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .spin {
-    animation: none;
-  }
-}
-
-/* The About dialog takes focus itself on open; a ring around the whole box
-   would only be noise. Its controls keep their own focus styles. */
-.about-modal:focus {
-  outline: none;
-}
-
-/* The tour, from the About dialog: a card like the credits, but a button. */
-.about-tour-card {
 /* Step Sequencer: its steps as bars on the card. */
 
 .step-editor {
@@ -3937,6 +3980,43 @@ textarea,
   opacity: 1;
 }
 
+
+
+
+
+/* --------------------------------------------------------------------------
+   Busy spinner
+
+   For the Loader2 icons on the render and export nodes. With reduced
+   motion the icon simply sits still: the label beside it already says the
+   job is running.
+   -------------------------------------------------------------------------- */
+
+.spin {
+  animation: spin 0.9s linear infinite;
+  transform-origin: center;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spin {
+    animation: none;
+  }
+}
+
+/* The About dialog takes focus itself on open; a ring around the whole box
+   would only be noise. Its controls keep their own focus styles. */
+.about-modal:focus {
+  outline: none;
+}
+
+/* The tour, from the About dialog: a card like the credits, but a button. */
+.about-tour-card {
   display: flex;
   align-items: center;
   gap: 12px;
