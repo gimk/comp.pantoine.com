@@ -2360,41 +2360,13 @@ textarea,
    About / Credits Modal
    -------------------------------------------------------------------------- */
 
-.help-button {
+/* Sized by .toolbar-pill; only placed here, mirroring the toolbar. */
+.help-pill {
   position: absolute;
-  bottom: var(--gutter);
+  top: var(--gutter);
   right: var(--gutter);
   z-index: 10;
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-family: var(--font-ui);
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-muted);
-  background: var(--glass-fill);
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
-  border: 1px solid var(--glass-border);
-  box-shadow: var(--glass-shadow);
-  cursor: pointer;
-  transition: all 0.15s ease;
-  user-select: none;
-  padding: 0;
-  line-height: 1;
-}
-
-.help-button:hover {
-  color: var(--text-primary);
-  background: var(--glass-fill-strong);
-  transform: translateY(-1px);
-}
-
-.help-button:active {
-  transform: translateY(0);
+  white-space: nowrap;
 }
 
 .modal-backdrop {
@@ -2427,8 +2399,11 @@ textarea,
 .about-modal {
   position: relative;
   z-index: 1;
-  width: 400px;
+  width: 700px;
   max-width: calc(100vw - 36px);
+  max-height: calc(100vh - 48px);
+  display: flex;
+  flex-direction: column;
   padding: 26px 28px 22px;
   border-radius: 24px;
   background: rgba(255, 255, 255, 0.82);
@@ -2498,6 +2473,11 @@ textarea,
   display: flex;
   flex-direction: column;
   gap: 14px;
+  min-height: 0;
+  overflow-y: auto;
+  /* Room for the scrollbar, so it does not sit on the content. */
+  margin-right: -14px;
+  padding-right: 14px;
 }
 
 .about-intro {
@@ -2642,30 +2622,128 @@ textarea,
   margin: 9px 0;
 }
 
-.about-shortcuts-hint {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-wrap: wrap;
-  gap: 7px;
-  font-size: 11px;
-  color: var(--text-dim);
-  margin-top: 4px;
+.about-footer {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
 }
 
-.about-shortcuts-hint kbd {
+.about-shortcuts {
+  padding: 14px 16px 6px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.58);
+  border: 1px solid rgba(23, 23, 26, 0.07);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 1px 3px rgba(23, 23, 26, 0.02);
+}
+
+.about-section-title {
+  margin: 0 0 10px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+}
+
+/* Which group goes in which column is set in shortcutList.ts. */
+.shortcut-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 28px;
+}
+
+.shortcut-column {
+  min-width: 0;
+}
+
+.shortcut-section {
+  margin-bottom: 14px;
+}
+
+.shortcut-section-title {
+  margin: 0 0 4px;
+  padding-bottom: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: -0.005em;
+  border-bottom: 1px solid rgba(23, 23, 26, 0.07);
+}
+
+.shortcut-list {
+  margin: 0;
+}
+
+.shortcut-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 4px 0;
+}
+
+.shortcut-label {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--text-muted);
+}
+
+.shortcut-note {
+  font-size: 10.5px;
+  color: var(--text-dim);
+}
+
+.shortcut-keys {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  margin: 0;
+  flex-shrink: 0;
+  max-width: 75%;
+}
+
+.shortcut-combo {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  white-space: nowrap;
+}
+
+.shortcut-keys kbd {
+  min-width: 18px;
+  text-align: center;
   font-family: var(--font-mono);
   font-size: 10px;
   font-weight: 600;
-  padding: 2px 5px;
+  line-height: 1.4;
+  padding: 1px 5px;
   border-radius: 4px;
-  background: rgba(23, 23, 26, 0.05);
-  border: 1px solid rgba(23, 23, 26, 0.1);
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(23, 23, 26, 0.12);
+  box-shadow: 0 1px 0 rgba(23, 23, 26, 0.1);
   color: var(--text-primary);
 }
 
-.about-hint-sep {
-  opacity: 0.4;
+.shortcut-or {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+@media (max-width: 600px) {
+  .shortcut-columns {
+    grid-template-columns: 1fr;
+  }
+
+  .about-footer {
+    grid-template-columns: 1fr;
+  }
 }
 
 @keyframes fadeIn {

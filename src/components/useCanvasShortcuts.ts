@@ -65,6 +65,9 @@ const dialogIsOpen = (): boolean => document.querySelector('[aria-modal="true"]'
  * The three drag modifiers can be pressed or let go at any point in a drag.
  * Shift-click selection is a pointer gesture and lives on the ReactFlow
  * props instead.
+ *
+ * The Shortcuts & info dialog lists all of these from shortcutList.ts; a change here
+ * belongs there too.
  */
 export const useCanvasShortcuts = (
   fitPadding: number,
