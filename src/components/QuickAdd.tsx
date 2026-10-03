@@ -1,8 +1,10 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { useReactFlow } from '@xyflow/react';
+import { useReactFlow, useStoreApi, type Handle } from '@xyflow/react';
 import { ChevronRight } from 'lucide-react';
 import { paletteDropOffset } from './paletteDrag';
 import { addPaletteItem, catalog, type CatalogEntry, type CatalogGroup } from './paletteCatalog';
+import { wireNewModule } from './quickAddWire';
+import { useGraph } from '../state/store';
 
 /** How far up and left of the pointer the menu opens, so the pointer lands inside it. */
 const ANCHOR_INSET = 14;
@@ -64,9 +66,17 @@ const itemsIn = (column: Element | null): HTMLElement[] =>
  * Categories open to the side on hover, focus or the right arrow. Typing searches
  * every folder at once, and Enter takes the first match.
  * Escape, or a click or scroll anywhere else, closes it.
+ *
+ * Opened while a wire is being dragged, `from` is the port it was dragged
+ * out of, and whatever is picked is plugged into it.
  */
-export const QuickAdd: React.FC<{ at: { x: number; y: number }; onClose: () => void }> = ({ at, onClose }) => {
+export const QuickAdd: React.FC<{ at: { x: number; y: number }; from?: Handle; onClose: () => void }> = ({
+  at,
+  from,
+  onClose,
+}) => {
   const { screenToFlowPosition } = useReactFlow();
+  const flowStore = useStoreApi();
   const rootRef = useRef<HTMLDivElement>(null);
   const subRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -134,7 +144,9 @@ export const QuickAdd: React.FC<{ at: { x: number; y: number }; onClose: () => v
   const pick = (entry: CatalogEntry) => {
     const point = screenToFlowPosition(at);
     const offset = paletteDropOffset(entry.payload);
+    const before = new Set(useGraph.getState().nodes.map((node) => node.id));
     addPaletteItem(entry.payload, { x: point.x - offset.x, y: point.y - offset.y });
+    if (from) wireNewModule(flowStore.getState, before, from);
     onClose();
   };
 
@@ -193,7 +205,7 @@ export const QuickAdd: React.FC<{ at: { x: number; y: number }; onClose: () => v
       style={place}
       onKeyDown={onKeyDown}
       role="menu"
-      aria-label="Add a module"
+      aria-label={from ? 'Add a module to the wire' : 'Add a module'}
       // No browser menu over ours.
       onContextMenu={(event) => event.preventDefault()}
     >

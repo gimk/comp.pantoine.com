@@ -11,6 +11,7 @@ import {
   SelectionMode,
   type Connection,
   type Edge,
+  type Handle,
   type OnNodeDrag,
 } from '@xyflow/react';
 import { findEdgeUnderNode } from './components/edgeHitTest';
@@ -22,6 +23,7 @@ import {
 } from './components/paletteDrag';
 import { addMediaFiles, addPaletteItem } from './components/paletteCatalog';
 import { QuickAdd } from './components/QuickAdd';
+import { PendingWire, type PendingWireShape } from './components/PendingWire';
 import { useShallow } from 'zustand/react/shallow';
 import type { AppNode } from './state/graph';
 import { isValidConnection as isConnectionAllowed } from './state/connections';
@@ -204,14 +206,40 @@ const Editor: React.FC = () => {
     }
   }, [nodesInitialized, fitView]);
 
-  // Shift+A: where the add menu is open, in screen pixels, or null.
-  const [quickAdd, setQuickAdd] = useState<{ x: number; y: number } | null>(null);
+  const flowStore = useStoreApi();
+
+  // Shift+A: where the add menu is open, in screen pixels, or null. Pressed
+  // while a wire is being dragged, it also keeps the port the wire came
+  // from, and the module picked is plugged into it. The wire itself stays
+  // drawn, from its port to where the menu opened, until the menu closes.
+  const [quickAdd, setQuickAdd] = useState<
+    { x: number; y: number; from?: Handle; wire?: PendingWireShape } | null
+  >(null);
   const closeQuickAdd = useCallback(() => setQuickAdd(null), []);
-  useCanvasShortcuts(0.2, setQuickAdd);
+  const openQuickAdd = useCallback(
+    (at: { x: number; y: number }) => {
+      const { connection } = flowStore.getState();
+      if (!connection.inProgress) {
+        setQuickAdd(at);
+        return;
+      }
+      setQuickAdd({
+        ...at,
+        from: connection.fromHandle,
+        wire: {
+          from: connection.from,
+          fromPosition: connection.fromPosition,
+          to: screenToFlowPosition(at),
+          toPosition: connection.toPosition,
+        },
+      });
+    },
+    [flowStore, screenToFlowPosition],
+  );
+  useCanvasShortcuts(0.2, openQuickAdd);
 
   // Snapping only considers modules on screen; this is how it finds out
   // where the screen is, read fresh each time rather than kept in sync.
-  const flowStore = useStoreApi();
   useEffect(() => {
     setVisibleAreaSource(() => {
       const { width, height, transform } = flowStore.getState();
@@ -324,6 +352,9 @@ const Editor: React.FC = () => {
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
+        // While the add menu holds a wire, React Flow's own line, still
+        // chasing the pointer until the button is let go, gives way to it.
+        className={quickAdd?.wire ? 'is-wire-pinned' : undefined}
         isValidConnection={isValidConnection}
         onNodeDragStart={handleNodeDragStart}
         onNodeDrag={handleNodeDrag}
@@ -361,11 +392,12 @@ const Editor: React.FC = () => {
         proOptions={proOptions}
       >
         <SnapGuides />
+        {quickAdd?.wire && <PendingWire wire={quickAdd.wire} />}
         {!backgroundShowing && (
           <Background variant={BackgroundVariant.Dots} gap={26} size={1.4} color="rgba(23,23,26,0.16)" />
         )}
       </ReactFlow>
-      {quickAdd && <QuickAdd at={quickAdd} onClose={closeQuickAdd} />}
+      {quickAdd && <QuickAdd at={quickAdd} from={quickAdd.from} onClose={closeQuickAdd} />}
     </>
   );
 };

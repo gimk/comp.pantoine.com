@@ -44,7 +44,7 @@ export const SHORTCUT_COLUMNS: ShortcutSection[][] = [
     {
       title: 'Canvas',
       items: [
-        { label: 'Add menu', note: 'Opens under the pointer', keys: [['Shift', 'A'], ['Shift', 'I'], [MOD, '/']] },
+        { label: 'Add menu', note: 'Opens under the pointer; while dragging a wire, plugs the pick into it', keys: [['Shift', 'A'], ['Shift', 'I'], [MOD, '/']] },
         { label: 'Zoom to fit', note: 'The selection, or the whole graph', keys: [['F']] },
       ],
     },

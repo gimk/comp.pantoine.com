@@ -2326,6 +2326,21 @@ textarea,
   filter: drop-shadow(0 0 1.5px #ffffff) drop-shadow(0 0 3px rgba(255, 255, 255, 0.95));
 }
 
+/* A wire held open by the add menu; see PendingWire. */
+.pending-wire {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.is-wire-pinned .react-flow__connectionline {
+  display: none;
+}
+
 .react-flow__node {
   font-family: var(--font-ui);
   font-size: 13px;

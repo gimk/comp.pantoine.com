@@ -65,7 +65,8 @@ const dialogIsOpen = (): boolean => document.querySelector('[aria-modal="true"]'
  *   F                    frame the selection, or the whole graph
  *   Space                play / pause
  *   R (or Home)          back to time 0
- *   Shift + A / Shift + I / Cmd + / the add menu, under the pointer
+ *   Shift + A / Shift + I / Cmd + / the add menu, under the pointer; while
+ *                        dragging a wire, what is picked is plugged into it
  *   Shift (while dragging) snap to other modules' centres
  *   Ctrl (while dragging)  lift the module out of its chain
  *   Alt (while dragging)   leave a copy behind
