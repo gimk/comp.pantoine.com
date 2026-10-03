@@ -356,16 +356,27 @@ export class Pipeline {
     const existing = this.programs.get(key);
     if (existing && existing.source === source) return existing;
     if (existing) {
-      this.gl.deleteProgram(existing.program);
       this.programs.delete(key);
+      if (!this.isShared(existing)) this.gl.deleteProgram(existing.program);
     }
-    const compiled: CompiledProgram = {
-      program: createProgram(this.gl, source),
-      uniforms: new Map(),
-      source,
-    };
+    // Passes whose text is identical -- a sorting network that reads its
+    // step from u_pass -- share one program rather than compiling dozens.
+    let compiled: CompiledProgram | undefined;
+    for (const candidate of this.programs.values()) {
+      if (candidate.source === source) {
+        compiled = candidate;
+        break;
+      }
+    }
+    compiled ??= { program: createProgram(this.gl, source), uniforms: new Map(), source };
     this.programs.set(key, compiled);
     return compiled;
+  }
+
+  /** Whether some other key still holds this program, so it must not be deleted yet. */
+  private isShared(compiled: CompiledProgram): boolean {
+    for (const candidate of this.programs.values()) if (candidate === compiled) return true;
+    return false;
   }
 
   /**
@@ -1184,7 +1195,7 @@ export class Pipeline {
     this.timeCaches.dispose();
     if (this.statTarget) deleteTarget(gl, this.statTarget);
     this.statTarget = null;
-    for (const compiled of this.programs.values()) gl.deleteProgram(compiled.program);
+    for (const compiled of new Set(this.programs.values())) gl.deleteProgram(compiled.program);
     this.programs.clear();
     for (const source of this.sources.values()) gl.deleteTexture(source.texture);
     this.sources.clear();

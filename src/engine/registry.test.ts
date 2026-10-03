@@ -36,6 +36,9 @@ describe('effect registry and module definitions', () => {
       'velocityMod',
       'particleFlow',
       'flames',
+      'kaleidoscope',
+      'pixelSort',
+      'feedback',
     ];
 
     for (const id of expectedNewModules) {

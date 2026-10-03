@@ -2,6 +2,7 @@ import type { EffectDef } from './effects';
 import { blackwhite } from './modules/blackwhite';
 import { blend } from './modules/blend';
 import { blockGlitch } from './modules/blockGlitch';
+import { pixelSort } from './modules/pixelSort';
 import { bloom } from './modules/bloom';
 import { blur } from './modules/blur';
 import { chromaBleed } from './modules/chromaBleed';
@@ -43,9 +44,11 @@ import { shadowsHighlights } from './modules/shadowsHighlights';
 import { streak } from './modules/streak';
 import { subpixels } from './modules/subpixels';
 import { swirl } from './modules/swirl';
+import { kaleidoscope } from './modules/kaleidoscope';
 import { threshold } from './modules/threshold';
 import { timeMachine } from './modules/timeMachine';
 import { trails } from './modules/trails';
+import { feedback } from './modules/feedback';
 import { transform } from './modules/transform';
 import { velocityMod } from './modules/velocityMod';
 import { vibrance } from './modules/vibrance';
@@ -103,6 +106,7 @@ export const registry: EffectDef[] = [
   transform,
   resize,
   swirl,
+  kaleidoscope,
   wobble,
   displace,
   mapDisplace,
@@ -120,6 +124,7 @@ export const registry: EffectDef[] = [
 
   // Tape & Glitch
   blockGlitch,
+  pixelSort,
   glitchMachine,
   signalRot,
   headSwitch,
@@ -133,6 +138,7 @@ export const registry: EffectDef[] = [
 
   // Temporal
   trails,
+  feedback,
   echo,
   timeMachine,
   flames,
