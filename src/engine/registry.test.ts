@@ -44,6 +44,11 @@ describe('effect registry and module definitions', () => {
       'channelMixer',
       'emboss',
       'crystalMosaic',
+      'sharpen',
+      'tiltShift',
+      'godRays',
+      'lensFlare',
+      'bokeh',
     ];
 
     for (const id of expectedNewModules) {

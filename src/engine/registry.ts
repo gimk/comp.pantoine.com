@@ -4,6 +4,11 @@ import { blend } from './modules/blend';
 import { blockGlitch } from './modules/blockGlitch';
 import { pixelSort } from './modules/pixelSort';
 import { bloom } from './modules/bloom';
+import { sharpen } from './modules/sharpen';
+import { tiltShift } from './modules/tiltShift';
+import { godRays } from './modules/godRays';
+import { lensFlare } from './modules/lensFlare';
+import { bokeh } from './modules/bokeh';
 import { blur } from './modules/blur';
 import { chromaBleed } from './modules/chromaBleed';
 import { chromaticAberration } from './modules/chromaticAberration';
@@ -102,10 +107,15 @@ export const registry: EffectDef[] = [
   threshold,
 
   // Optics & Blur
+  sharpen,
   blur,
+  bokeh,
   directionalBlur,
   radialBlur,
+  tiltShift,
   bloom,
+  godRays,
+  lensFlare,
   halation,
   streak,
   lens,
