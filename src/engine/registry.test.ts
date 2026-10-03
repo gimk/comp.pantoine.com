@@ -49,6 +49,10 @@ describe('effect registry and module definitions', () => {
       'godRays',
       'lensFlare',
       'bokeh',
+      'polarCoordinates',
+      'ripple',
+      'cornerPin',
+      'tile',
     ];
 
     for (const id of expectedNewModules) {

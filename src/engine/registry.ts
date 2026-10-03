@@ -54,6 +54,10 @@ import { shadowsHighlights } from './modules/shadowsHighlights';
 import { streak } from './modules/streak';
 import { subpixels } from './modules/subpixels';
 import { swirl } from './modules/swirl';
+import { polarCoordinates } from './modules/polarCoordinates';
+import { ripple } from './modules/ripple';
+import { cornerPin } from './modules/cornerPin';
+import { tile } from './modules/tile';
 import { kaleidoscope } from './modules/kaleidoscope';
 import { threshold } from './modules/threshold';
 import { timeMachine } from './modules/timeMachine';
@@ -127,6 +131,10 @@ export const registry: EffectDef[] = [
   resize,
   swirl,
   kaleidoscope,
+  polarCoordinates,
+  ripple,
+  cornerPin,
+  tile,
   wobble,
   displace,
   mapDisplace,
