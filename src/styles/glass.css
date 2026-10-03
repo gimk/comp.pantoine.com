@@ -1465,8 +1465,9 @@ textarea,
  *
  * Level with the line that names the param. On a slider that is the label
  * line above the track, whose height is fixed below rather than left to
- * the font's metrics, so half of it is an exact figure. A typed field is a
- * single line, so the port simply centres on the row.
+ * the font's metrics, so half of it is an exact figure. A typed field, a
+ * menu, a toggle and a colour are a single line, so the port simply
+ * centres on the row.
  */
 .react-flow__handle.port-param {
   top: calc(var(--control-line) / 2);
@@ -1474,7 +1475,7 @@ textarea,
   height: 11px;
 }
 
-.param-row.is-field > .react-flow__handle.port-param {
+.param-row.is-one-line > .react-flow__handle.port-param {
   top: 50%;
 }
 

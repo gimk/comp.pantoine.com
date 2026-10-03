@@ -224,7 +224,15 @@ export const ParamRow: React.FC<{
 
   return (
     <div
-      className={'param-row' + (spec.kind === 'float' && spec.field ? ' is-field' : '') + (inactive ? ' is-inactive' : '')}
+      className={
+        'param-row' +
+        // A one-line control -- a free field, a menu, a toggle, a colour --
+        // centres its port on the row rather than on a slider's label line.
+        ((spec.kind === 'float' && spec.field) || spec.kind === 'enum' || spec.kind === 'bool' || spec.kind === 'color'
+          ? ' is-one-line'
+          : '') +
+        (inactive ? ' is-inactive' : '')
+      }
     >
       {handleId !== null && <Handle
         type="target"
