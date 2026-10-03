@@ -394,7 +394,7 @@ const Editor: React.FC = () => {
         <SnapGuides />
         {quickAdd?.wire && <PendingWire wire={quickAdd.wire} />}
         {!backgroundShowing && (
-          <Background variant={BackgroundVariant.Dots} gap={26} size={1.4} color="rgba(23,23,26,0.16)" />
+          <Background variant={BackgroundVariant.Dots} gap={26} size={1.4} color="rgba(var(--ink-rgb), 0.16)" />
         )}
       </ReactFlow>
       {quickAdd && <QuickAdd at={quickAdd} from={quickAdd.from} onClose={closeQuickAdd} />}

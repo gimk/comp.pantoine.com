@@ -96,8 +96,8 @@ export class ErrorBoundary extends Component<Props, State> {
             justifyContent: 'center',
             minHeight: '100vh',
             padding: '24px',
-            backgroundColor: '#e8e8ea',
-            color: '#17171a',
+            backgroundColor: 'var(--bg-base)',
+            color: 'var(--text-primary)',
             fontFamily: "'Inter', ui-sans-serif, system-ui, sans-serif",
           }}
         >
@@ -108,16 +108,16 @@ export class ErrorBoundary extends Component<Props, State> {
               width: '100%',
               padding: '28px',
               borderRadius: '20px',
-              boxShadow: '0 12px 32px rgba(23, 23, 26, 0.12)',
-              background: 'rgba(255, 255, 255, 0.65)',
+              boxShadow: '0 12px 32px rgba(var(--shadow-rgb), 0.12)',
+              background: 'rgba(var(--paper-rgb), 0.65)',
               backdropFilter: 'blur(20px)',
-              border: '1px solid rgba(255, 255, 255, 0.8)',
+              border: '1px solid rgba(var(--paper-rgb), 0.8)',
             }}
           >
             <h2 style={{ margin: '0 0 10px', fontSize: '18px', fontWeight: 600 }}>
               Something went wrong
             </h2>
-            <p style={{ margin: '0 0 16px', color: '#5d5d66', fontSize: '13px', lineHeight: 1.5 }}>
+            <p style={{ margin: '0 0 16px', color: 'var(--text-muted)', fontSize: '13px', lineHeight: 1.5 }}>
               An unexpected error occurred in the editor. You can reload the page, download the saved project, or reset it (a backup copy is kept in this browser).
             </p>
             {this.state.error && (
@@ -126,9 +126,9 @@ export class ErrorBoundary extends Component<Props, State> {
                   margin: '0 0 20px',
                   padding: '12px',
                   borderRadius: '10px',
-                  backgroundColor: 'rgba(23, 23, 26, 0.05)',
+                  backgroundColor: 'rgba(var(--ink-rgb), 0.05)',
                   fontSize: '11px',
-                  color: '#b02a2a',
+                  color: 'var(--danger-text)',
                   overflowX: 'auto',
                   whiteSpace: 'pre-wrap',
                   wordBreak: 'break-word',
@@ -146,9 +146,9 @@ export class ErrorBoundary extends Component<Props, State> {
                   flex: 1,
                   padding: '9px 14px',
                   borderRadius: '999px',
-                  border: '1px solid rgba(23, 23, 26, 0.15)',
-                  background: '#17171a',
-                  color: '#ffffff',
+                  border: '1px solid rgba(var(--ink-rgb), 0.15)',
+                  background: 'var(--accent)',
+                  color: 'var(--on-accent)',
                   fontSize: '13px',
                   fontWeight: 500,
                   cursor: 'pointer',
@@ -164,9 +164,9 @@ export class ErrorBoundary extends Component<Props, State> {
                   flex: 1,
                   padding: '9px 14px',
                   borderRadius: '999px',
-                  border: '1px solid rgba(23, 23, 26, 0.12)',
-                  background: 'rgba(255, 255, 255, 0.8)',
-                  color: '#17171a',
+                  border: '1px solid rgba(var(--ink-rgb), 0.12)',
+                  background: 'rgba(var(--paper-rgb), 0.8)',
+                  color: 'var(--text-primary)',
                   fontSize: '13px',
                   fontWeight: 500,
                   cursor: 'pointer',
@@ -183,9 +183,9 @@ export class ErrorBoundary extends Component<Props, State> {
                   flex: 1,
                   padding: '9px 14px',
                   borderRadius: '999px',
-                  border: '1px solid rgba(23, 23, 26, 0.12)',
-                  background: 'rgba(255, 255, 255, 0.8)',
-                  color: '#b02a2a',
+                  border: '1px solid rgba(var(--ink-rgb), 0.12)',
+                  background: 'rgba(var(--paper-rgb), 0.8)',
+                  color: 'var(--danger-text)',
                   fontSize: '13px',
                   fontWeight: 500,
                   cursor: 'pointer',

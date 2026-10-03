@@ -3,6 +3,9 @@ import { ArrowRight, CircleQuestionMark, ExternalLink, GraduationCap, Sparkles, 
 import { useWelcome } from '../state/welcome';
 import { SHORTCUT_COLUMNS } from './shortcutList';
 import { useModalDialog } from './useModalDialog';
+import { ThemeToggle } from './ThemeToggle';
+// Named, so the bundle carries the version and not the rest of the manifest.
+import { version } from '../../package.json';
 
 export const AboutModal: React.FC = () => {
   const [isOpen, setIsOpen] = useState(false);
@@ -30,6 +33,8 @@ export const AboutModal: React.FC = () => {
           <CircleQuestionMark size={14} aria-hidden="true" />
           <span>Shortcuts &amp; info</span>
         </button>
+        <span className="toolbar-sep" />
+        <ThemeToggle />
       </div>
 
       {isOpen && (
@@ -50,6 +55,7 @@ export const AboutModal: React.FC = () => {
               <div className="about-brand-row">
                 <span className="brand about-brand-pill">COMP</span>
                 <span className="about-badge">Studio</span>
+                <span className="about-version">v{version}</span>
               </div>
               <button
                 type="button"
