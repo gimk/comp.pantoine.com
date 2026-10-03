@@ -7,6 +7,7 @@ import { blur } from './modules/blur';
 import { chromaBleed } from './modules/chromaBleed';
 import { chromaticAberration } from './modules/chromaticAberration';
 import { chromaKey } from './modules/chromaKey';
+import { colorBalance } from './modules/colorBalance';
 import { directionalBlur } from './modules/directionalBlur';
 import { displace } from './modules/displace';
 import { dither } from './modules/dither';
@@ -15,6 +16,7 @@ import { echo } from './modules/echo';
 import { flames } from './modules/flames';
 import { fmScanlines } from './modules/fmScanlines';
 import { edgeDetect } from './modules/edgeDetect';
+import { exposure } from './modules/exposure';
 import { gradientMap } from './modules/gradientMap';
 import { grain } from './modules/grain';
 import { halation } from './modules/halation';
@@ -22,6 +24,7 @@ import { halftone } from './modules/halftone';
 import { headSwitch } from './modules/headSwitch';
 import { humBar } from './modules/humBar';
 import { interlace } from './modules/interlace';
+import { invert } from './modules/invert';
 import { lens } from './modules/lens';
 import { levels } from './modules/levels';
 import { lineJitter } from './modules/lineJitter';
@@ -36,6 +39,7 @@ import { ruttEtra } from './modules/ruttEtra';
 import { saturation } from './modules/saturation';
 import { scanlines } from './modules/scanlines';
 import { shadowMask } from './modules/shadowMask';
+import { shadowsHighlights } from './modules/shadowsHighlights';
 import { streak } from './modules/streak';
 import { subpixels } from './modules/subpixels';
 import { swirl } from './modules/swirl';
@@ -44,7 +48,9 @@ import { timeMachine } from './modules/timeMachine';
 import { trails } from './modules/trails';
 import { transform } from './modules/transform';
 import { velocityMod } from './modules/velocityMod';
+import { vibrance } from './modules/vibrance';
 import { vignette } from './modules/vignette';
+import { whiteBalance } from './modules/whiteBalance';
 import { wobble } from './modules/wobble';
 import { ramp } from './modules/ramp';
 import { resize } from './modules/resize';
@@ -63,8 +69,14 @@ import { glitchMachine } from './modules/glitchMachine';
 export const registry: EffectDef[] = [
   // Color & Tone
   levels,
+  exposure,
+  shadowsHighlights,
   saturation,
+  vibrance,
+  whiteBalance,
+  colorBalance,
   blackwhite,
+  invert,
 
   // Stylize
   dither,
