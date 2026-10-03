@@ -2,4 +2,5 @@
 # CRLF on the way to the Pages deploy.
 * text=auto eol=lf
 *.png binary
+*.mp4 binary
 *.svg text eol=lf
