@@ -46,8 +46,8 @@ export type ModulatorDef = {
    * value at `at`: what is wired into it, evaluated then, or the typed
    * number. Inputs are pure functions of time, so this keeps the node one
    * too, and a render replays it exactly. Used in place of `sample` when
-   * present. An Image Statistic is the exception: it only knows its latest
-   * reading, so a node looking back through one sees it as live.
+   * present. An Image Statistic answers from the readings it has kept (see
+   * statistics.ts), so looking back through one works the same way.
    */
   sampleAt?: (
     read: (key: string, at: number) => number,
@@ -574,7 +574,7 @@ export const statistic: ModulatorDef = {
   picture: true,
   ports: false,
   params: [{ kind: 'enum', key: 'statistic', label: 'Statistic', options: [...STATISTICS], default: 0 }],
-  sample: (params, _time, _seed, nodeId) => readStatistic(nodeId, Math.round(num(params.statistic, 0))),
+  sample: (params, time, _seed, nodeId) => readStatistic(nodeId, Math.round(num(params.statistic, 0)), time),
   // It follows whatever it is measuring, which may be a video playing.
   moving: () => true,
   bounds: () => [0, 1],

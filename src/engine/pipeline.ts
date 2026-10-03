@@ -881,7 +881,7 @@ export class Pipeline {
   private measure(nodeId: string, picture: WebGLTexture | null, request: RenderRequest): void {
     const gl = this.gl;
     if (!picture) {
-      setStatistics(nodeId, [0, 0, 0, 0, 0]);
+      setStatistics(nodeId, [0, 0, 0, 0, 0], request.time);
       return;
     }
     if (!this.statTarget) this.statTarget = createTarget(gl, STAT_SIZE, STAT_SIZE, this.feedbackFormat);
@@ -893,12 +893,12 @@ export class Pipeline {
     if (target.format === 'rgba16f') {
       const pixels = new Float32Array(STAT_SIZE * STAT_SIZE * 4);
       gl.readPixels(0, 0, STAT_SIZE, STAT_SIZE, gl.RGBA, gl.FLOAT, pixels);
-      setStatistics(nodeId, summarize(pixels));
+      setStatistics(nodeId, summarize(pixels), request.time);
     } else {
       const pixels = new Uint8Array(STAT_SIZE * STAT_SIZE * 4);
       gl.readPixels(0, 0, STAT_SIZE, STAT_SIZE, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
       // Alpha is tested for zero only, so it can stay on the 0..255 scale.
-      setStatistics(nodeId, summarize(pixels, 255));
+      setStatistics(nodeId, summarize(pixels, 255), request.time);
     }
   }
 

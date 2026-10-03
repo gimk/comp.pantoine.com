@@ -70,7 +70,7 @@ const measureAll = (): void => {
     // Nothing to measure: the reading goes back to 0 rather than holding
     // on to whatever was wired in before.
     if (!chain || !images || !videos) {
-      setStatistics(nodeId, [0, 0, 0, 0, 0]);
+      setStatistics(nodeId, [0, 0, 0, 0, 0], time);
       continue;
     }
     const target = ensurePipeline();

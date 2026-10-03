@@ -1,5 +1,5 @@
 /**
- * What each Image Statistic node last measured, by node id.
+ * What each Image Statistic node has measured lately, by node id.
  *
  * The one place a picture turns back into a number -- Blender's Attribute
  * Statistic, for pixels. The renderer measures the picture as part of the
@@ -15,17 +15,83 @@ export const STATISTICS = ['Mean', 'Minimum', 'Maximum', 'Range', 'Std Dev'] as 
 /** One measurement: a value per entry of `STATISTICS`. */
 export type Statistics = [number, number, number, number, number];
 
-const measured = new Map<string, Statistics>();
+/**
+ * Every node's recent readings, oldest first, each stamped with the clock
+ * time of the frame it was measured for.
+ *
+ * Kept so a modulator that looks back -- Smooth, Sample & Hold, Envelope
+ * -- can ask what the statistic was a moment ago, as it asks any other
+ * signal. The window covers the furthest any of them looks back. Time
+ * going backwards by more than a stutter -- a seek, a reset, an export
+ * starting from 0, the clock wrapping -- is a new timeline, and the old
+ * readings would only lie about it, so they go.
+ */
+const history = new Map<string, { time: number; stats: Statistics }[]>();
 
-export const setStatistics = (nodeId: string, stats: Statistics): void => {
-  measured.set(nodeId, stats);
+/** Seconds of readings kept: past the longest lookback (Smooth's 10 s). */
+export const HISTORY_SECONDS = 12;
+/** A cap on readings, whatever the frame rate. */
+const MAX_READINGS = 2048;
+/**
+ * How far back a reading may land before it counts as a new timeline.
+ * Viewers each measure on their own frame, so readings can arrive a
+ * frame or two out of order; those are slotted in, not a reset.
+ */
+const REWIND = 0.5;
+
+export const setStatistics = (nodeId: string, stats: Statistics, time = 0): void => {
+  let readings = history.get(nodeId);
+  if (!readings) {
+    readings = [];
+    history.set(nodeId, readings);
+  }
+  const last = readings[readings.length - 1];
+  if (last && time < last.time - REWIND) readings.length = 0;
+
+  // In time order; one reading per moment, the newest measurement winning.
+  let at = readings.length;
+  while (at > 0 && readings[at - 1].time > time) at -= 1;
+  if (at > 0 && readings[at - 1].time === time) readings[at - 1] = { time, stats };
+  else readings.splice(at, 0, { time, stats });
+
+  const newest = readings[readings.length - 1].time;
+  let stale = 0;
+  while (stale < readings.length - 1 && readings[stale].time < newest - HISTORY_SECONDS) stale += 1;
+  stale = Math.max(stale, readings.length - MAX_READINGS);
+  if (stale > 0) readings.splice(0, stale);
 };
 
-/** A statistic of what the node last measured; 0 before it has measured anything. */
-export const readStatistic = (nodeId: string | undefined, index: number): number => {
+/**
+ * A statistic of what the node measured at `time`: between two readings,
+ * the line between them; past the newest, the newest -- the live reading
+ * -- and before the oldest, the oldest. Without a time, the newest. 0
+ * before it has measured anything.
+ */
+export const readStatistic = (nodeId: string | undefined, index: number, time?: number): number => {
   if (nodeId === undefined) return 0;
-  const stats = measured.get(nodeId);
-  return stats ? stats[Math.min(STATISTICS.length - 1, Math.max(0, index))] : 0;
+  const readings = history.get(nodeId);
+  if (!readings || readings.length === 0) return 0;
+  const k = Math.min(STATISTICS.length - 1, Math.max(0, index));
+  const newest = readings[readings.length - 1];
+  if (time === undefined || time >= newest.time) return newest.stats[k];
+  if (time <= readings[0].time) return readings[0].stats[k];
+  // The first reading after `time`, by halving.
+  let lo = 0;
+  let hi = readings.length - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (readings[mid].time <= time) lo = mid;
+    else hi = mid;
+  }
+  const a = readings[lo];
+  const b = readings[hi];
+  const t = (time - a.time) / (b.time - a.time);
+  return a.stats[k] + (b.stats[k] - a.stats[k]) * t;
+};
+
+/** Forget a node's readings -- for tests, and a node that is gone. */
+export const clearStatistics = (nodeId: string): void => {
+  history.delete(nodeId);
 };
 
 /**
