@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import type { Rgb, Vec2 } from '../engine/effects';
 import { clockSeconds } from '../engine/clock';
+import { setScrubbing } from '../state/activity';
 
 /** Decimal places implied by a step, so 0.01 shows two and 1 shows none. */
 const decimalsForStep = (step: number): number => {
@@ -323,6 +324,7 @@ const useScrub = (
       if (!current) return;
       const dx = event.clientX - current.x;
       if (!current.moved && Math.abs(dx) < SCRUB_THRESHOLD) return;
+      if (!current.moved) setScrubbing(true);
       current.moved = true;
       const speed = event.shiftKey ? 10 : event.altKey ? 0.1 : 1;
       const increment = current.rate * speed;
@@ -334,6 +336,7 @@ const useScrub = (
     onPointerUp: (event) => {
       const current = drag.current;
       drag.current = null;
+      setScrubbing(false);
       if (event.currentTarget.hasPointerCapture(event.pointerId)) {
         event.currentTarget.releasePointerCapture(event.pointerId);
       }
@@ -341,6 +344,7 @@ const useScrub = (
     },
     onPointerCancel: () => {
       drag.current = null;
+      setScrubbing(false);
     },
   };
 };

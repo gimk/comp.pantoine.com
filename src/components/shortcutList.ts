@@ -11,8 +11,8 @@
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 
 /** Ctrl on Windows and Linux, Cmd on a Mac: the chords take either. */
-const MOD = isMac ? '⌘' : 'Ctrl';
-const ALT = isMac ? '⌥' : 'Alt';
+export const MOD = isMac ? '⌘' : 'Ctrl';
+export const ALT = isMac ? '⌥' : 'Alt';
 
 export interface Shortcut {
   label: string;

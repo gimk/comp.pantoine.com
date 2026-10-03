@@ -2799,6 +2799,94 @@ textarea,
 }
 
 /* --------------------------------------------------------------------------
+   Shortcut hints
+
+   Bottom centre, under everything else: plain type on the canvas rather
+   than another glass pill, so it reads as a caption to what is happening
+   and not as one more panel asking to be used.
+   -------------------------------------------------------------------------- */
+
+.hint-bar {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  z-index: 5;
+  transform: translateX(-50%);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.hint-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  /* Just enough of a wash to keep the type legible over a Background. */
+  background: rgba(var(--paper-rgb), 0.55);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  color: var(--text-dim);
+  font-size: 11px;
+  animation: hintIn 0.22s ease-out;
+}
+
+.hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: color 0.12s ease;
+}
+
+.hint-keys {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.hint kbd {
+  min-width: 16px;
+  padding: 0 4px;
+  border: 1px solid rgba(var(--ink-rgb), 0.12);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 15px;
+  text-align: center;
+  color: var(--text-muted);
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+
+/* The modifier being held right now, mid-drag: what it does is happening. */
+.hint.is-held {
+  color: var(--text-primary);
+}
+
+.hint.is-held kbd {
+  border-color: transparent;
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+@keyframes hintIn {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hint-bar-row {
+    animation: none;
+  }
+}
+
+/* The transport takes the bottom edge on a narrow screen. */
+@media (max-width: 650px) {
+  .hint-bar {
+    display: none;
+  }
+}
+
+/* --------------------------------------------------------------------------
    Narrow screens
 
 

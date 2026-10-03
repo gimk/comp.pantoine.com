@@ -43,6 +43,7 @@ import { ExportNode } from './components/ExportNode';
 import { SnapGuides } from './components/SnapGuides';
 import { Toolbar } from './components/Toolbar';
 import { Transport } from './components/Transport';
+import { HintBar } from './components/HintBar';
 import { AboutModal } from './components/AboutModal';
 import { PresetModal } from './components/PresetModal';
 import { WelcomeModal } from './components/WelcomeModal';
@@ -438,6 +439,7 @@ export const App: React.FC = () => (
       </main>
       <Toolbar />
       <Transport />
+      <HintBar />
       <AboutModal />
       <PresetModal />
       <WelcomeModal />
