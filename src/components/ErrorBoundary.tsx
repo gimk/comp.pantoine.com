@@ -98,7 +98,7 @@ export class ErrorBoundary extends Component<Props, State> {
             padding: '24px',
             backgroundColor: 'var(--bg-base)',
             color: 'var(--text-primary)',
-            fontFamily: "'Inter', ui-sans-serif, system-ui, sans-serif",
+            fontFamily: 'var(--font-ui)',
           }}
         >
           <div
@@ -132,7 +132,7 @@ export class ErrorBoundary extends Component<Props, State> {
                   overflowX: 'auto',
                   whiteSpace: 'pre-wrap',
                   wordBreak: 'break-word',
-                  fontFamily: 'monospace',
+                  fontFamily: 'var(--font-mono)',
                 }}
               >
                 {this.state.error.message}

@@ -38,6 +38,8 @@
   --ink-rgb: 23, 23, 26;
   --paper-rgb: 255, 255, 255;
   --paper-solid: #ffffff;
+  /* What a hand grabs: switch knobs and slider thumbs. */
+  --knob: #ffffff;
   --rim-rgb: 255, 255, 255;
   --ring-rgb: 23, 23, 26;
   --shadow-rgb: 23, 23, 26;
@@ -87,7 +89,16 @@
   --radius-md: 14px;
   --radius-sm: 9px;
 
-  --font-ui: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  /*
+   * Three faces, each with one job. Bricolage Grotesque carries the voice:
+   * the name, module titles, dialog headings -- the few words big enough
+   * for its quirks to read as character rather than noise. Instrument Sans
+   * does every small label, quiet enough not to argue with it. DM Mono
+   * takes the numbers and keys, so a value that changes keeps its width.
+   */
+  --font-display: 'Bricolage Grotesque', 'Instrument Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-ui: 'Instrument Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'DM Mono', ui-monospace, 'Cascadia Code', 'SF Mono', Menlo, Consolas, monospace;
 
   --gutter: 18px;
 
@@ -114,6 +125,8 @@
   --ink-rgb: 236, 236, 240;
   --paper-rgb: 36, 36, 41;
   --paper-solid: #3a3a41;
+  /* A knob in the sheet's own grey vanishes into an off track; it has to stand out. */
+  --knob: #b4b4bc;
   /* A white catchlight on a dark sheet glares; a shade above the sheet is enough. */
   --rim-rgb: 48, 48, 54;
   --ring-rgb: 0, 0, 0;
@@ -594,7 +607,7 @@ textarea,
   place-items: center;
   flex: 1;
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
 }
 
@@ -1854,7 +1867,8 @@ textarea,
    value column is fixed so both sliders stay the same length. */
 .control-axis {
   display: grid;
-  grid-template-columns: 10px 1fr 36px;
+  /* Room for six monospaced characters: -0.005. */
+  grid-template-columns: 10px 1fr 42px;
   align-items: center;
   gap: 8px;
 }
@@ -1876,7 +1890,7 @@ textarea,
   height: 13px;
   border: 1px solid rgba(var(--ink-rgb), 0.2);
   border-radius: 50%;
-  background: var(--paper-solid);
+  background: var(--knob);
   box-shadow: 0 1px 3px rgba(var(--shadow-rgb), 0.25);
   cursor: grab;
 }
@@ -1886,7 +1900,7 @@ textarea,
   height: 13px;
   border: 1px solid rgba(var(--ink-rgb), 0.2);
   border-radius: 50%;
-  background: var(--paper-solid);
+  background: var(--knob);
   box-shadow: 0 1px 3px rgba(var(--shadow-rgb), 0.25);
   cursor: grab;
 }
@@ -1934,12 +1948,14 @@ textarea,
   width: 14px;
   height: 14px;
   border-radius: 50%;
-  background: var(--paper-solid);
+  background: var(--knob);
   box-shadow: 0 1px 2px rgba(var(--shadow-rgb), 0.3);
-  transition: transform 0.15s ease;
+  transition: transform 0.15s ease, background 0.15s ease;
 }
 
 .control-toggle.is-on .control-toggle-knob {
+  /* On an ink track: white in the light, near-black in the dark. */
+  background: var(--on-accent);
   transform: translateX(12px);
 }
 
@@ -2554,7 +2570,7 @@ textarea,
 
 .export-recipe-tag {
   font-size: 10px;
-  font-weight: 700;
+  font-weight: 600;
   letter-spacing: 0.05em;
   padding: 2px 6px;
   border-radius: 4px;
@@ -3455,7 +3471,8 @@ textarea,
   text-align: center;
   font-family: var(--font-mono);
   font-size: 10px;
-  font-weight: 600;
+  /* DM Mono stops at 500; asking for more gets a smeared, faked bold. */
+  font-weight: 500;
   line-height: 1.4;
   padding: 1px 5px;
   border-radius: 4px;
@@ -4074,4 +4091,62 @@ textarea,
 
 .node-crashed-retry:hover {
   background: rgba(var(--paper-rgb), 0.85);
+}
+
+/* --------------------------------------------------------------------------
+   Typefaces
+
+   Last in the file on purpose: buttons and fields reset their font with
+   `font: inherit`, and these have to win over that wherever it was set.
+   -------------------------------------------------------------------------- */
+
+/* Bricolage's optical size is pinned rather than left to follow the font
+   size: below about 20 it widens and gets chunky, which at title sizes
+   reads as clumsy, not as character. */
+.brand,
+.render-title,
+.node-title,
+.preset-modal-title,
+.about-title,
+.shortcut-section-title,
+.welcome-title {
+  font-family: var(--font-display);
+  font-optical-sizing: none;
+  font-variation-settings: 'opsz' 24;
+}
+
+/* The name goes the other way: the font's widest, heaviest cut. At the
+   smallest optical size the letters open out and the counters fill in,
+   which is the stamp it wants to be. */
+.brand {
+  font-weight: 800;
+  font-variation-settings: 'opsz' 12;
+}
+
+.toolbar-pill > .brand {
+  font-size: 17px;
+  letter-spacing: 0.06em;
+}
+
+/* Module titles lean the same way, less far: small caps at the widest
+   optical size, so a card's name has some stance rather than reading as
+   one more label. */
+.node-title {
+  font-variation-settings: 'opsz' 12;
+  letter-spacing: 0.05em;
+}
+
+.control-value,
+.control-value-button,
+.control-value-edit,
+.control-field,
+.stat-readout,
+.render-info,
+.render-fps,
+.node-meta-detail,
+.image-badge,
+.export-progress-status,
+.about-version,
+.deck-digit {
+  font-family: var(--font-mono);
 }

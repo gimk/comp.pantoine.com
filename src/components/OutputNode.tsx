@@ -290,7 +290,7 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
               : 'Idle'}
         </span>
         {isRenderMode && asset && (
-          <span className="render-fps" style={{ color: 'var(--port-render)', fontWeight: 600 }}>
+          <span className="render-fps" style={{ color: 'var(--port-render)', fontWeight: 500 }}>
             {formatBytes(asset.blob.size)}
           </span>
         )}
