@@ -1,11 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { Edge } from '@xyflow/react';
 import { MOD_OUTPUT, paramPort, type AppNode } from './graph';
-import { isGroup, planGroup, realWire } from './groups';
+import { chainEnds, isGroup, paramSpecsOf, planGroup, realWire } from './groups';
 import { capturePreset, findPreset, presetGraph, usePresets } from './presets';
 import { BUILTIN_PRESETS } from './builtinPresets';
-import { getEffect } from '../engine/registry';
-import { paramsOf } from '../engine/effects';
 import { deserializeGraph, serializeGraph } from './document';
 import { useGraph } from './store';
 
@@ -296,14 +294,26 @@ describe('built-in presets', () => {
     const graph = presetGraph(preset)!;
     for (const param of preset.exposed) {
       const node = graph.nodes.find((candidate) => candidate.id === param.node);
-      expect(node?.type).toBe('effect');
-      const def = node?.type === 'effect' ? getEffect(node.data.effectId) : undefined;
-      expect(def && paramsOf(def).some((spec) => spec.key === param.key)).toBe(true);
+      expect(node && paramSpecsOf(node).some((spec) => spec.key === param.key)).toBe(true);
     }
   });
 
   it('are found by id beside the user’s own', () => {
     expect(findPreset('builtin:toon')?.name).toBe('Toon');
     expect(findPreset('no-such-preset')).toBeUndefined();
+  });
+});
+
+describe('the Slit-Scan preset', () => {
+  it('drops onto a wire, entering and leaving through its Time Machine', () => {
+    useGraph.setState({ nodes: [], edges: [] });
+    const preset = findPreset('builtin:slit-scan')!;
+    useGraph.getState().insertPreset(presetGraph(preset)!, { name: preset.name, exposed: preset.exposed });
+    const nodes = useGraph.getState().nodes;
+    const group = nodes.find(isGroup)!;
+    const ends = chainEnds(nodes, group);
+    const time = nodes.find((node) => node.type === 'effect' && node.data.effectId === 'timeMachine')!;
+    expect(ends).toEqual({ entry: time.id, exit: time.id });
+    expect(group.data.exposed).toHaveLength(3);
   });
 });

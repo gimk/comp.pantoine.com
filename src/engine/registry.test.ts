@@ -53,6 +53,9 @@ describe('effect registry and module definitions', () => {
       'ripple',
       'cornerPin',
       'tile',
+      'frameHold',
+      'motionDetect',
+      'datamosh',
     ];
 
     for (const id of expectedNewModules) {
@@ -144,3 +147,12 @@ describe('effect registry and module definitions', () => {
   });
 });
 
+
+describe('temporal modules that keep a frame', () => {
+  it.each(['frameHold', 'motionDetect'])('%s keeps its first pass as history, so its overlay never feeds back', (id) => {
+    const def = getEffect(id)!;
+    expect(def.feedback).toBe(true);
+    expect(def.feedbackPass).toBe(0);
+    expect(passesOf(def).length).toBeGreaterThan(1);
+  });
+});

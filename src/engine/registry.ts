@@ -62,6 +62,9 @@ import { kaleidoscope } from './modules/kaleidoscope';
 import { threshold } from './modules/threshold';
 import { timeMachine } from './modules/timeMachine';
 import { trails } from './modules/trails';
+import { frameHold } from './modules/frameHold';
+import { motionDetect } from './modules/motionDetect';
+import { datamosh } from './modules/datamosh';
 import { feedback } from './modules/feedback';
 import { transform } from './modules/transform';
 import { velocityMod } from './modules/velocityMod';
@@ -166,6 +169,9 @@ export const registry: EffectDef[] = [
 
   // Temporal
   trails,
+  frameHold,
+  motionDetect,
+  datamosh,
   feedback,
   echo,
   timeMachine,
