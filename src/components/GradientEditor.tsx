@@ -306,7 +306,11 @@ export const GradientEditor: React.FC<GradientEditorProps> = ({ nodeId, params, 
           <div className="control-row">
             <span className="control-label">Stop {activeIdx + 1} of {stopCount}</span>
             <div className="gradient-active-controls">
-              <span className="control-swatch nodrag" title="Change stop color">
+              <span
+                className="control-swatch nodrag"
+                title="Change stop color"
+                style={{ '--swatch': toHex(activeStop.color) } as React.CSSProperties}
+              >
                 <input
                   type="color"
                   aria-label={`Stop ${activeIdx + 1} color`}

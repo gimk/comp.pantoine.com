@@ -418,7 +418,7 @@ export const ColorField: React.FC<{
 }> = ({ label, value, onChange }) => (
   <label className="control control-inline">
     <span className="control-label">{label}</span>
-    <span className="control-swatch nodrag">
+    <span className="control-swatch nodrag" style={{ '--swatch': toHex(value) } as React.CSSProperties}>
       <input type="color" value={toHex(value)} onChange={(e) => onChange(fromHex(e.target.value))} />
     </span>
   </label>

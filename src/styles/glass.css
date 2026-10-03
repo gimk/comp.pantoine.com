@@ -1877,27 +1877,44 @@ textarea,
   padding: 3px 7px;
 }
 
-/* The native colour input cannot be styled, so it is sized to fill a
-   rounded chip that can be, and clipped by it. */
+/* The native colour input draws its own padding and inner border, which
+   differ per browser and showed as dark bars. So the chip paints the colour
+   itself (via --swatch) and the input sits invisibly on top to open the
+   picker. */
 .control-swatch {
   position: relative;
   overflow: hidden;
   flex: 0 0 auto;
   width: 28px;
   height: 16px;
-  border: 1px solid var(--hairline);
   border-radius: var(--radius-sm);
+  background: var(--swatch, transparent);
+  box-shadow:
+    inset 0 0 0 1px var(--hairline),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18);
   cursor: pointer;
+  transition: box-shadow 120ms ease;
+}
+
+.control-swatch:hover {
+  box-shadow:
+    inset 0 0 0 1px var(--text-dim),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+
+.control-swatch:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .control-swatch input[type='color'] {
   position: absolute;
-  inset: -4px;
-  width: calc(100% + 8px);
-  height: calc(100% + 8px);
+  inset: 0;
+  width: 100%;
+  height: 100%;
   padding: 0;
   border: 0;
-  background: none;
+  opacity: 0;
   cursor: pointer;
 }
 
