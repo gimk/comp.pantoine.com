@@ -243,9 +243,18 @@ type ViewerOptions = {
   /** Working size when no Render node upstream sets one. */
   liveWorkingSize?: (canvas: HTMLCanvasElement) => number;
   onFps: (fps: number | null) => void;
-  /** After the drawing buffer is resized to its layout size. */
+  /** After the canvas's layout size changes. */
   onResize?: () => void;
+  /**
+   * How much larger than its layout size the canvas is seen -- the graph's
+   * zoom, for a viewer on a card. The drawing buffer grows with it, up to
+   * the picture's own working pixels, so zooming in on a viewer shows the
+   * frame as rendered rather than a small buffer stretched.
+   */
+  displayScale?: number;
 };
+
+type Size = { width: number; height: number };
 
 /**
  * A GL pipeline drawing one chain into whichever canvas it is handed.
@@ -256,7 +265,15 @@ type ViewerOptions = {
  * new one, rather than keeping a pipeline bound to a canvas that has left
  * the page.
  */
-export const useViewerPipeline = ({ view, live, fitMode, liveWorkingSize, onFps, onResize }: ViewerOptions) => {
+export const useViewerPipeline = ({
+  view,
+  live,
+  fitMode,
+  liveWorkingSize,
+  onFps,
+  onResize,
+  displayScale = 1,
+}: ViewerOptions) => {
   const [canvas, setCanvas] = useState<HTMLCanvasElement | null>(null);
   const [unsupported, setUnsupported] = useState(false);
   const [contextLost, setContextLost] = useState(false);
@@ -280,8 +297,32 @@ export const useViewerPipeline = ({ view, live, fitMode, liveWorkingSize, onFps,
 
   // Read through a ref so the draw callback can stay stable: it is called
   // from the frame loop, the resize observer and context restore alike.
-  const latest = useRef({ chain, fitMode, liveWorkingSize, onFps, onResize });
-  latest.current = { chain, fitMode, liveWorkingSize, onFps, onResize };
+  const latest = useRef({ chain, fitMode, liveWorkingSize, onFps, onResize, displayScale });
+  latest.current = { chain, fitMode, liveWorkingSize, onFps, onResize, displayScale };
+  // The canvas's layout size, from the resize observer.
+  const boxRef = useRef<Size | null>(null);
+
+  /*
+   * The drawing buffer: the layout size at the screen's pixel density, and
+   * more while the canvas is seen magnified -- but never past `work`, the
+   * frame the chain actually renders, since a bigger buffer would only
+   * stretch the same pixels. At its baseline the frame is shrunk into the
+   * buffer through the pipeline's mip chain, which keeps fine patterns from
+   * turning to moiré; growing it only ever takes it closer to 1:1.
+   */
+  const sizeBuffer = (target: HTMLCanvasElement, work: Size | null) => {
+    const box = boxRef.current;
+    if (!box || box.width === 0 || box.height === 0) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, MAX_DPR);
+    const wanted = dpr * latest.current.displayScale;
+    const cap = work ? Math.min(work.width / box.width, work.height / box.height) : dpr;
+    const density = Math.max(dpr, Math.min(wanted, cap));
+    const width = Math.max(1, Math.round(box.width * density));
+    const height = Math.max(1, Math.round(box.height * density));
+    if (target.width === width && target.height === height) return;
+    target.width = width;
+    target.height = height;
+  };
 
   const draw = useCallback(() => {
     const target = canvasRef.current;
@@ -292,6 +333,7 @@ export const useViewerPipeline = ({ view, live, fitMode, liveWorkingSize, onFps,
     const images = current ? imagesForPlan(current.plan) : null;
     const videos = current ? videosForPlan(current.plan) : null;
     if (!current || !images || !videos) {
+      sizeBuffer(target, null);
       pipeline.clear(target.width, target.height);
       return;
     }
@@ -346,6 +388,13 @@ export const useViewerPipeline = ({ view, live, fitMode, liveWorkingSize, onFps,
     const maxWorkingSize = settings
       ? Math.max(16, Math.round(maxDim * settings.scale))
       : workingSize?.(target) ?? MAX_WORKING_SIZE;
+
+    // The output's working size, worked out as the pipeline does.
+    const workScale = frame ? (settings ? settings.scale : Math.min(1, maxWorkingSize / maxDim)) : 0;
+    sizeBuffer(
+      target,
+      frame ? { width: frame.width * workScale, height: frame.height * workScale } : null,
+    );
 
     driveVideos(videos, current, time);
 
@@ -430,24 +479,21 @@ export const useViewerPipeline = ({ view, live, fitMode, liveWorkingSize, onFps,
   }, [canvas, draw]);
 
   /*
-   * Match the drawing buffer to the canvas's layout size.
+   * Track the canvas's layout size; the draw sizes the buffer from it.
    *
    * `contentRect` rather than a bounding rect: a node sits inside React
    * Flow's transformed viewport, so a bounding rect reports the zoomed size
-   * and every scroll of the wheel would reallocate the buffers. Layout size
-   * is stable across zoom, and the browser scales the result.
+   * and every scroll of the wheel would reallocate the buffers. Zoom comes
+   * in as `displayScale` instead, in a few coarse steps.
    */
   useEffect(() => {
     if (!canvas) return;
     const observer = new ResizeObserver((entries) => {
       const box = entries[0]?.contentRect;
       if (!box) return;
-      const dpr = Math.min(window.devicePixelRatio || 1, MAX_DPR);
-      const width = Math.max(1, Math.round(box.width * dpr));
-      const height = Math.max(1, Math.round(box.height * dpr));
-      if (canvas.width === width && canvas.height === height) return;
-      canvas.width = width;
-      canvas.height = height;
+      const last = boxRef.current;
+      if (last && last.width === box.width && last.height === box.height) return;
+      boxRef.current = { width: box.width, height: box.height };
       latest.current.onResize?.();
       draw();
     });
@@ -458,7 +504,7 @@ export const useViewerPipeline = ({ view, live, fitMode, liveWorkingSize, onFps,
   // Redraw when something the picture depends on changes.
   useEffect(() => {
     draw();
-  }, [draw, signature, fitMode]);
+  }, [draw, signature, fitMode, displayScale]);
 
   // Shared video elements follow the transport while this viewer is live.
   useEffect(() => {

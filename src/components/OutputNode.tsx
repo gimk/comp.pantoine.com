@@ -1,5 +1,14 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Handle, Position, useReactFlow, useUpdateNodeInternals, type Node, type NodeProps } from '@xyflow/react';
+import {
+  Handle,
+  Position,
+  useReactFlow,
+  useStore,
+  useUpdateNodeInternals,
+  type Node,
+  type NodeProps,
+  type ReactFlowState,
+} from '@xyflow/react';
 import { useGraph } from '../state/store';
 import { DEFAULT_PREVIEW_WIDTH, outputFrameOf, type OutputNodeData } from '../state/graph';
 import { isRendering } from '../state/renderJobs';
@@ -20,6 +29,17 @@ const MAX_PREVIEW_WIDTH = 880;
  * A portrait ends up a narrow card instead of a tower.
  */
 const MAX_PREVIEW_HEIGHT = 520;
+
+/**
+ * The graph's zoom, rounded up to half-octave steps (1, 1.41, 2...): the
+ * viewer's buffer follows the zoom so a close look shows real pixels, and
+ * the steps are what keep a turn of the wheel from reallocating it on
+ * every tick. Zoomed out it stays at its usual size.
+ */
+const zoomStep = (state: ReactFlowState): number => {
+  const zoom = state.transform[2];
+  return zoom <= 1 ? 1 : 2 ** (Math.ceil(Math.log2(zoom) * 2) / 2);
+};
 
 const assetMediaStyle: React.CSSProperties = {
   objectFit: 'contain',
@@ -67,11 +87,14 @@ export const OutputNode: React.FC<NodeProps<Node<OutputNodeData, 'renderOutput'>
   const [fps, setFps] = useState<number | null>(null);
   const onResize = useCallback(() => updateNodeInternals(id), [id, updateNodeInternals]);
 
+  const displayScale = useStore(zoomStep);
+
   const { canvasRef, unsupported, contextLost, animated, still, playing, looping } = useViewerPipeline({
     view,
     live: !isRenderMode,
     onFps: setFps,
     onResize,
+    displayScale,
   });
 
   // What the chain puts out -- the source's size unless a Resize/Crop changed it.
