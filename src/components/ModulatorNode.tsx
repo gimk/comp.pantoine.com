@@ -16,6 +16,8 @@ import {
 import { useGraph } from '../state/store';
 import { ParamRow } from './EffectNode';
 import { useLivePaint, type LiveReading } from './controlPrimitives';
+import { useStatisticMeter } from './statisticMeter';
+import { useResolvedChain } from './viewerPipeline';
 
 const SCOPE_WIDTH = 170;
 const SCOPE_HEIGHT = 34;
@@ -145,7 +147,7 @@ export const ModulatorNode: React.FC<NodeProps<Node<ModulatorNodeData, 'modulato
             Math fed only by Values -- would draw a flat line, and its one
             number is already on the card. A field has no single trace to
             draw, and a measurement is shown as the number it is. */}
-        {signal && def.picture && <StatReadout signal={signal} />}
+        {signal && def.picture && <StatReadout nodeId={id} signal={signal} />}
         {signal && !isField && !def.picture && signalIsMoving(signal) && <Scope signal={signal} />}
         {modulatorParamsOf(def).map((spec) => (
           <ParamRow
@@ -171,8 +173,14 @@ export const ModulatorNode: React.FC<NodeProps<Node<ModulatorNodeData, 'modulato
   );
 };
 
-/** What an Image Statistic last measured, repainted every frame while it can change. */
-const StatReadout: React.FC<{ signal: Signal }> = ({ signal }) => {
+/**
+ * What an Image Statistic last measured, repainted every frame while it can
+ * change. The card keeps the node measuring its own picture, so the reading
+ * is live whether or not anything on screen uses it.
+ */
+const StatReadout: React.FC<{ nodeId: string; signal: Signal }> = ({ nodeId, signal }) => {
+  const { chain } = useResolvedChain(nodeId);
+  useStatisticMeter(nodeId, chain);
   const valueRef = useRef<HTMLSpanElement>(null);
   const live = useMemo<LiveReading>(() => ({ read: (time) => evaluateSignal(signal, time), moving: true }), [signal]);
   useLivePaint(

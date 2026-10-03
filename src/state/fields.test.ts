@@ -124,6 +124,19 @@ describe('fields: pictures wired into params', () => {
     expect(kinds.indexOf('statistic')).toBeGreaterThan(kinds.lastIndexOf('generator'));
   });
 
+  it('resolves an Image Statistic on its own, to its picture measured', () => {
+    const nodes = [ramp('probe'), effect('blur', 'blur'), mod('stat', 'statistic')];
+    const edges = [edge('probe', 'blur'), edge('blur', 'stat')];
+    const chain = resolveChain(nodes, edges, 'stat')!;
+    expect(chain.plan.steps.map((step) => step.kind)).toEqual(['generator', 'effect', 'statistic']);
+    expect(chain.plan.output).toBe(1);
+    expect(chain.sourceNodeId).toBe('probe');
+    // Nothing wired in: nothing to measure.
+    expect(resolveChain([mod('stat', 'statistic')], [], 'stat')).toBeNull();
+    // Only a statistic: any other modulator is still no viewer.
+    expect(resolveChain([ramp('src'), mod('m', 'math')], [edge('src', 'm', paramPort('a'))], 'm')).toBeNull();
+  });
+
   it('lets every module param take a wire', () => {
     expect(hasTargetPort(effect('d', 'dither'), paramPort('monochrome'))).toBe(true);
     expect(hasTargetPort(effect('d', 'dither'), paramPort('matrix'))).toBe(true);

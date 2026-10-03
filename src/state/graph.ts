@@ -637,14 +637,18 @@ export const resolveChain = (
   const sourceOf = indexPorts(edges);
 
   // Resolved for one named viewer rather than "the" viewer: there can be
-  // several, each watching a different branch of the graph.
+  // several, each watching a different branch of the graph. An Image
+  // Statistic is one too, of a kind: it resolves to the picture it reads,
+  // measured, so it can take its own reading with nothing else watching.
   const output = byId.get(outputNodeId);
+  const isStatistic = output?.type === 'modulator' && !!getModulator(output.data.modulatorId)?.picture;
   if (
     !output ||
     (output.type !== 'renderOutput' &&
       output.type !== 'backgroundOutput' &&
       output.type !== 'export' &&
-      output.type !== 'render')
+      output.type !== 'render' &&
+      !isStatistic)
   ) {
     return null;
   }
@@ -824,7 +828,12 @@ export const resolveChain = (
 
   let outputIndex: number | null;
   try {
-    outputIndex = visit(sourceOf(output.id, null));
+    if (isStatistic) {
+      measure(output.id);
+      outputIndex = done.get(sourceOf(output.id, null) ?? '') ?? null;
+    } else {
+      outputIndex = visit(sourceOf(output.id, null));
+    }
   } catch (error) {
     if (error instanceof Loop) return null;
     throw error;
